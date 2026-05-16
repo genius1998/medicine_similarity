@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>건강기능식품 조회</title>
+  <style>
+    :root { --bg:#f4f1ea; --card:#fffdf8; --ink:#1f2a1f; --muted:#6a7166; --line:#d8d1c2; --accent:#23684b; --accent-soft:#e6f3ec; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:"Malgun Gothic","Apple SD Gothic Neo",sans-serif; background:linear-gradient(180deg,#f7f3eb 0%,#eef4ef 100%); color:var(--ink); }
+    .wrap { max-width:1180px; margin:0 auto; padding:32px 20px 60px; }
+    .hero { display:grid; gap:16px; margin-bottom:24px; }
+    h1 { margin:0; font-size:34px; }
+    .sub { color:var(--muted); line-height:1.6; }
+    .toolbar { display:flex; gap:12px; flex-wrap:wrap; background:rgba(255,255,255,0.72); border:1px solid var(--line); border-radius:18px; padding:16px; backdrop-filter: blur(8px); }
+    .toolbar input { flex:1 1 320px; min-width:240px; padding:14px 16px; border:1px solid var(--line); border-radius:12px; font-size:15px; }
+    .toolbar button { padding:14px 18px; border:0; border-radius:12px; background:var(--accent); color:#fff; font-weight:700; cursor:pointer; }
+    .meta { display:flex; justify-content:space-between; align-items:center; margin:16px 0; color:var(--muted); font-size:14px; }
+    table { width:100%; border-collapse:collapse; background:var(--card); border:1px solid var(--line); border-radius:18px; overflow:hidden; }
+    th, td { padding:14px 12px; border-bottom:1px solid #ece6da; text-align:left; vertical-align:top; font-size:14px; }
+    th { background:#f5efe2; }
+    tr:last-child td { border-bottom:0; }
+    .chip { display:inline-block; padding:6px 10px; border-radius:999px; background:var(--accent-soft); color:var(--accent); font-size:12px; font-weight:700; }
+    .btn-link { display:inline-block; padding:10px 12px; border-radius:10px; background:#1d3b2e; color:#fff; text-decoration:none; font-size:13px; font-weight:700; }
+    .pager { display:flex; gap:8px; justify-content:center; align-items:center; margin-top:18px; }
+    .pager button { border:1px solid var(--line); background:#fff; padding:10px 12px; border-radius:10px; cursor:pointer; }
+    .empty { padding:36px; text-align:center; color:var(--muted); background:var(--card); border:1px solid var(--line); border-radius:18px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <h1>건강기능식품 전체 품목 조회</h1>
+      <div class="sub">C003 원본 품목을 기준으로 조회합니다. 목록에서 <strong>상세 조회</strong>를 누르면 품목 상세 정보와 유사 제품 추천을 함께 볼 수 있습니다.</div>
+    </section>
+    <section class="toolbar">
+      <input id="query" placeholder="품목명, 업체명, 품목제조번호로 검색">
+      <button id="searchBtn">검색</button>
+    </section>
+    <div class="meta">
+      <div id="summary">로딩 중...</div>
+      <div id="pageInfo"></div>
+    </div>
+    <div id="tableWrap"></div>
+    <div class="pager">
+      <button id="prevBtn">이전</button>
+      <button id="nextBtn">다음</button>
+    </div>
+  </div>
+  <script>
+    const queryInput = document.getElementById('query');
+    const summaryEl = document.getElementById('summary');
+    const pageInfoEl = document.getElementById('pageInfo');
+    const tableWrap = document.getElementById('tableWrap');
+    let page = 1;
+    const pageSize = 20;
+    let currentQuery = '';
+    let lastTotal = 0;
+
+    async function loadProducts() {
+      const params = new URLSearchParams({ q: currentQuery, page: String(page), page_size: String(pageSize) });
+      const res = await fetch(`/api/catalog/products?${params.toString()}`);
+      const data = await res.json();
+      lastTotal = data.total_count || 0;
+      summaryEl.textContent = `검색어: ${currentQuery || '전체'} / 전체 ${lastTotal.toLocaleString()}건`;
+      pageInfoEl.textContent = `${data.page}페이지`;
+      renderTable(data.results || []);
+    }
+
+    function renderTable(rows) {
+      if (!rows.length) {
+        tableWrap.innerHTML = '<div class="empty">조회 결과가 없습니다.</div>';
+        return;
+      }
+      const html = [
+        '<table><thead><tr>',
+        '<th>품목제조번호</th><th>품목명</th><th>업소명</th><th>대표 카테고리</th><th>주요 기능성원료</th><th>상세</th>',
+        '</tr></thead><tbody>'
+      ];
+      for (const row of rows) {
+        const primary = (row.primary_ingredients || []).slice(0, 3).join(', ');
+        html.push('<tr>');
+        html.push(`<td>${escapeHtml(row.report_no || '')}</td>`);
+        html.push(`<td>${escapeHtml(row.product_name || '')}</td>`);
+        html.push(`<td>${escapeHtml(row.company_name || '')}</td>`);
+        html.push(`<td>${row.product_main_category ? `<span class="chip">${escapeHtml(row.product_main_category)}</span>` : ''}</td>`);
+        html.push(`<td>${escapeHtml(primary || '-')}</td>`);
+        html.push(`<td><a class="btn-link" href="/products/${encodeURIComponent(row.report_no)}">상세 조회</a></td>`);
+        html.push('</tr>');
+      }
+      html.push('</tbody></table>');
+      tableWrap.innerHTML = html.join('');
+    }
+
+    function escapeHtml(value) {
+      return String(value || '').replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));
+    }
+
+    document.getElementById('searchBtn').addEventListener('click', () => {
+      currentQuery = queryInput.value.trim();
+      page = 1;
+      loadProducts();
+    });
+    queryInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        currentQuery = queryInput.value.trim();
+        page = 1;
+        loadProducts();
+      }
+    });
+    document.getElementById('prevBtn').addEventListener('click', () => {
+      if (page > 1) {
+        page -= 1;
+        loadProducts();
+      }
+    });
+    document.getElementById('nextBtn').addEventListener('click', () => {
+      if (page * pageSize < lastTotal) {
+        page += 1;
+        loadProducts();
+      }
+    });
+
+    loadProducts();
+  </script>
+</body>
+</html>

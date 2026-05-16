@@ -108,15 +108,16 @@ def resolve_runtime_paths() -> dict[str, Path]:
         output_dir / "product_function_profile.csv",
         ROOT_DIR / "output" / "product_function_profile.csv",
     ]
-    sqlite_candidates = [
-        Path(str(get_config_value(config, "sqlite_path", ""))),
-        Path(r"D:\ec2_cache_snapshot\ingredient_match_cache_rebuilt_item_class_i0050_final.sqlite"),
-    ]
+    sqlite_candidates = []
+    configured_sqlite = str(get_config_value(config, "sqlite_path", "") or "").strip()
+    if configured_sqlite:
+        sqlite_candidates.append(Path(configured_sqlite))
+    sqlite_candidates.append(Path(r"D:\ec2_cache_snapshot\ingredient_match_cache_rebuilt_item_class_i0050_final.sqlite"))
     return {
         "output_dir": output_dir,
         "vector_csv_path": first_existing_path(vector_candidates),
         "product_profile_csv_path": first_existing_path(product_profile_candidates),
-        "sqlite_path": first_existing_path([path for path in sqlite_candidates if str(path)]),
+        "sqlite_path": first_existing_path(sqlite_candidates),
     }
 
 

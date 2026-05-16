@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -10,7 +9,6 @@ import pandas as pd
 from api.db import sqlite_connection
 from api.product_search_service import search_profile_records
 from scripts.enhance_similarity_with_explanation import (
-    TABLE_NAME,
     compute_topk_for_single_product,
     ensure_cache_table,
     load_cached_rows,
@@ -21,6 +19,25 @@ from scripts.enhance_similarity_with_explanation import (
     safe_json_loads,
     build_vector_indexes,
 )
+
+
+CATALOG_COLUMN_ALIASES = {
+    "license_no": ["인허가번호"],
+    "company_name": ["업소명"],
+    "report_no": ["품목제조번호"],
+    "product_name": ["품목명"],
+    "report_date": ["보고일자"],
+    "product_type": ["제품형태"],
+    "shelf_life": ["소비기한"],
+    "appearance": ["성상"],
+    "intake_method": ["섭취방법"],
+    "main_functionality": ["주된기능성"],
+    "cautions": ["섭취시주의사항"],
+    "storage_method": ["보관방법"],
+    "form_factor": ["형태"],
+    "standard_spec": ["기준규격"],
+    "raw_ingredients": ["원재료"],
+}
 
 
 class RecommendationService:
@@ -34,6 +51,8 @@ class RecommendationService:
         self.report_to_product_ids: Dict[str, List[str]] = {}
         self.ingredient_postings: Dict[str, List[str]] = {}
         self.ingredient_frequency: Dict[str, int] = {}
+        self.catalog_records: List[dict] = []
+        self.catalog_by_report_no: Dict[str, dict] = {}
 
     def ensure_loaded(self) -> None:
         if self._loaded:
@@ -41,7 +60,13 @@ class RecommendationService:
         self.runtime = resolve_runtime_paths()
         vector_df = load_vector_inputs(self.runtime["vector_csv_path"])
         self.profiles = load_product_function_profiles(self.runtime["product_profile_csv_path"])
-        self.product_vectors, self.product_names, self.report_to_product_ids, self.ingredient_postings, self.ingredient_frequency = build_vector_indexes(vector_df)
+        (
+            self.product_vectors,
+            self.product_names,
+            self.report_to_product_ids,
+            self.ingredient_postings,
+            self.ingredient_frequency,
+        ) = build_vector_indexes(vector_df)
 
         profile_df = pd.read_csv(self.runtime["product_profile_csv_path"], encoding="utf-8-sig", low_memory=False)
         self.profile_records = []
@@ -60,7 +85,81 @@ class RecommendationService:
                     "notes": str(row.get("notes", "") or ""),
                 }
             )
+
+        self._load_catalog_records()
         self._loaded = True
+
+    def _resolve_catalog_columns(self, catalog_df: pd.DataFrame) -> Dict[str, Optional[str]]:
+        resolved = {}
+        for key, aliases in CATALOG_COLUMN_ALIASES.items():
+            resolved[key] = next((name for name in aliases if name in catalog_df.columns), None)
+        return resolved
+
+    def _load_catalog_records(self) -> None:
+        catalog_candidates = sorted(self.runtime["output_dir"].parent.glob("*C003.csv"))
+        if not catalog_candidates:
+            catalog_candidates = sorted(Path(__file__).resolve().parents[1].glob("*C003.csv"))
+        if not catalog_candidates:
+            self.catalog_records = []
+            self.catalog_by_report_no = {}
+            return
+
+        catalog_df = pd.read_csv(catalog_candidates[0], encoding="utf-8-sig", low_memory=False).fillna("")
+        resolved_columns = self._resolve_catalog_columns(catalog_df)
+        report_no_column = resolved_columns.get("report_no")
+        if not report_no_column:
+            self.catalog_records = []
+            self.catalog_by_report_no = {}
+            return
+
+        catalog_df[report_no_column] = catalog_df[report_no_column].astype(str).str.strip()
+        for key in ("product_name", "company_name"):
+            column_name = resolved_columns.get(key)
+            if column_name:
+                catalog_df[column_name] = catalog_df[column_name].astype(str).str.strip()
+
+        catalog_df = catalog_df[catalog_df[report_no_column] != ""].copy()
+        catalog_df = catalog_df.drop_duplicates(subset=[report_no_column], keep="first")
+
+        profile_map = {str(item.get("report_no", "")): item for item in self.profile_records}
+        records = []
+        for row in catalog_df.to_dict(orient="records"):
+            report_no = str(row.get(report_no_column, "") or "").strip()
+            profile = profile_map.get(report_no, {})
+
+            def value_for(key: str) -> str:
+                column_name = resolved_columns.get(key)
+                return str(row.get(column_name, "") or "").strip() if column_name else ""
+
+            records.append(
+                {
+                    "report_no": report_no,
+                    "product_name": value_for("product_name"),
+                    "company_name": value_for("company_name"),
+                    "license_no": value_for("license_no"),
+                    "report_date": value_for("report_date"),
+                    "product_type": value_for("product_type"),
+                    "shelf_life": value_for("shelf_life"),
+                    "appearance": value_for("appearance"),
+                    "intake_method": value_for("intake_method"),
+                    "main_functionality": value_for("main_functionality"),
+                    "cautions": value_for("cautions"),
+                    "storage_method": value_for("storage_method"),
+                    "form_factor": value_for("form_factor"),
+                    "standard_spec": value_for("standard_spec"),
+                    "raw_ingredients": value_for("raw_ingredients"),
+                    "product_main_category": str(profile.get("product_main_category", "") or ""),
+                    "primary_ingredients": list(profile.get("primary_ingredients", [])),
+                    "secondary_ingredients": list(profile.get("secondary_ingredients", [])),
+                    "support_ingredients": list(profile.get("support_ingredients", [])),
+                    "product_sub_categories": list(profile.get("product_sub_categories", [])),
+                    "confidence": float(profile.get("confidence", 0.0) or 0.0),
+                    "notes": str(profile.get("notes", "") or ""),
+                }
+            )
+
+        self.catalog_records = records
+        self.catalog_by_report_no = {record["report_no"]: record for record in records}
 
     def health(self) -> dict:
         self.ensure_loaded()
@@ -68,6 +167,7 @@ class RecommendationService:
             "loaded": self._loaded,
             "profile_count": len(self.profile_records),
             "vector_product_count": len(self.product_vectors),
+            "catalog_count": len(self.catalog_records),
         }
 
     def search_products(self, query: str, limit: int) -> List[dict]:
@@ -85,23 +185,39 @@ class RecommendationService:
                 return record
         return None
 
-    def get_profile_by_product_id(self, product_id: str) -> Optional[dict]:
+    def list_catalog_products(self, query: str, page: int, page_size: int) -> dict:
         self.ensure_loaded()
-        profile = self.profiles.get(product_id)
-        if not profile:
-            return None
+        rows = self.catalog_records
+        if query:
+            query_text = str(query or "").strip().lower()
+            normalized = query_text.replace(" ", "")
+            rows = [
+                item
+                for item in rows
+                if query_text in str(item.get("product_name", "")).lower()
+                or query_text in str(item.get("company_name", "")).lower()
+                or normalized in str(item.get("product_name", "")).lower().replace(" ", "")
+                or str(item.get("report_no", "")) == query_text
+            ]
+        total_count = len(rows)
+        start = max(0, (page - 1) * page_size)
+        end = start + page_size
         return {
-            "report_no": str(profile.get("report_no", "") or ""),
-            "product_id": str(profile.get("product_id", "") or ""),
-            "product_name": str(profile.get("product_name", "") or ""),
-            "product_main_category": str(profile.get("product_main_category", "") or ""),
-            "primary_ingredients": list(profile.get("primary_ingredients", [])),
-            "secondary_ingredients": list(profile.get("secondary_ingredients", [])),
-            "support_ingredients": list(profile.get("support_ingredients", [])),
-            "product_sub_categories": list(profile.get("product_sub_categories", [])),
-            "confidence": float(profile.get("confidence", 0.0) or 0.0),
-            "notes": str(profile.get("notes", "") or ""),
+            "query": query,
+            "page": page,
+            "page_size": page_size,
+            "total_count": total_count,
+            "results": rows[start:end],
         }
+
+    def get_catalog_product_detail(self, report_no: str) -> Optional[dict]:
+        self.ensure_loaded()
+        record = self.catalog_by_report_no.get(str(report_no))
+        if not record:
+            return None
+        result = dict(record)
+        result["has_profile"] = bool(self.get_profile_by_report_no(report_no))
+        return result
 
     def resolve_product_id_by_report_no(self, report_no: str) -> str:
         self.ensure_loaded()
@@ -140,7 +256,6 @@ class RecommendationService:
             if not force_refresh:
                 cached_rows = load_cached_rows(conn, base_product_id, top_k)
             if len(cached_rows) >= top_k:
-                execution_seconds = round(time.perf_counter() - start_time, 6)
                 return {
                     "base_product": {
                         "report_no": str(base_profile.get("report_no", "") or ""),
@@ -150,10 +265,10 @@ class RecommendationService:
                     },
                     "recommendations": [self._convert_cache_row(row, idx) for idx, row in enumerate(cached_rows, start=1)],
                     "cache_used": True,
-                    "execution_seconds": execution_seconds,
+                    "execution_seconds": round(time.perf_counter() - start_time, 6),
                 }
 
-            rows, failed_rows, _stats = compute_topk_for_single_product(
+            rows, _failed_rows, _stats = compute_topk_for_single_product(
                 base_product_id,
                 top_k,
                 candidate_limit,
@@ -164,21 +279,19 @@ class RecommendationService:
                 self.ingredient_postings,
                 self.ingredient_frequency,
             )
-            if failed_rows:
-                pass
             refresh_cache_rows(conn, base_product_id, rows)
-            execution_seconds = round(time.perf_counter() - start_time, 6)
-            return {
-                "base_product": {
-                    "report_no": str(base_profile.get("report_no", "") or ""),
-                    "product_name": str(base_profile.get("product_name", "") or ""),
-                    "product_main_category": str(base_profile.get("product_main_category", "") or ""),
-                    "primary_ingredients": list(base_profile.get("primary_ingredients", [])),
-                },
-                "recommendations": [self._convert_cache_row(row, idx) for idx, row in enumerate(rows, start=1)],
-                "cache_used": False,
-                "execution_seconds": execution_seconds,
-            }
+
+        return {
+            "base_product": {
+                "report_no": str(base_profile.get("report_no", "") or ""),
+                "product_name": str(base_profile.get("product_name", "") or ""),
+                "product_main_category": str(base_profile.get("product_main_category", "") or ""),
+                "primary_ingredients": list(base_profile.get("primary_ingredients", [])),
+            },
+            "recommendations": [self._convert_cache_row(row, idx) for idx, row in enumerate(rows, start=1)],
+            "cache_used": False,
+            "execution_seconds": round(time.perf_counter() - start_time, 6),
+        }
 
     def recommend_by_ingredients(self, raw_ingredients: str, top_k: int, candidate_limit: int) -> dict:
         self.ensure_loaded()

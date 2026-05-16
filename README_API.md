@@ -27,6 +27,10 @@ uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
 ## Endpoints
 
 - `GET /health`
+- `GET /products`
+- `GET /products/{report_no}`
+- `GET /api/catalog/products?q=&page=1&page_size=20`
+- `GET /api/catalog/products/{report_no}`
 - `GET /api/products/search?q=검색어&limit=20`
 - `GET /api/products/{report_no}/profile`
 - `GET /api/products/{report_no}/similar?top_k=10&candidate_limit=1000&force_refresh=false`
@@ -36,6 +40,7 @@ uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
 
 ```bash
 curl "http://localhost:8000/health"
+curl "http://localhost:8000/api/catalog/products?page=1&page_size=20"
 curl "http://localhost:8000/api/products/search?q=관절연골케어엔NEM"
 curl "http://localhost:8000/api/products/2018001205671/profile"
 curl "http://localhost:8000/api/products/2018001205671/similar?top_k=10&candidate_limit=1000"
@@ -58,6 +63,12 @@ curl -X POST "http://localhost:8000/api/recommend/by-ingredients" ^
 - 제품명 검색 API는 동일 제품명 다건을 모두 반환합니다.
 - API는 검색 단계에서 임의로 하나를 확정하지 않습니다.
 - 실제 추천은 사용자가 선택한 `report_no` 기준으로 호출해야 합니다.
+
+## Catalog UI
+
+- `/products` 에서 C003 전체 품목 목록을 페이지 단위로 조회할 수 있습니다.
+- 각 행의 `상세 조회` 버튼은 `/products/{report_no}` 로 이동합니다.
+- 상세 페이지에서는 C003 원문 상세 정보와 추천 엔진 결과를 함께 보여줍니다.
 
 ## Safety Notice
 

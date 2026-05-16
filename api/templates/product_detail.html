@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>품목 상세 조회</title>
+  <style>
+    :root { --bg:#f4f1ea; --card:#fffdf8; --ink:#1f2a1f; --muted:#6a7166; --line:#d8d1c2; --accent:#23684b; --accent-soft:#e6f3ec; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:"Malgun Gothic","Apple SD Gothic Neo",sans-serif; background:linear-gradient(180deg,#f7f3eb 0%,#eef4ef 100%); color:var(--ink); }
+    .wrap { max-width:1180px; margin:0 auto; padding:28px 20px 60px; }
+    .back { display:inline-block; margin-bottom:16px; color:#204f39; text-decoration:none; font-weight:700; }
+    .hero { background:rgba(255,255,255,0.78); border:1px solid var(--line); border-radius:22px; padding:24px; margin-bottom:20px; }
+    h1 { margin:0 0 8px; font-size:32px; }
+    .sub { color:var(--muted); }
+    .grid { display:grid; grid-template-columns:1.15fr 0.85fr; gap:18px; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:20px; padding:20px; }
+    .card h2 { margin:0 0 14px; font-size:20px; }
+    .field { margin-bottom:14px; }
+    .label { font-size:12px; color:var(--muted); margin-bottom:4px; }
+    .value { line-height:1.6; white-space:pre-wrap; }
+    .chip { display:inline-block; padding:6px 10px; border-radius:999px; background:var(--accent-soft); color:var(--accent); font-size:12px; font-weight:700; margin:0 6px 6px 0; }
+    .recommend { display:grid; gap:12px; }
+    .rec { border:1px solid #e5dece; border-radius:16px; padding:16px; background:#fff; }
+    .rec-title { display:flex; justify-content:space-between; gap:10px; margin-bottom:8px; }
+    .score { font-weight:700; color:#173e2c; }
+    .muted { color:var(--muted); font-size:13px; }
+    @media (max-width: 900px) { .grid { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <a class="back" href="/products">← 목록으로</a>
+    <div id="root">로딩 중...</div>
+  </div>
+  <script>
+    const reportNo = "{{ report_no }}";
+
+    function escapeHtml(value) {
+      return String(value || '').replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));
+    }
+
+    function renderChips(items) {
+      return (items || []).map(item => `<span class="chip">${escapeHtml(item)}</span>`).join('') || '<span class="muted">없음</span>';
+    }
+
+    async function loadDetail() {
+      const [detailRes, profileRes, similarRes] = await Promise.all([
+        fetch(`/api/catalog/products/${encodeURIComponent(reportNo)}`),
+        fetch(`/api/products/${encodeURIComponent(reportNo)}/profile`),
+        fetch(`/api/products/${encodeURIComponent(reportNo)}/similar?top_k=10&candidate_limit=1000`)
+      ]);
+
+      const detail = detailRes.ok ? await detailRes.json() : null;
+      const profile = profileRes.ok ? await profileRes.json() : null;
+      const similar = similarRes.ok ? await similarRes.json() : null;
+
+      if (!detail) {
+        document.getElementById('root').innerHTML = '<div class="card">품목 정보를 찾을 수 없습니다.</div>';
+        return;
+      }
+
+      const recommendations = (similar && similar.recommendations) ? similar.recommendations : [];
+      const html = [];
+      html.push('<section class="hero">');
+      html.push(`<h1>${escapeHtml(detail.product_name)}</h1>`);
+      html.push(`<div class="sub">${escapeHtml(detail.company_name || '')} / 품목제조번호 ${escapeHtml(detail.report_no || '')}</div>`);
+      html.push('</section>');
+      html.push('<section class="grid">');
+      html.push('<div class="card">');
+      html.push('<h2>상세 정보</h2>');
+      html.push(`<div class="field"><div class="label">대표 카테고리</div><div class="value">${profile ? renderChips([profile.product_main_category]) : '<span class="muted">프로필 없음</span>'}</div></div>`);
+      html.push(`<div class="field"><div class="label">세부 카테고리</div><div class="value">${profile ? renderChips(profile.product_sub_categories) : '<span class="muted">없음</span>'}</div></div>`);
+      html.push(`<div class="field"><div class="label">주요 기능성원료</div><div class="value">${profile ? renderChips(profile.primary_ingredients) : '<span class="muted">없음</span>'}</div></div>`);
+      html.push(`<div class="field"><div class="label">보조 기능성원료</div><div class="value">${profile ? renderChips(profile.secondary_ingredients) : '<span class="muted">없음</span>'}</div></div>`);
+      html.push(`<div class="field"><div class="label">지원 성분</div><div class="value">${profile ? renderChips(profile.support_ingredients) : '<span class="muted">없음</span>'}</div></div>`);
+      html.push(`<div class="field"><div class="label">주된기능성</div><div class="value">${escapeHtml(detail.main_functionality || '')}</div></div>`);
+      html.push(`<div class="field"><div class="label">섭취방법</div><div class="value">${escapeHtml(detail.intake_method || '')}</div></div>`);
+      html.push(`<div class="field"><div class="label">섭취시주의사항</div><div class="value">${escapeHtml(detail.cautions || '')}</div></div>`);
+      html.push(`<div class="field"><div class="label">원재료</div><div class="value">${escapeHtml(detail.raw_ingredients || '')}</div></div>`);
+      html.push('</div>');
+      html.push('<div class="card">');
+      html.push('<h2>유사 제품 추천</h2>');
+      if (!recommendations.length) {
+        html.push('<div class="muted">이 품목은 현재 프로필 또는 유사도 추천 결과가 없습니다.</div>');
+      } else {
+        html.push('<div class="recommend">');
+        for (const item of recommendations) {
+          html.push('<div class="rec">');
+          html.push(`<div class="rec-title"><div><strong>${escapeHtml(item.target_product_name)}</strong><div class="muted">품목제조번호 ${escapeHtml(item.target_report_no)}</div></div><div class="score">${escapeHtml(item.substitutability)} / ${Number(item.similarity_score).toFixed(3)}</div></div>`);
+          html.push(`<div class="field"><div class="label">공통 원료</div><div class="value">${renderChips(item.shared_ingredients || [])}</div></div>`);
+          html.push(`<div class="field"><div class="label">공통 카테고리</div><div class="value">${renderChips(item.shared_categories || [])}</div></div>`);
+          html.push(`<div class="field"><div class="label">설명</div><div class="value">${escapeHtml(item.reason || '')}</div></div>`);
+          html.push(`<div class="field"><div class="label">주의 문구</div><div class="value muted">${escapeHtml(item.caution || '')}</div></div>`);
+          html.push('</div>');
+        }
+        html.push('</div>');
+      }
+      html.push('</div>');
+      html.push('</section>');
+      document.getElementById('root').innerHTML = html.join('');
+    }
+
+    loadDetail();
+  </script>
+</body>
+</html>

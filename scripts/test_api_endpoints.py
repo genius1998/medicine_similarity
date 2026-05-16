@@ -25,6 +25,10 @@ def main() -> None:
     client = TestClient(app)
     cases = [
         ("health", "GET", "/health", None),
+        ("catalog_list", "GET", "/api/catalog/products?page=1&page_size=20", None),
+        ("catalog_detail", "GET", "/api/catalog/products/2018001205671", None),
+        ("products_page", "GET", "/products", None),
+        ("product_detail_page", "GET", "/products/2018001205671", None),
         ("search_joint", "GET", "/api/products/search?q=관절연골케어엔NEM", None),
         ("profile_joint", "GET", "/api/products/2018001205671/profile", None),
         ("similar_joint_first", "GET", "/api/products/2018001205671/similar?top_k=10&candidate_limit=1000&force_refresh=true", None),
@@ -47,7 +51,8 @@ def main() -> None:
         else:
             response = client.post(path, json=payload)
         elapsed = round(time.perf_counter() - start, 6)
-        body = response.json()
+        content_type = response.headers.get("content-type", "")
+        body = response.json() if "application/json" in content_type else {"html_length": len(response.text)}
         rows.append(
             {
                 "test_name": name,
