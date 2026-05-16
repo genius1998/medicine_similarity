@@ -4,6 +4,10 @@ __pycache__/
 .env
 .env.*
 .DS_Store
+google_ocr_key
+*google*key*
+*.credentials.json
+tmp/uploads/
 
 deploy_ec2_c003_pipeline.zip
 *.pyc

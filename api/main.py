@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
@@ -9,19 +9,22 @@ from api.recommendation_service import RecommendationService
 from api.schemas import (
     HealthResponse,
     IngredientRecommendationRequest,
-    IngredientRecommendationResponse,
+    OCRTextRecommendationRequest,
     ProductProfileResponse,
     ProductSearchItem,
     ProductSearchResponse,
     RecommendationBaseProduct,
     RecommendationItem,
     RecommendationResponse,
+    UploadRecommendationResponse,
 )
+from api.upload_recommendation_service import UploadRecommendationService, coerce_ingredient_request_payload
 
 
 settings = get_settings()
 app = FastAPI(title=settings.service_name)
 service = RecommendationService()
+upload_service = UploadRecommendationService(service)
 templates = Jinja2Templates(directory=str(settings.templates_dir))
 
 
@@ -33,12 +36,14 @@ def health() -> HealthResponse:
 
 @app.get("/", response_class=HTMLResponse)
 def root_page(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse("products.html", {"request": request})
+    initial_catalog = service.list_catalog_products("", 1, 20)
+    return templates.TemplateResponse("products.html", {"request": request, "initial_catalog": initial_catalog})
 
 
 @app.get("/products", response_class=HTMLResponse)
 def products_page(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse("products.html", {"request": request})
+    initial_catalog = service.list_catalog_products("", 1, 20)
+    return templates.TemplateResponse("products.html", {"request": request, "initial_catalog": initial_catalog})
 
 
 @app.get("/products/{report_no}", response_class=HTMLResponse)
@@ -120,7 +125,34 @@ def get_similar_products(
     )
 
 
-@app.post("/api/recommend/by-ingredients", response_model=IngredientRecommendationResponse)
-def recommend_by_ingredients(request: IngredientRecommendationRequest) -> IngredientRecommendationResponse:
-    payload = service.recommend_by_ingredients(request.raw_ingredients, request.top_k, request.candidate_limit)
-    return IngredientRecommendationResponse(**payload)
+@app.post("/api/recommend/by-ingredients", response_model=UploadRecommendationResponse)
+def recommend_by_ingredients(request: IngredientRecommendationRequest) -> UploadRecommendationResponse:
+    ingredients = coerce_ingredient_request_payload(request.ingredients, request.raw_ingredients)
+    payload = upload_service.recommend_from_ingredients(ingredients, request.top_k, request.candidate_limit)
+    return UploadRecommendationResponse(**payload)
+
+
+@app.post("/api/recommend/by-ocr-text", response_model=UploadRecommendationResponse)
+def recommend_by_ocr_text(request: OCRTextRecommendationRequest) -> UploadRecommendationResponse:
+    payload = upload_service.recommend_from_ocr_text(request.ocr_text, request.top_k, request.candidate_limit)
+    return UploadRecommendationResponse(**payload)
+
+
+@app.post("/api/recommend/by-image", response_model=UploadRecommendationResponse)
+async def recommend_by_image(
+    file: UploadFile = File(...),
+    top_k: int = Form(settings.default_top_k),
+    candidate_limit: int = Form(settings.default_candidate_limit),
+) -> UploadRecommendationResponse:
+    filename = str(file.filename or "upload.jpg")
+    suffix = filename[filename.rfind(".") :].lower() if "." in filename else ""
+    if suffix not in settings.upload_allowed_extensions:
+        raise HTTPException(status_code=400, detail=f"unsupported file extension: {suffix}")
+
+    image_bytes = await file.read()
+    max_size = settings.upload_max_file_size_mb * 1024 * 1024
+    if len(image_bytes) > max_size:
+        raise HTTPException(status_code=400, detail=f"file too large: max {settings.upload_max_file_size_mb}MB")
+
+    payload = upload_service.recommend_from_uploaded_image(image_bytes, filename, top_k, candidate_limit)
+    return UploadRecommendationResponse(**payload)

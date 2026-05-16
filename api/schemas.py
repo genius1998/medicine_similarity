@@ -69,14 +69,70 @@ class RecommendationResponse(BaseModel):
 
 
 class IngredientRecommendationRequest(BaseModel):
-    raw_ingredients: str = Field(..., min_length=1)
+    ingredients: List[str] = Field(default_factory=list)
+    raw_ingredients: str = ""
     top_k: int = 10
     candidate_limit: int = 1000
 
 
-class IngredientRecommendationResponse(BaseModel):
-    input_ingredients: List[str]
-    detected_functional_ingredients: List[str]
-    estimated_main_category: Optional[str] = None
+class OCRTextRecommendationRequest(BaseModel):
+    ocr_text: str = Field(..., min_length=1)
+    top_k: int = 10
+    candidate_limit: int = 1000
+
+
+class ParsedOCRPayload(BaseModel):
+    product_name_candidate: str = ""
+    ingredient_section_text: str = ""
+    functional_ingredient_candidates: List[str] = Field(default_factory=list)
+    raw_ingredients: List[str] = Field(default_factory=list)
+    normalized_ingredients: List[str] = Field(default_factory=list)
+    ingredient_objects: List[Dict[str, Any]] = Field(default_factory=list)
+    excluded_ingredients: List[str] = Field(default_factory=list)
+    quality_warnings: List[Dict[str, Any]] = Field(default_factory=list)
+    nutrition_or_active_components: List[str] = Field(default_factory=list)
+    daily_intake_text: str = ""
+    warnings: List[str] = Field(default_factory=list)
+    confidence: float = 0.0
+    needs_user_review: bool = False
+
+
+class OCRPayload(BaseModel):
+    raw_text: str = ""
+    lines: List[str] = Field(default_factory=list)
+    blocks: List[Dict[str, Any]] = Field(default_factory=list)
+    confidence: Optional[float] = None
+    source: str = ""
+    error: Optional[str] = None
+
+
+class DetectedFunctionalIngredient(BaseModel):
+    raw_ingredient: str
+    functional_ingredient_name: str
+    relation_type: str
+    confidence: float
+    display_name: str = ""
+    normalized_for_matching: str = ""
+
+
+class EstimatedProfilePayload(BaseModel):
+    product_main_category: str = ""
+    primary_ingredients: List[str] = Field(default_factory=list)
+    secondary_ingredients: List[str] = Field(default_factory=list)
+    support_ingredients: List[str] = Field(default_factory=list)
+
+
+class UploadRecommendationResponse(BaseModel):
+    input_type: str
+    ocr: Optional[OCRPayload] = None
+    parsed: ParsedOCRPayload
+    detected_functional_ingredients: List[DetectedFunctionalIngredient] = Field(default_factory=list)
+    estimated_profile: EstimatedProfilePayload
     recommendations: List[RecommendationItem] = Field(default_factory=list)
-    not_implemented: bool = True
+    execution_seconds: float = 0.0
+    needs_user_review: bool = False
+    review_message: str = ""
+    quality_warnings: List[Dict[str, Any]] = Field(default_factory=list)
+    parsed_ingredients_for_review: List[str] = Field(default_factory=list)
+    excluded_ingredients: List[str] = Field(default_factory=list)
+    product_name_category_hint: str = ""
