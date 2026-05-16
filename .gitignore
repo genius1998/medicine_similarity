@@ -1,0 +1,12 @@
+node_modules/
+__pycache__/
+.vscode/
+.env
+
+deploy_ec2_c003_pipeline.zip
+*.pyc
+
+건강기능식품_*.csv
+건강기능식품_*.xlsx
+
+functional_ingredient_rag_index/

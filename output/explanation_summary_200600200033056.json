@@ -1,0 +1,16 @@
+{
+  "generated_at": "2026-05-16T15:37:25.694283",
+  "base_product_id": "품목제조번호::200600200033056",
+  "base_product_name": "뼈건강 K2 칼마디",
+  "report_no": "200600200033056",
+  "product_main_category": "뼈 건강",
+  "candidate_count": 1000,
+  "topk_count": 10,
+  "cache_used": false,
+  "cache_row_count_for_base_product": 10,
+  "candidate_stage_seconds": 0.331,
+  "execution_seconds": 17.124,
+  "top_k": 10,
+  "candidate_limit": 1000,
+  "max_df_for_seed": 3000
+}
