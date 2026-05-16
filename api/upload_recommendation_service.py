@@ -746,6 +746,7 @@ class UploadRecommendationService:
 
     def apply_ocr_specific_profile_corrections(
         self,
+        input_type: str,
         parsed_result: dict,
         matched_ingredients: List[dict],
         estimated_profile: dict,
@@ -811,7 +812,7 @@ class UploadRecommendationService:
             )
 
         parse_confidence = float(parsed_result.get("confidence", 0.0) or 0.0)
-        if parse_confidence < LOW_PARSE_CONFIDENCE_THRESHOLD:
+        if input_type in {"image", "ocr_text"} and parse_confidence < LOW_PARSE_CONFIDENCE_THRESHOLD:
             append_warning(
                 quality_warnings,
                 "low_parse_confidence",
@@ -825,7 +826,7 @@ class UploadRecommendationService:
         raw_text = str((ocr_payload or {}).get("raw_text", "") or "")
         ingredient_section_text = str(parsed_result.get("ingredient_section_text", "") or "")
         raw_text_sufficient = has_sufficient_ocr_text(raw_text, ingredient_section_text)
-        if ocr_confidence is not None and float(ocr_confidence) < LOW_OCR_CONFIDENCE_THRESHOLD:
+        if input_type == "image" and ocr_confidence is not None and float(ocr_confidence) < LOW_OCR_CONFIDENCE_THRESHOLD:
             append_warning(
                 quality_warnings,
                 "low_ocr_confidence",
@@ -834,7 +835,7 @@ class UploadRecommendationService:
                 confidence=ocr_confidence,
                 confidence_source=ocr_confidence_source,
             )
-        elif ocr_confidence is None and raw_text_sufficient:
+        elif input_type == "image" and ocr_confidence is None and raw_text_sufficient:
             append_warning(
                 quality_warnings,
                 "ocr_confidence_unavailable",
@@ -842,7 +843,7 @@ class UploadRecommendationService:
                 severity="info",
                 confidence_source=ocr_confidence_source,
             )
-        elif ocr_confidence is None and not raw_text_sufficient:
+        elif input_type == "image" and ocr_confidence is None and not raw_text_sufficient:
             append_warning(
                 quality_warnings,
                 "low_ocr_text_quality",
@@ -860,7 +861,7 @@ class UploadRecommendationService:
                 category_diversity_count=category_diversity_count,
             )
 
-        if not parsed_result.get("ingredient_section_text"):
+        if input_type in {"image", "ocr_text"} and not parsed_result.get("ingredient_section_text"):
             append_warning(
                 quality_warnings,
                 "ingredient_section_unclear",
@@ -999,7 +1000,7 @@ class UploadRecommendationService:
         recommendations: List[dict],
         execution_seconds: float,
     ) -> dict:
-        corrected = self.apply_ocr_specific_profile_corrections(parsed, matched_ingredients, estimated_profile, ocr_payload, recommendations)
+        corrected = self.apply_ocr_specific_profile_corrections(input_type, parsed, matched_ingredients, estimated_profile, ocr_payload, recommendations)
 
         if corrected["product_name_category_hint"] and recommendations:
             top_shared_categories = recommendations[0].get("shared_categories", [])
