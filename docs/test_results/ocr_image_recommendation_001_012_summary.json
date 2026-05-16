@@ -1,0 +1,35 @@
+{
+  "run_id": "001_012_nutrition_fix_v2",
+  "target_range": "product_001~product_012",
+  "total_images": 12,
+  "success_count": 12,
+  "failed_count": 0,
+  "recommendation_count_10_count": 12,
+  "needs_user_review_count": 0,
+  "critical_warning_count": 0,
+  "notice_count": 152,
+  "info_warning_count": 12,
+  "category_distribution": {
+    "면역": 1,
+    "영양보충": 3,
+    "간 건강": 3,
+    "장 건강": 2,
+    "관절/연골": 1,
+    "혈당": 1,
+    "눈 건강": 1
+  },
+  "top_similarity_stats": {
+    "min": 0.255964,
+    "max": 1.0,
+    "avg": 0.41663283333333334
+  },
+  "consistency_check": {
+    "is_consistent": true,
+    "summary_matches_results_csv": true,
+    "summary_matches_results_jsonl": true
+  },
+  "source_files": {
+    "summary_json": "output/ocr_image_batch_test_summary_001_012_nutrition_fix_v2.json",
+    "consistency_check_json": "output/ocr_report_consistency_check_001_012.json"
+  }
+}

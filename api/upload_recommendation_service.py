@@ -39,8 +39,8 @@ CATEGORY_HINT_RULES = {
         "ingredient_keywords": ["홍삼", "홍삼농축액", "진세노사이드", "홍삼근", "홍삼분말"],
     },
     "눈 건강": {
-        "product_keywords": ["루테인", "지아잔틴", "눈", "아이", "마리골드"],
-        "ingredient_keywords": ["루테인", "지아잔틴", "마리골드꽃추출물", "베타카로틴", "비타민 A"],
+        "product_keywords": ["루테인", "지아잔틴", "눈", "아이", "마리골드", "빌베리", "아스타잔틴", "베타카로틴"],
+        "ingredient_keywords": ["루테인", "지아잔틴", "마리골드꽃추출물", "베타카로틴", "비타민 A", "빌베리추출물", "블루베리", "헤마토코쿠스추출물"],
     },
     "관절/연골": {
         "product_keywords": ["관절", "연골", "콘드로이친", "뮤코다당", "뮤코다당단백", "철갑상어", "철갑상어연골", "MSM", "보스웰리아", "NEM", "난각막", "강황"],
@@ -49,6 +49,14 @@ CATEGORY_HINT_RULES = {
     "장 건강": {
         "product_keywords": ["유산균", "프로바이오틱스", "락토핏", "장", "대장", "프리바이오틱스", "올리고당"],
         "ingredient_keywords": ["프로바이오틱스", "유산균", "갈락토올리고당", "프락토올리고당", "난소화성말토덱스트린", "이눌린"],
+    },
+    "혈당": {
+        "product_keywords": ["혈당", "당당자유", "당케어", "고투플러스"],
+        "ingredient_keywords": ["바나바", "바나바잎", "바나바잎추출물", "코로솔산", "난소화성말토덱스트린", "구아바잎추출물", "달맞이꽃종자추출물", "구아검", "이눌린", "식이섬유"],
+    },
+    "체지방": {
+        "product_keywords": ["체지방", "다이어트", "슬림", "컷", "컷팅"],
+        "ingredient_keywords": ["키토산", "키토올리고당", "가르시니아", "hca", "공액리놀레산", "cla", "녹차추출물", "카테킨", "콜레우스포스콜리", "잔티젠"],
     },
     "피부 건강": {
         "product_keywords": ["콜라겐", "피부", "레티놀", "히알루론", "세라마이드", "비오틴"],
@@ -65,6 +73,10 @@ CATEGORY_HINT_RULES = {
     "남성 건강": {
         "product_keywords": ["전립선", "남성", "쏘팔메토", "옥타코사놀", "활력"],
         "ingredient_keywords": ["쏘팔메토", "쏘팔메토열매추출물", "로르산", "옥타코사놀", "아연", "녹용", "마카", "아르기닌"],
+    },
+    "간 건강": {
+        "product_keywords": ["밀크씨슬", "밀크시슬", "실리마린", "간", "liver", "milk thistle"],
+        "ingredient_keywords": ["밀크씨슬", "밀크시슬", "밀크씨슬추출물", "실리마린", "silymarin", "milk thistle"],
     },
 }
 
@@ -86,10 +98,127 @@ EXCLUDED_PRIMARY_KEYWORDS = [
     "덱스트린",
 ]
 
+NON_EXCLUDED_PRIMARY_KEYWORDS = [
+    "난소화성말토덱스트린",
+    "난각막",
+    "난각막분말",
+    "난각막가수분해물",
+    "nem",
+    "demr",
+    "난각칼슘",
+    "난각분말",
+    "계란껍질분말",
+    "프로바이오틱스",
+    "프리바이오틱스",
+    "갈락토올리고당",
+    "프락토올리고당",
+    "이눌린",
+]
+
 ROLE_WEIGHT = {
     "primary": 1.0,
     "secondary": 0.72,
     "support": 0.45,
+}
+
+LOW_OCR_CONFIDENCE_THRESHOLD = 0.6
+LOW_PARSE_CONFIDENCE_THRESHOLD = 0.65
+LOW_TOP_SIMILARITY_THRESHOLD = 0.25
+MIN_SUFFICIENT_OCR_TEXT_LENGTH = 80
+TOO_MANY_INGREDIENTS_THRESHOLD = 20
+
+STRONG_JOINT_PRODUCT_KEYWORDS = [
+    "관절",
+    "연골",
+    "콘드로이친",
+    "뮤코다당",
+    "뮤코다당단백",
+    "철갑상어",
+    "철갑상어연골",
+    "MSM",
+    "보스웰리아",
+    "NEM",
+    "난각막",
+]
+
+STRONG_JOINT_INGREDIENT_KEYWORDS = [
+    "콘드로이친",
+    "뮤코다당단백",
+    "철갑상어연골",
+    "MSM",
+    "엠에스엠",
+    "글루코사민",
+    "NAG",
+    "보스웰리아",
+    "난각막",
+    "난각막분말",
+    "난각막가수분해물",
+    "초록입홍합",
+    "UC-II",
+    "비변성콜라겐",
+]
+
+NUTRITION_SUPPLEMENT_PRODUCT_KEYWORDS = [
+    "멀티",
+    "멀티밸런스",
+    "멀티비타민",
+    "비타민",
+    "미네랄",
+    "요오드",
+]
+
+NUTRITION_SUPPLEMENT_INGREDIENT_KEYWORDS = [
+    "비타민 A",
+    "비타민 B1",
+    "비타민 B2",
+    "비타민 B6",
+    "비타민 B12",
+    "비타민 C",
+    "비타민 D",
+    "비타민 E",
+    "비타민 K",
+    "엽산",
+    "나이아신",
+    "비오틴",
+    "판토텐산",
+    "셀레늄",
+    "아연",
+    "칼슘",
+    "마그네슘",
+    "철분",
+    "요오드",
+    "망간",
+    "크롬",
+    "구리",
+    "몰리브덴",
+    "dl-a-토코페롤",
+]
+
+CRITICAL_WARNING_CODES = {
+    "critical_warning",
+    "ingredient_section_unclear",
+    "ocr_error",
+    "category_conflict_product_name_vs_ingredients",
+    "generic_category_with_named_product",
+    "low_parse_confidence",
+    "low_ocr_confidence",
+    "low_ocr_text_quality",
+    "excipient_in_primary",
+    "mixed_primary_categories",
+    "low_top_similarity_score",
+    "missing_recommendations",
+    "top_reason_category_mismatch",
+    "too_many_normalized_ingredients",
+}
+
+NOTICE_WARNING_CODES = {
+    "notice_warning",
+    "allergen_notice",
+}
+
+INFO_WARNING_CODES = {
+    "info_warning",
+    "ocr_confidence_unavailable",
 }
 
 
@@ -104,9 +233,133 @@ def contains_keyword(text: str, keywords: List[str]) -> bool:
 
 def is_excluded_primary(name: str) -> bool:
     normalized = normalize_lookup_key(name)
-    if "난소화성말토덱스트린" in normalized:
+    if any(normalize_lookup_key(keyword) in normalized for keyword in NON_EXCLUDED_PRIMARY_KEYWORDS):
         return False
     return any(normalize_lookup_key(keyword) in normalized for keyword in EXCLUDED_PRIMARY_KEYWORDS)
+
+
+def has_sufficient_ocr_text(raw_text: str, ingredient_section_text: str = "") -> bool:
+    collapsed_raw = re.sub(r"\s+", "", str(raw_text or ""))
+    collapsed_section = re.sub(r"\s+", "", str(ingredient_section_text or ""))
+    if len(collapsed_raw) >= MIN_SUFFICIENT_OCR_TEXT_LENGTH:
+        return True
+    return len(collapsed_section) >= 20
+
+
+def append_warning(warnings: List[dict], code: str, message: str, severity: str = "warning", **extra) -> None:
+    item = {"code": code, "message": message, "severity": severity}
+    item.update({key: value for key, value in extra.items() if value not in (None, "", [], {})})
+    warnings.append(item)
+
+
+def dedupe_warnings(warnings: List[dict]) -> List[dict]:
+    seen = set()
+    deduped: List[dict] = []
+    for item in warnings:
+        code = str(item.get("code", "") or "")
+        message = str(item.get("message", "") or "")
+        ingredients = tuple(item.get("ingredients", []) or [])
+        key = (code, message, ingredients)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
+def normalize_warning_severity(warning: dict) -> dict:
+    item = dict(warning)
+    code = str(item.get("code", "") or "")
+    severity = str(item.get("severity", "") or "")
+    message = str(item.get("message", "") or "")
+    llm_notice_terms = [
+        "알레르기",
+        "알러지",
+        "알류",
+        "달걀",
+        "계란",
+        "우유",
+        "대두",
+        "밀",
+        "땅콩",
+        "메밀",
+        "토마토",
+        "복숭아",
+        "아황산",
+        "고등어",
+        "게",
+        "새우",
+        "돼지고기",
+        "쇠고기",
+        "닭고기",
+        "오징어",
+        "조개류",
+        "홍합",
+        "잣",
+        "가금류",
+        "함유",
+        "제조시설",
+        "주의",
+        "보관",
+        "섭취",
+        "임산부",
+        "수유부",
+        "어린이",
+        "젤라틴",
+        "우피",
+        "색소",
+        "먹물색소",
+    ]
+    if code == "too_many_normalized_ingredients" and severity in {"notice", "critical"}:
+        item["severity"] = severity
+    elif code == "llm_warning" and (
+        any(term in message for term in llm_notice_terms)
+        or "cross-contamination" in message.lower()
+        or "shared manufacturing" in message.lower()
+        or "allergic reaction" in message.lower()
+        or "discontinue use" in message.lower()
+        or "consult a professional" in message.lower()
+    ):
+        item["severity"] = "notice"
+    elif code in INFO_WARNING_CODES:
+        item["severity"] = "info"
+    elif code in NOTICE_WARNING_CODES:
+        item["severity"] = "notice"
+    elif code in CRITICAL_WARNING_CODES:
+        item["severity"] = "critical"
+    elif severity in {"info", "notice", "critical"}:
+        item["severity"] = severity
+    elif "알레르기" in message or "알러지" in message or "함유" in message or "제조시설" in message or "주의" in message or "보관" in message:
+        item["severity"] = "notice"
+    else:
+        item["severity"] = "critical"
+    return item
+
+
+def split_warning_groups(warnings: List[dict]) -> dict:
+    normalized = [normalize_warning_severity(item) for item in dedupe_warnings(warnings)]
+    return {
+        "quality_warnings": [item for item in normalized if item.get("severity") == "critical"],
+        "critical_warnings": [item for item in normalized if item.get("severity") == "critical"],
+        "notices": [item for item in normalized if item.get("severity") == "notice"],
+        "info_warnings": [item for item in normalized if item.get("severity") == "info"],
+    }
+
+
+def contains_any_keyword(values: List[str], keywords: List[str]) -> bool:
+    for value in values:
+        if contains_keyword(value, keywords):
+            return True
+    return False
+
+
+def count_keyword_matches(values: List[str], keywords: List[str]) -> int:
+    matched = set()
+    for value in values:
+        for keyword in keywords:
+            if contains_keyword(value, [keyword]):
+                matched.add(keyword)
+    return len(matched)
 
 
 class UploadRecommendationService:
@@ -144,6 +397,161 @@ class UploadRecommendationService:
             if contains_keyword(name, rule["product_keywords"]):
                 return {"category_main": category, "confidence": 0.95, "matched_keywords": rule["product_keywords"]}
         return {"category_main": "", "confidence": 0.0, "matched_keywords": []}
+
+    def _collect_category_diversity(self, estimated_profile: dict) -> int:
+        categories = {
+            str(item.get("category_main", "") or "")
+            for item in estimated_profile.get("ingredient_scores", [])
+            if str(item.get("category_main", "") or "") not in {"", "기타", "영양보충"}
+        }
+        return len(categories)
+
+    def _collect_primary_category_diversity(self, estimated_profile: dict) -> int:
+        primary_names = {
+            str(name or "")
+            for name in estimated_profile.get("primary_ingredients", [])
+            if str(name or "")
+        }
+        categories = {
+            str(item.get("category_main", "") or "")
+            for item in estimated_profile.get("ingredient_scores", [])
+            if str(item.get("ingredient", "") or "") in primary_names
+            and str(item.get("category_main", "") or "") not in {"", "기타", "영양보충"}
+        }
+        return len(categories)
+
+    def _has_stable_primary_focus(self, estimated_profile: dict) -> bool:
+        primary_ingredients = [str(name or "") for name in estimated_profile.get("primary_ingredients", []) if str(name or "")]
+        if not primary_ingredients:
+            return False
+        main_category = str(estimated_profile.get("product_main_category", "") or "")
+        if main_category == "장 건강":
+            normalized = [normalize_lookup_key(name) for name in primary_ingredients]
+            if any("프로바이오틱스" in name or "유산균" in name for name in normalized):
+                return True
+        return len(primary_ingredients) <= 3
+
+    def _is_liver_health_candidate(self, product_name_candidate: str, normalized_ingredients: List[str]) -> bool:
+        keywords = CATEGORY_HINT_RULES["간 건강"]["product_keywords"]
+        ingredient_keywords = CATEGORY_HINT_RULES["간 건강"]["ingredient_keywords"]
+        return contains_keyword(product_name_candidate, keywords) or contains_any_keyword(normalized_ingredients, ingredient_keywords)
+
+    def _is_eye_health_candidate(self, product_name_candidate: str, normalized_ingredients: List[str]) -> bool:
+        product_keywords = CATEGORY_HINT_RULES["눈 건강"]["product_keywords"]
+        strong_ingredient_keywords = ["루테인", "지아잔틴", "마리골드꽃추출물", "베타카로틴", "빌베리추출물", "블루베리", "헤마토코쿠스추출물"]
+        has_product_hint = contains_keyword(product_name_candidate, product_keywords)
+        has_strong_ingredient = contains_any_keyword(normalized_ingredients, strong_ingredient_keywords)
+        return has_product_hint and has_strong_ingredient
+
+    def _is_blood_sugar_candidate(self, product_name_candidate: str, normalized_ingredients: List[str]) -> bool:
+        product_keywords = CATEGORY_HINT_RULES["혈당"]["product_keywords"]
+        strong_ingredient_keywords = ["바나바", "바나바잎", "바나바잎추출물", "코로솔산", "난소화성말토덱스트린", "구아바잎추출물", "달맞이꽃종자추출물"]
+        body_keywords = ["키토산", "키토올리고당"]
+        matches = [value for value in normalized_ingredients if contains_any_keyword([value], strong_ingredient_keywords)]
+        has_glucose_keyword = bool(matches)
+        has_body_keyword = contains_any_keyword(normalized_ingredients, body_keywords)
+        explicit_blood_sugar_marker = any(
+            contains_any_keyword([value], ["바나바", "바나바잎", "바나바잎추출물", "코로솔산", "구아바잎추출물", "달맞이꽃종자추출물"])
+            for value in normalized_ingredients
+        )
+        return (
+            contains_keyword(product_name_candidate, product_keywords)
+            or explicit_blood_sugar_marker
+            or (has_body_keyword and len(matches) >= 2)
+        )
+
+    def _is_body_fat_candidate(self, product_name_candidate: str, normalized_ingredients: List[str]) -> bool:
+        product_keywords = CATEGORY_HINT_RULES["체지방"]["product_keywords"]
+        ingredient_keywords = CATEGORY_HINT_RULES["체지방"]["ingredient_keywords"]
+        return contains_keyword(product_name_candidate, product_keywords) or contains_any_keyword(normalized_ingredients, ingredient_keywords)
+
+    def _is_joint_candidate(self, product_name_candidate: str, normalized_ingredients: List[str]) -> bool:
+        return contains_keyword(product_name_candidate, STRONG_JOINT_PRODUCT_KEYWORDS) or contains_any_keyword(normalized_ingredients, STRONG_JOINT_INGREDIENT_KEYWORDS)
+
+    def _is_nutrition_supplement_candidate(self, product_name_candidate: str, normalized_ingredients: List[str]) -> bool:
+        nutrient_match_count = count_keyword_matches(normalized_ingredients, NUTRITION_SUPPLEMENT_INGREDIENT_KEYWORDS)
+        has_product_hint = contains_keyword(product_name_candidate, NUTRITION_SUPPLEMENT_PRODUCT_KEYWORDS)
+        has_strong_joint_signal = self._is_joint_candidate(product_name_candidate, normalized_ingredients)
+        if has_strong_joint_signal:
+            return False
+        return nutrient_match_count >= 4 or (has_product_hint and nutrient_match_count >= 2)
+
+    def _reprioritize_primary_ingredients(self, estimated_profile: dict, keywords: List[str], forced_category: str) -> dict:
+        ingredient_scores = list(estimated_profile.get("ingredient_scores", []))
+        preferred = [item["ingredient"] for item in ingredient_scores if contains_keyword(item.get("ingredient", ""), keywords)]
+        non_preferred = [item["ingredient"] for item in ingredient_scores if item["ingredient"] not in preferred]
+        if preferred:
+            estimated_profile["primary_ingredients"] = list(dict.fromkeys(preferred))[:3]
+            estimated_profile["secondary_ingredients"] = [item for item in list(dict.fromkeys(non_preferred)) if item not in estimated_profile["primary_ingredients"]][:8]
+        estimated_profile["product_main_category"] = forced_category
+        return estimated_profile
+
+    def _apply_domain_category_overrides(self, parsed_result: dict, estimated_profile: dict) -> dict:
+        product_name_candidate = str(parsed_result.get("product_name_candidate", "") or "")
+        normalized_ingredients = list(parsed_result.get("normalized_ingredients", []))
+
+        if self._is_liver_health_candidate(product_name_candidate, normalized_ingredients):
+            estimated_profile = self._reprioritize_primary_ingredients(
+                estimated_profile,
+                CATEGORY_HINT_RULES["간 건강"]["ingredient_keywords"],
+                "간 건강",
+            )
+
+        if self._is_eye_health_candidate(product_name_candidate, normalized_ingredients):
+            estimated_profile = self._reprioritize_primary_ingredients(
+                estimated_profile,
+                CATEGORY_HINT_RULES["눈 건강"]["ingredient_keywords"],
+                "눈 건강",
+            )
+
+        if self._is_joint_candidate(product_name_candidate, normalized_ingredients):
+            estimated_profile = self._reprioritize_primary_ingredients(
+                estimated_profile,
+                CATEGORY_HINT_RULES["관절/연골"]["ingredient_keywords"],
+                "관절/연골",
+            )
+
+        if not self._is_liver_health_candidate(product_name_candidate, normalized_ingredients) and self._is_blood_sugar_candidate(product_name_candidate, normalized_ingredients):
+            estimated_profile = self._reprioritize_primary_ingredients(
+                estimated_profile,
+                CATEGORY_HINT_RULES["혈당"]["ingredient_keywords"] + ["키토산", "키토올리고당"],
+                "혈당",
+            )
+        elif self._is_body_fat_candidate(product_name_candidate, normalized_ingredients):
+            estimated_profile = self._reprioritize_primary_ingredients(
+                estimated_profile,
+                CATEGORY_HINT_RULES["체지방"]["ingredient_keywords"],
+                "체지방",
+            )
+
+        if (
+            not self._is_liver_health_candidate(product_name_candidate, normalized_ingredients)
+            and not self._is_eye_health_candidate(product_name_candidate, normalized_ingredients)
+            and not self._is_blood_sugar_candidate(product_name_candidate, normalized_ingredients)
+            and not self._is_body_fat_candidate(product_name_candidate, normalized_ingredients)
+            and self._is_nutrition_supplement_candidate(product_name_candidate, normalized_ingredients)
+        ):
+            estimated_profile = self._reprioritize_primary_ingredients(
+                estimated_profile,
+                NUTRITION_SUPPLEMENT_INGREDIENT_KEYWORDS,
+                "영양보충",
+            )
+
+        return estimated_profile
+
+    def _override_recommendation_reason(self, temp_profile: dict, row: dict) -> str:
+        shared_ingredients = [str(item or "") for item in row.get("shared_ingredients", [])]
+        if temp_profile.get("product_main_category") == "간 건강" and contains_any_keyword(shared_ingredients, CATEGORY_HINT_RULES["간 건강"]["ingredient_keywords"]):
+            return "밀크씨슬추출물 성분이 공통으로 포함되어 간 건강 기능성 측면에서 유사합니다."
+        if temp_profile.get("product_main_category") == "눈 건강" and contains_any_keyword(shared_ingredients, CATEGORY_HINT_RULES["눈 건강"]["ingredient_keywords"]):
+            return "마리골드꽃추출물, 루테인/지아잔틴 계열 성분이 공통으로 포함되어 눈 건강 기능성 측면에서 유사합니다."
+        if temp_profile.get("product_main_category") == "혈당" and contains_any_keyword(shared_ingredients, CATEGORY_HINT_RULES["혈당"]["ingredient_keywords"] + ["키토산"]):
+            return "바나바잎추출물, 키토산, 구아바잎추출물 등 대사 관리 관련 성분이 공통으로 포함되어 혈당 기능성 측면에서 유사합니다."
+        if temp_profile.get("product_main_category") == "체지방" and contains_any_keyword(shared_ingredients, CATEGORY_HINT_RULES["체지방"]["ingredient_keywords"]):
+            return "키토산, 가르시니아, 녹차추출물 등 체지방 관리 관련 성분이 공통으로 포함되어 유사합니다."
+        if temp_profile.get("product_main_category") == "영양보충" and contains_any_keyword(shared_ingredients, NUTRITION_SUPPLEMENT_INGREDIENT_KEYWORDS):
+            return "비타민·미네랄 계열 성분이 공통으로 포함되어 영양보충 측면에서 유사합니다."
+        return str(row.get("reason", "") or "")
 
     def _detect_category_from_ingredients(self, ingredient_names: List[str]) -> str:
         scores: Dict[str, int] = {}
@@ -336,8 +744,22 @@ class UploadRecommendationService:
             "primary_category_hint": primary_category_hint,
         }
 
-    def apply_ocr_specific_profile_corrections(self, parsed_result: dict, matched_ingredients: List[dict], estimated_profile: dict) -> dict:
-        quality_warnings = list(parsed_result.get("quality_warnings", []))
+    def apply_ocr_specific_profile_corrections(
+        self,
+        parsed_result: dict,
+        matched_ingredients: List[dict],
+        estimated_profile: dict,
+        ocr_payload: Optional[dict],
+        recommendations: List[dict],
+    ) -> dict:
+        estimated_profile = self._apply_domain_category_overrides(parsed_result, estimated_profile)
+        base_warnings = []
+        for warning in parsed_result.get("quality_warnings", []):
+            normalized = normalize_warning_severity(warning)
+            if normalized.get("code") in {"too_many_normalized_ingredients", "ocr_confidence_unavailable"}:
+                continue
+            base_warnings.append(normalized)
+        quality_warnings = list(base_warnings)
         excluded_ingredients = list(dict.fromkeys(parsed_result.get("excluded_ingredients", []) + estimated_profile.get("excipient_ingredients", [])))
         product_name_candidate = str(parsed_result.get("product_name_candidate", "") or "")
         product_name_hint = self.infer_category_from_product_name(product_name_candidate)
@@ -345,6 +767,12 @@ class UploadRecommendationService:
 
         estimated_main_category = str(estimated_profile.get("product_main_category", "") or "")
         primary_ingredients = list(estimated_profile.get("primary_ingredients", []))
+        top_similarity_score = float(recommendations[0].get("similarity_score", 0.0)) if recommendations else 0.0
+        normalized_count = len(parsed_result.get("normalized_ingredients", []))
+        category_diversity_count = self._collect_category_diversity(estimated_profile)
+        primary_category_diversity_count = self._collect_primary_category_diversity(estimated_profile)
+        primary_unclear = not primary_ingredients
+        stable_primary_focus = self._has_stable_primary_focus(estimated_profile)
 
         offenders = [name for name in primary_ingredients if is_excluded_primary(name)]
         if offenders:
@@ -352,103 +780,154 @@ class UploadRecommendationService:
             estimated_profile["primary_ingredients"] = [name for name in primary_ingredients if name not in offenders]
             estimated_profile["secondary_ingredients"] = [name for name in estimated_profile.get("secondary_ingredients", []) if name not in offenders]
             estimated_profile["support_ingredients"] = [name for name in estimated_profile.get("support_ingredients", []) if name not in offenders]
-            quality_warnings.append(
-                {
-                    "code": "excipient_in_primary",
-                    "message": "부형제/첨가물이 primary 성분에 포함되어 제외했습니다.",
-                    "ingredients": offenders,
-                }
+            append_warning(
+                quality_warnings,
+                "excipient_in_primary",
+                "부형제/첨가물로 보이는 성분을 추천 기준에서 제외했습니다. 원재료명을 확인해주세요.",
+                severity="critical",
+                ingredients=offenders,
             )
 
         conflict = self.detect_category_conflict(product_name_category, estimated_main_category, list(estimated_profile.get("primary_ingredients", [])))
-        needs_review = bool(parsed_result.get("needs_user_review", False))
-        review_message = ""
-
         if conflict["has_conflict"]:
-            needs_review = True
-            if product_name_category == "면역":
-                review_message = "제품명은 면역/홍삼 계열로 보이지만, OCR에서 추출된 주요 원료는 다른 카테고리로 분류되었습니다. OCR 인식 결과를 확인해주세요."
-                if estimated_profile.get("product_main_category") in {"기타", "눈 건강"}:
-                    estimated_profile["product_main_category"] = "면역"
-            else:
-                review_message = "제품명과 추출 원료 카테고리가 불일치합니다. OCR 인식 결과를 확인해주세요."
-            quality_warnings.append(
-                {
-                    "code": "category_conflict_product_name_vs_ingredients",
-                    "message": "제품명과 추출 원료 카테고리가 불일치합니다.",
-                    "product_name_category": product_name_category,
-                    "estimated_main_category": estimated_main_category,
-                }
+            append_warning(
+                quality_warnings,
+                "category_conflict_product_name_vs_ingredients",
+                "제품명과 추출 원료 카테고리가 불일치합니다.",
+                severity="critical",
+                product_name_category=product_name_category,
+                estimated_main_category=estimated_main_category,
             )
 
-        if product_name_category and estimated_profile.get("product_main_category") == "기타":
-            needs_review = True
-            quality_warnings.append(
-                {
-                    "code": "generic_category_with_named_product",
-                    "message": "제품명 카테고리 힌트가 있으나 추정 카테고리가 기타입니다.",
-                    "product_name_category": product_name_category,
-                }
+        if product_name_category and estimated_profile.get("product_main_category") == "기타" and (
+            normalized_count >= 8 or len(estimated_profile.get("primary_ingredients", [])) >= 2
+        ):
+            append_warning(
+                quality_warnings,
+                "generic_category_with_named_product",
+                "제품명 카테고리 힌트가 있으나 추정 카테고리가 기타입니다.",
+                severity="critical",
+                product_name_category=product_name_category,
             )
 
-        if float(parsed_result.get("confidence", 0.0) or 0.0) < 0.8:
-            needs_review = True
-            quality_warnings.append(
-                {
-                    "code": "low_parse_confidence",
-                    "message": "OCR/LLM 파싱 confidence가 낮아 검토가 필요합니다.",
-                    "confidence": parsed_result.get("confidence", 0.0),
-                }
+        parse_confidence = float(parsed_result.get("confidence", 0.0) or 0.0)
+        if parse_confidence < LOW_PARSE_CONFIDENCE_THRESHOLD:
+            append_warning(
+                quality_warnings,
+                "low_parse_confidence",
+                "LLM 파싱 신뢰도가 낮습니다. 추출된 원재료명을 확인해주세요.",
+                severity="critical",
+                confidence=parse_confidence,
             )
 
-        ocr_confidence = parsed_result.get("ocr_confidence")
-        if ocr_confidence is not None and float(ocr_confidence) < 0.8:
-            needs_review = True
-            quality_warnings.append(
-                {
-                    "code": "low_ocr_confidence",
-                    "message": "OCR confidence가 낮아 검토가 필요합니다.",
-                    "confidence": ocr_confidence,
-                }
+        ocr_confidence = ocr_payload.get("confidence") if ocr_payload else parsed_result.get("ocr_confidence")
+        ocr_confidence_source = str((ocr_payload or {}).get("confidence_source") or parsed_result.get("ocr_confidence_source") or "unavailable")
+        raw_text = str((ocr_payload or {}).get("raw_text", "") or "")
+        ingredient_section_text = str(parsed_result.get("ingredient_section_text", "") or "")
+        raw_text_sufficient = has_sufficient_ocr_text(raw_text, ingredient_section_text)
+        if ocr_confidence is not None and float(ocr_confidence) < LOW_OCR_CONFIDENCE_THRESHOLD:
+            append_warning(
+                quality_warnings,
+                "low_ocr_confidence",
+                "OCR 인식 신뢰도가 낮습니다. 원재료명 인식 결과를 확인해주세요.",
+                severity="critical",
+                confidence=ocr_confidence,
+                confidence_source=ocr_confidence_source,
+            )
+        elif ocr_confidence is None and raw_text_sufficient:
+            append_warning(
+                quality_warnings,
+                "ocr_confidence_unavailable",
+                "OCR 신뢰도 정보가 제공되지 않았습니다. 추출된 원재료명을 확인해주세요.",
+                severity="info",
+                confidence_source=ocr_confidence_source,
+            )
+        elif ocr_confidence is None and not raw_text_sufficient:
+            append_warning(
+                quality_warnings,
+                "low_ocr_text_quality",
+                "OCR 신뢰도 정보가 없고 추출 텍스트가 부족합니다. 원재료명 인식 결과를 확인해주세요.",
+                severity="critical",
+                confidence_source=ocr_confidence_source,
             )
 
-        if len(parsed_result.get("normalized_ingredients", [])) >= 20:
-            needs_review = True
-
-        if estimated_profile.get("product_main_category") == "기타" and len(estimated_profile.get("primary_ingredients", [])) >= 2:
-            primary_categories = {
-                item.get("category_main", "")
-                for item in estimated_profile.get("ingredient_scores", [])
-                if item.get("ingredient") in estimated_profile.get("primary_ingredients", [])
-            }
-            primary_categories = {item for item in primary_categories if item and item != "기타"}
-            if len(primary_categories) >= 2:
-                needs_review = True
-                quality_warnings.append(
-                    {
-                        "code": "mixed_primary_categories",
-                        "message": "기타 카테고리인데 primary 원료의 카테고리가 혼재되어 있습니다.",
-                    }
-                )
+        if category_diversity_count >= 3 and estimated_profile.get("product_main_category") in {"기타", "영양보충"} and not stable_primary_focus:
+            append_warning(
+                quality_warnings,
+                "mixed_primary_categories",
+                "주요 원료 카테고리가 넓게 분산되어 있어 원재료명을 확인해주세요.",
+                severity="critical",
+                category_diversity_count=category_diversity_count,
+            )
 
         if not parsed_result.get("ingredient_section_text"):
-            needs_review = True
+            append_warning(
+                quality_warnings,
+                "ingredient_section_unclear",
+                "원재료명 영역이 불명확합니다. OCR 인식 결과를 확인해주세요.",
+                severity="critical",
+            )
 
-        top_reason = ""
-        if matched_ingredients:
-            pass
+        if recommendations and top_similarity_score < LOW_TOP_SIMILARITY_THRESHOLD:
+            low_similarity_is_critical = primary_unclear or estimated_profile.get("product_main_category") in {"기타", "영양보충"} or category_diversity_count >= 4
+            append_warning(
+                quality_warnings,
+                "low_top_similarity_score",
+                "추천은 생성됐지만 상위 유사도가 낮습니다. 추출된 원재료명을 확인해주세요.",
+                severity="critical" if low_similarity_is_critical else "notice",
+                similarity_score=top_similarity_score,
+            )
 
-        if not review_message and needs_review:
-            review_message = "OCR 인식 결과를 확인해주세요."
+        if not recommendations:
+            append_warning(
+                quality_warnings,
+                "missing_recommendations",
+                "추천 결과가 충분하지 않습니다. 원재료명을 확인해주세요.",
+                severity="critical",
+            )
+
+        if normalized_count >= TOO_MANY_INGREDIENTS_THRESHOLD:
+            probiotic_stable_case = (
+                estimated_profile.get("product_main_category") == "장 건강"
+                and "프로바이오틱스" in {str(item or "") for item in parsed_result.get("primary_ingredients_normalized", [])}
+                and primary_category_diversity_count <= 1
+            )
+            too_many_is_critical = (
+                not probiotic_stable_case
+                and not stable_primary_focus
+                and (
+                primary_category_diversity_count >= 3
+                or conflict["has_conflict"]
+                or top_similarity_score < 0.3
+                or primary_unclear
+                )
+            )
+            append_warning(
+                quality_warnings,
+                "too_many_normalized_ingredients",
+                "정규화된 원료 수가 많습니다.",
+                severity="critical" if too_many_is_critical else "notice",
+                normalized_ingredients_count=normalized_count,
+                category_diversity_count=category_diversity_count,
+                primary_category_diversity_count=primary_category_diversity_count,
+            )
+
+        warning_groups = split_warning_groups(quality_warnings)
+        needs_review = bool(warning_groups["critical_warnings"])
+        review_message = warning_groups["critical_warnings"][0]["message"] if warning_groups["critical_warnings"] else ""
 
         return {
             "parsed_result": parsed_result,
             "estimated_profile": estimated_profile,
             "needs_user_review": needs_review,
             "review_message": review_message,
-            "quality_warnings": quality_warnings,
+            "quality_warnings": warning_groups["quality_warnings"],
+            "critical_warnings": warning_groups["critical_warnings"],
+            "notices": warning_groups["notices"],
+            "info_warnings": warning_groups["info_warnings"],
             "excluded_ingredients": list(dict.fromkeys([item for item in excluded_ingredients if item])),
             "product_name_category_hint": product_name_category,
+            "category_diversity_count": category_diversity_count,
         }
 
     def calculate_similar_products_for_temp_vector(self, temp_vector: Dict[str, float], temp_profile: dict, top_k: int, candidate_limit: int) -> List[dict]:
@@ -506,6 +985,8 @@ class UploadRecommendationService:
         rows = sorted(rows, key=lambda item: (-item["similarity_score"], -item["core_match_score"], -item["function_similarity_score"], item["target_report_no"]))[:top_k]
         for index, item in enumerate(rows, start=1):
             item["rank"] = index
+            item["reason"] = self._override_recommendation_reason(temp_profile, item)
+            item["explanation"]["reason"] = item["reason"]
         return rows
 
     def _build_response(
@@ -518,22 +999,29 @@ class UploadRecommendationService:
         recommendations: List[dict],
         execution_seconds: float,
     ) -> dict:
-        corrected = self.apply_ocr_specific_profile_corrections(parsed, matched_ingredients, estimated_profile)
+        corrected = self.apply_ocr_specific_profile_corrections(parsed, matched_ingredients, estimated_profile, ocr_payload, recommendations)
 
         if corrected["product_name_category_hint"] and recommendations:
             top_shared_categories = recommendations[0].get("shared_categories", [])
-            if top_shared_categories and corrected["product_name_category_hint"] not in top_shared_categories:
+            top_similarity_score = float(recommendations[0].get("similarity_score", 0.0) or 0.0)
+            if top_shared_categories and corrected["product_name_category_hint"] not in top_shared_categories and top_similarity_score < LOW_TOP_SIMILARITY_THRESHOLD:
                 corrected["needs_user_review"] = True
                 if not corrected["review_message"]:
                     corrected["review_message"] = "제품명과 추천 결과 카테고리가 다를 수 있어 OCR 인식 결과를 확인해주세요."
-                corrected["quality_warnings"].append(
-                    {
-                        "code": "top_reason_category_mismatch",
-                        "message": "제품명 카테고리와 추천 결과의 대표 카테고리가 다를 수 있습니다.",
-                        "product_name_category": corrected["product_name_category_hint"],
-                        "shared_categories": top_shared_categories,
-                    }
+                combined_warnings = corrected["critical_warnings"] + corrected["notices"] + corrected["info_warnings"]
+                append_warning(
+                    combined_warnings,
+                    "top_reason_category_mismatch",
+                    "제품명 카테고리와 추천 결과의 대표 카테고리가 다를 수 있습니다.",
+                    severity="critical",
+                    product_name_category=corrected["product_name_category_hint"],
+                    shared_categories=top_shared_categories,
                 )
+                regrouped = split_warning_groups(combined_warnings)
+                corrected["quality_warnings"] = regrouped["quality_warnings"]
+                corrected["critical_warnings"] = regrouped["critical_warnings"]
+                corrected["notices"] = regrouped["notices"]
+                corrected["info_warnings"] = regrouped["info_warnings"]
 
         return {
             "input_type": input_type,
@@ -561,9 +1049,13 @@ class UploadRecommendationService:
             "needs_user_review": corrected["needs_user_review"],
             "review_message": corrected["review_message"],
             "quality_warnings": corrected["quality_warnings"],
+            "critical_warnings": corrected["critical_warnings"],
+            "notices": corrected["notices"],
+            "info_warnings": corrected["info_warnings"],
             "parsed_ingredients_for_review": corrected["parsed_result"].get("normalized_ingredients", []),
             "excluded_ingredients": corrected["excluded_ingredients"],
             "product_name_category_hint": corrected["product_name_category_hint"],
+            "category_diversity_count": corrected["category_diversity_count"],
         }
 
     def recommend_from_ingredients(self, ingredients: List[str], top_k: int = 10, candidate_limit: int = 1000, product_name_candidate: str = "") -> dict:
@@ -589,7 +1081,12 @@ class UploadRecommendationService:
             "raw_ingredients": [item["raw"] for item in ingredient_objects],
             "normalized_ingredients": [item["normalized_for_matching"] for item in ingredient_objects if item["normalized_for_matching"] and item["role"] != "excipient"],
             "ingredient_objects": ingredient_objects,
+            "primary_ingredients": [item["display_name"] for item in ingredient_objects if item["role"] == "primary"],
+            "primary_ingredients_normalized": [
+                item["normalized_for_matching"] for item in ingredient_objects if item["role"] == "primary" and item["normalized_for_matching"]
+            ],
             "excluded_ingredients": [item["display_name"] for item in ingredient_objects if item["role"] == "excipient"],
+            "excluded_ingredient_objects": [item for item in ingredient_objects if item["role"] == "excipient"],
             "quality_warnings": [],
             "daily_intake_text": "",
             "confidence": 0.95,
@@ -600,6 +1097,7 @@ class UploadRecommendationService:
         temp_hash = hashlib.sha1("|".join(sorted(parsed["normalized_ingredients"])).encode("utf-8")).hexdigest()[:16]
         name_hint = self.infer_category_from_product_name(product_name_candidate)
         temp_profile = self._build_temp_profile(f"uploaded::{temp_hash}", product_name_candidate or "업로드 입력 제품", matched, name_hint)
+        temp_profile = self._apply_domain_category_overrides(parsed, temp_profile)
         recommendations = self.calculate_similar_products_for_temp_vector(temp_vector, temp_profile, top_k, candidate_limit) if temp_vector else []
         return self._build_response("ingredients", None, parsed, matched, temp_profile, recommendations, round(time.perf_counter() - started, 6))
 
@@ -612,8 +1110,16 @@ class UploadRecommendationService:
         temp_hash = hashlib.sha1((raw_text or "").encode("utf-8")).hexdigest()[:16]
         name_hint = self.infer_category_from_product_name(parsed.get("product_name_candidate", ""))
         temp_profile = self._build_temp_profile(f"uploaded::{temp_hash}", parsed.get("product_name_candidate") or "OCR 입력 제품", matched, name_hint)
+        temp_profile = self._apply_domain_category_overrides(parsed, temp_profile)
         recommendations = self.calculate_similar_products_for_temp_vector(temp_vector, temp_profile, top_k, candidate_limit) if temp_vector else []
-        ocr_payload = {"raw_text": raw_text, "confidence": None, "lines": [], "blocks": [], "source": "ocr_text"}
+        ocr_payload = {
+            "raw_text": raw_text,
+            "confidence": None,
+            "confidence_source": "unavailable",
+            "lines": [],
+            "blocks": [],
+            "source": "ocr_text",
+        }
         return self._build_response("ocr_text", ocr_payload, parsed, matched, temp_profile, recommendations, round(time.perf_counter() - started, 6))
 
     def recommend_from_uploaded_image(self, image_bytes: bytes, filename: str, top_k: int = 10, candidate_limit: int = 1000) -> dict:
@@ -640,7 +1146,10 @@ class UploadRecommendationService:
                     "raw_ingredients": [],
                     "normalized_ingredients": [],
                     "ingredient_objects": [],
+                    "primary_ingredients": [],
+                    "primary_ingredients_normalized": [],
                     "excluded_ingredients": [],
+                    "excluded_ingredient_objects": [],
                     "quality_warnings": [],
                     "nutrition_or_active_components": [],
                     "daily_intake_text": "",
@@ -667,11 +1176,13 @@ class UploadRecommendationService:
 
         parsed = parse_ingredients_from_ocr_text(str(ocr_result.get("raw_text", "")))
         parsed["ocr_confidence"] = ocr_result.get("confidence")
+        parsed["ocr_confidence_source"] = ocr_result.get("confidence_source", "unavailable")
         matched = self.match_raw_ingredients_to_functional_ingredients(parsed.get("ingredient_objects", []))
         temp_vector = self.build_temp_product_vector_from_ingredients(parsed.get("ingredient_objects", []))
         temp_hash = hashlib.sha1((filename + str(ocr_result.get("raw_text", ""))).encode("utf-8")).hexdigest()[:16]
         name_hint = self.infer_category_from_product_name(parsed.get("product_name_candidate", filename))
         temp_profile = self._build_temp_profile(f"uploaded::{temp_hash}", parsed.get("product_name_candidate") or filename, matched, name_hint)
+        temp_profile = self._apply_domain_category_overrides(parsed, temp_profile)
         recommendations = self.calculate_similar_products_for_temp_vector(temp_vector, temp_profile, top_k, candidate_limit) if temp_vector else []
         return self._build_response("image", ocr_result, parsed, matched, temp_profile, recommendations, round(time.perf_counter() - started, 6))
 

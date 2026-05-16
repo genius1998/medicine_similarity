@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 from api.config import get_settings
 
@@ -37,6 +37,56 @@ def _build_vision_client():
     return vision.ImageAnnotatorClient()
 
 
+def _extract_confidence_value(node: Any) -> Optional[float]:
+    if node is None:
+        return None
+
+    raw_value = getattr(node, "confidence", None)
+    try:
+        pb = getattr(node, "_pb", None)
+        if pb is not None:
+            present_fields = {field.name for field, _value in pb.ListFields()}
+            if "confidence" in present_fields:
+                return float(raw_value)
+            return None
+    except Exception:  # noqa: BLE001
+        pass
+
+    try:
+        list_fields = getattr(node, "ListFields", None)
+        if callable(list_fields):
+            present_fields = {field.name for field, _value in list_fields()}
+            if "confidence" in present_fields:
+                return float(raw_value)
+            return None
+    except Exception:  # noqa: BLE001
+        pass
+
+    if raw_value is None:
+        return None
+    if float(raw_value) == 0.0:
+        return None
+    return float(raw_value)
+
+
+def _select_confidence_source(
+    word_confidences: List[float],
+    symbol_confidences: List[float],
+    paragraph_confidences: List[float],
+    block_confidences: List[float],
+) -> Tuple[Optional[float], str]:
+    candidates = [
+        ("word_average", word_confidences),
+        ("symbol_average", symbol_confidences),
+        ("paragraph_average", paragraph_confidences),
+        ("block_average", block_confidences),
+    ]
+    for source, values in candidates:
+        if values:
+            return round(sum(values) / len(values), 4), source
+    return None, "unavailable"
+
+
 def _extract_lines_and_blocks(response) -> Dict[str, Any]:
     raw_text = ""
     if getattr(response, "text_annotations", None):
@@ -44,23 +94,34 @@ def _extract_lines_and_blocks(response) -> Dict[str, Any]:
 
     lines: List[str] = []
     blocks: List[dict] = []
-    confidences: List[float] = []
+    word_confidences: List[float] = []
+    symbol_confidences: List[float] = []
+    paragraph_confidences: List[float] = []
+    block_confidences: List[float] = []
 
     for page in getattr(getattr(response, "full_text_annotation", None), "pages", []):
         for block in getattr(page, "blocks", []):
             block_lines: List[str] = []
+            block_conf = _extract_confidence_value(block)
+            if block_conf is not None:
+                block_confidences.append(block_conf)
             for paragraph in getattr(block, "paragraphs", []):
                 words = []
-                paragraph_conf = getattr(paragraph, "confidence", None)
+                paragraph_conf = _extract_confidence_value(paragraph)
                 if paragraph_conf is not None:
-                    confidences.append(float(paragraph_conf))
+                    paragraph_confidences.append(paragraph_conf)
                 for word in getattr(paragraph, "words", []):
-                    token = "".join(getattr(symbol, "text", "") for symbol in getattr(word, "symbols", []))
+                    symbols = getattr(word, "symbols", [])
+                    token = "".join(getattr(symbol, "text", "") for symbol in symbols)
                     if token:
                         words.append(token)
-                    word_conf = getattr(word, "confidence", None)
+                    word_conf = _extract_confidence_value(word)
                     if word_conf is not None:
-                        confidences.append(float(word_conf))
+                        word_confidences.append(word_conf)
+                    for symbol in symbols:
+                        symbol_conf = _extract_confidence_value(symbol)
+                        if symbol_conf is not None:
+                            symbol_confidences.append(symbol_conf)
                 line = " ".join(words).strip()
                 if line:
                     lines.append(line)
@@ -71,12 +132,18 @@ def _extract_lines_and_blocks(response) -> Dict[str, Any]:
     if not lines and raw_text:
         lines = [item.strip() for item in raw_text.splitlines() if item.strip()]
 
-    confidence = round(sum(confidences) / len(confidences), 4) if confidences else 0.0
+    confidence, confidence_source = _select_confidence_source(
+        word_confidences,
+        symbol_confidences,
+        paragraph_confidences,
+        block_confidences,
+    )
     return {
         "raw_text": raw_text,
         "lines": lines,
         "blocks": blocks,
         "confidence": confidence,
+        "confidence_source": confidence_source,
         "source": "google_ocr",
     }
 

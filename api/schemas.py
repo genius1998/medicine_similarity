@@ -88,7 +88,10 @@ class ParsedOCRPayload(BaseModel):
     raw_ingredients: List[str] = Field(default_factory=list)
     normalized_ingredients: List[str] = Field(default_factory=list)
     ingredient_objects: List[Dict[str, Any]] = Field(default_factory=list)
+    primary_ingredients: List[str] = Field(default_factory=list)
+    primary_ingredients_normalized: List[str] = Field(default_factory=list)
     excluded_ingredients: List[str] = Field(default_factory=list)
+    excluded_ingredient_objects: List[Dict[str, Any]] = Field(default_factory=list)
     quality_warnings: List[Dict[str, Any]] = Field(default_factory=list)
     nutrition_or_active_components: List[str] = Field(default_factory=list)
     daily_intake_text: str = ""
@@ -102,6 +105,7 @@ class OCRPayload(BaseModel):
     lines: List[str] = Field(default_factory=list)
     blocks: List[Dict[str, Any]] = Field(default_factory=list)
     confidence: Optional[float] = None
+    confidence_source: str = "unavailable"
     source: str = ""
     error: Optional[str] = None
 
@@ -133,6 +137,10 @@ class UploadRecommendationResponse(BaseModel):
     needs_user_review: bool = False
     review_message: str = ""
     quality_warnings: List[Dict[str, Any]] = Field(default_factory=list)
+    critical_warnings: List[Dict[str, Any]] = Field(default_factory=list)
+    notices: List[Dict[str, Any]] = Field(default_factory=list)
+    info_warnings: List[Dict[str, Any]] = Field(default_factory=list)
     parsed_ingredients_for_review: List[str] = Field(default_factory=list)
     excluded_ingredients: List[str] = Field(default_factory=list)
     product_name_category_hint: str = ""
+    category_diversity_count: int = 0
