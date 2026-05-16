@@ -2,9 +2,20 @@ node_modules/
 __pycache__/
 .vscode/
 .env
+.env.*
+.DS_Store
 
 deploy_ec2_c003_pipeline.zip
 *.pyc
+*.pyo
+
+output/*.csv
+output/*.json
+output/*.jsonl
+output/*.sqlite
+output/*.db
+output/failed_*.csv
+logs/*.log
 
 건강기능식품_*.csv
 건강기능식품_*.xlsx

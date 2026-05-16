@@ -61,6 +61,9 @@ EXCIPIENT_PATTERNS = [
 JOINT_KEYWORDS = [r"\bnem\b", r"난각막", r"난각막가수분해물", r"\bmsm\b", r"엠에스엠", r"보스웰리아", r"초록입홍합", r"\bnag\b", r"글루코사민", r"콘드로이친", r"관절", r"연골"]
 BONE_KEYWORDS = [r"칼슘", r"비타민 d", r"비타민 k", r"\bk2\b", r"마그네슘", r"뼈", r"칼마디"]
 GUT_KEYWORDS = [r"프로바이오틱스", r"유산균", r"이눌린", r"치커리", r"프락토올리고당", r"난소화성말토덱스트린", r"장"]
+MEMORY_KEYWORDS = [r"포스파티딜세린", r"phosphatidylserine", r"\bps\b", r"은행잎추출물", r"은행잎", r"테아닌", r"\bdha\b", r"기억", r"인지", r"두뇌", r"브레인"]
+SKIN_KEYWORDS = [r"콜라겐", r"저분자콜라겐", r"저분자콜라겐펩타이드", r"콜라겐펩타이드", r"히알루론산", r"세라마이드", r"엘라스틴", r"비오틴", r"비타민 a", r"레티놀", r"셀렌", r"셀레늄", r"피부"]
+MALE_KEYWORDS = [r"쏘팔메토", r"쏘팔메토열매추출물", r"saw palmetto", r"로르산", r"옥타코사놀", r"아연", r"녹용", r"마카", r"아르기닌", r"l-아르지닌", r"남성", r"전립선"]
 
 
 def parse_args() -> argparse.Namespace:
@@ -384,6 +387,27 @@ def product_is_bone_related(profile: dict) -> bool:
     return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in BONE_KEYWORDS)
 
 
+def product_is_memory_related(profile: dict) -> bool:
+    text = normalize_text(profile.get("product_name", ""))
+    if profile.get("product_main_category") in {"기억력", "인지력", "기억력/인지력"}:
+        return True
+    return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in MEMORY_KEYWORDS)
+
+
+def product_is_skin_related(profile: dict) -> bool:
+    text = normalize_text(profile.get("product_name", ""))
+    if profile.get("product_main_category") == "피부 건강":
+        return True
+    return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in SKIN_KEYWORDS)
+
+
+def product_is_male_related(profile: dict) -> bool:
+    text = normalize_text(profile.get("product_name", ""))
+    if profile.get("product_main_category") == "남성 건강":
+        return True
+    return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in MALE_KEYWORDS)
+
+
 def choose_reason_ingredients(base_profile: dict, target_profile: dict, comparison: dict, ingredient_frequency: dict[str, int]) -> tuple[list[str], list[str]]:
     shared = [name for name in comparison["shared_ingredients"] if not is_excipient(name)]
     if not shared:
@@ -399,17 +423,41 @@ def choose_reason_ingredients(base_profile: dict, target_profile: dict, comparis
 
     joint_related = product_is_joint_related(base_profile) or product_is_joint_related(target_profile)
     bone_related = product_is_bone_related(base_profile) or product_is_bone_related(target_profile)
+    memory_related = product_is_memory_related(base_profile) or product_is_memory_related(target_profile)
+    skin_related = product_is_skin_related(base_profile) or product_is_skin_related(target_profile)
+    male_related = product_is_male_related(base_profile) or product_is_male_related(target_profile)
+
+    if category == "관절/연골":
+        category_patterns = JOINT_KEYWORDS
+    elif category == "뼈 건강":
+        category_patterns = BONE_KEYWORDS
+    elif category == "장 건강":
+        category_patterns = GUT_KEYWORDS
+    elif category in {"기억력", "인지력", "기억력/인지력"}:
+        category_patterns = MEMORY_KEYWORDS
+    elif category == "피부 건강":
+        category_patterns = SKIN_KEYWORDS
+    elif category == "남성 건강":
+        category_patterns = MALE_KEYWORDS
+    else:
+        category_patterns = []
 
     def ingredient_priority(name: str) -> tuple:
         shared_primary = int(name in base_primary and name in target_primary)
-        direct_category = int(ingredient_matches_patterns(name, JOINT_KEYWORDS if category == "관절/연골" else BONE_KEYWORDS if category == "뼈 건강" else GUT_KEYWORDS if category == "장 건강" else []))
+        direct_category = int(ingredient_matches_patterns(name, category_patterns))
         joint_core = int(joint_related and ingredient_matches_patterns(name, JOINT_KEYWORDS))
+        memory_core = int(memory_related and ingredient_matches_patterns(name, MEMORY_KEYWORDS))
+        skin_core = int(skin_related and ingredient_matches_patterns(name, SKIN_KEYWORDS))
+        male_core = int(male_related and ingredient_matches_patterns(name, MALE_KEYWORDS))
         secondary_shared = int(name in base_secondary and name in target_secondary)
         support_shared = int(name in base_support and name in target_support)
         low_priority = int(is_low_priority_reason_ingredient(name, category))
         rarity = ingredient_frequency.get(name, 999999)
         return (
             joint_core,
+            memory_core,
+            skin_core,
+            male_core,
             shared_primary,
             direct_category,
             -low_priority,
@@ -424,7 +472,10 @@ def choose_reason_ingredients(base_profile: dict, target_profile: dict, comparis
 
     joint_ingredients = [name for name in ranked if ingredient_matches_patterns(name, JOINT_KEYWORDS)]
     bone_ingredients = [name for name in ranked if ingredient_matches_patterns(name, BONE_KEYWORDS) and not is_excipient(name)]
-    return top, list(dict.fromkeys(joint_ingredients[:3] + bone_ingredients[:3]))
+    memory_ingredients = [name for name in ranked if ingredient_matches_patterns(name, MEMORY_KEYWORDS)]
+    skin_ingredients = [name for name in ranked if ingredient_matches_patterns(name, SKIN_KEYWORDS)]
+    male_ingredients = [name for name in ranked if ingredient_matches_patterns(name, MALE_KEYWORDS)]
+    return top, list(dict.fromkeys(joint_ingredients[:3] + bone_ingredients[:3] + memory_ingredients[:3] + skin_ingredients[:3] + male_ingredients[:3]))
 
 
 def render_reason_ingredient_phrase(ingredients: list[str]) -> str:
@@ -446,8 +497,14 @@ def generate_recommendation_reason(base_profile: dict, target_profile: dict, com
     same_main = base_profile.get("product_main_category") == target_profile.get("product_main_category")
     joint_related = product_is_joint_related(base_profile) or product_is_joint_related(target_profile)
     bone_related = product_is_bone_related(base_profile) or product_is_bone_related(target_profile)
+    memory_related = product_is_memory_related(base_profile) or product_is_memory_related(target_profile)
+    skin_related = product_is_skin_related(base_profile) or product_is_skin_related(target_profile)
+    male_related = product_is_male_related(base_profile) or product_is_male_related(target_profile)
     joint_shared = [name for name in highlighted if ingredient_matches_patterns(name, JOINT_KEYWORDS)]
     bone_shared = [name for name in highlighted if ingredient_matches_patterns(name, BONE_KEYWORDS)]
+    memory_shared = [name for name in highlighted if ingredient_matches_patterns(name, MEMORY_KEYWORDS)]
+    skin_shared = [name for name in highlighted if ingredient_matches_patterns(name, SKIN_KEYWORDS)]
+    male_shared = [name for name in highlighted if ingredient_matches_patterns(name, MALE_KEYWORDS)]
 
     if joint_related and joint_shared:
         first_sentence = f"{render_reason_ingredient_phrase(joint_shared[:3])} 공통으로 포함되어 관절/연골 건강 기능성 측면에서 유사합니다."
@@ -455,6 +512,18 @@ def generate_recommendation_reason(base_profile: dict, target_profile: dict, com
             second_sentence = f"칼슘, 비타민 D, 비타민 K 등이 공통으로 포함되어 뼈 건강 관련 구성도 함께 확인됩니다."
             return f"{first_sentence} {second_sentence}"
         return first_sentence
+
+    if main_category in {"기억력", "인지력", "기억력/인지력"} and memory_related and memory_shared:
+        ps_shared = [name for name in memory_shared if ingredient_matches_patterns(name, [r"포스파티딜세린", r"phosphatidylserine", r"\bps\b"])]
+        if ps_shared:
+            return f"{render_reason_ingredient_phrase(ps_shared[:1])} 공통으로 포함되어 기억력/인지력 기능성 측면에서 유사합니다."
+        return f"{render_reason_ingredient_phrase(memory_shared[:3])} 공통으로 포함되어 기억력/인지력 기능성 측면에서 유사합니다."
+
+    if main_category == "피부 건강" and skin_related and skin_shared:
+        return f"{render_reason_ingredient_phrase(skin_shared[:3])} 공통으로 포함되어 피부 건강 기능성 측면에서 유사합니다."
+
+    if main_category == "남성 건강" and male_related and male_shared:
+        return f"{render_reason_ingredient_phrase(male_shared[:3])} 공통으로 포함되어 남성 건강 관련 기능성 측면에서 유사합니다."
 
     if main_category == "뼈 건강" and bone_shared:
         first_sentence = f"{render_reason_ingredient_phrase(bone_shared[:3])} 공통으로 포함되어 뼈 건강 기능성 측면에서 유사합니다."

@@ -74,6 +74,15 @@ CATEGORY_KEYWORDS = {
     "영양보충": SUPPORT_PATTERNS,
 }
 
+MEMORY_NAME_PATTERNS = [r"인지", r"기억", r"두뇌", r"브레인", r"포스파티딜세린", r"\bps\b"]
+MEMORY_INGREDIENT_PATTERNS = [r"포스파티딜세린", r"phosphatidylserine", r"\bps\b", r"은행잎", r"은행잎추출물", r"테아닌", r"\bdha\b"]
+SKIN_NAME_PATTERNS = [r"콜라겐", r"피부", r"레티놀", r"레티놀a", r"히알루론", r"세라마이드", r"엘라스틴", r"비오틴"]
+SKIN_INGREDIENT_PATTERNS = [r"콜라겐", r"저분자콜라겐", r"저분자콜라겐펩타이드", r"콜라겐펩타이드", r"히알루론산", r"세라마이드", r"엘라스틴", r"비오틴", r"비타민 a", r"레티놀", r"셀렌", r"셀레늄"]
+SKIN_PRIMARY_PATTERNS = [r"콜라겐", r"저분자콜라겐", r"저분자콜라겐펩타이드", r"콜라겐펩타이드", r"비오틴", r"비타민 a", r"레티놀"]
+MALE_NAME_PATTERNS = [r"전립선", r"남성", r"쏘팔메토", r"옥타코사놀", r"로르산", r"지구력", r"활력"]
+MALE_INGREDIENT_PATTERNS = [r"쏘팔메토", r"쏘팔메토열매추출물", r"saw palmetto", r"로르산", r"옥타코사놀", r"아연", r"녹용", r"마카", r"l-아르지닌", r"아르기닌"]
+MALE_PRIMARY_PATTERNS = [r"쏘팔메토", r"쏘팔메토열매추출물", r"saw palmetto", r"로르산", r"옥타코사놀", r"녹용", r"마카", r"l-아르지닌", r"아르기닌", r"아연"]
+
 
 def first_existing_path(candidates: list[Path]) -> Path:
     for path in candidates:
@@ -147,6 +156,10 @@ def is_excipient(name: str) -> bool:
     return ingredient_matches_patterns(name, EXCIPIENT_PATTERNS)
 
 
+def product_matches_patterns(product_name: str, patterns: list[str]) -> bool:
+    return ingredient_matches_patterns(product_name, patterns)
+
+
 def get_name_keyword_boosts(product_name: str) -> dict[str, float]:
     name = normalize_text(product_name)
     boosts: dict[str, float] = defaultdict(float)
@@ -157,6 +170,9 @@ def get_name_keyword_boosts(product_name: str) -> dict[str, float]:
         ("눈 건강", [r"눈", r"루테인", r"지아잔틴"], 1.8),
         ("인지력", [r"인지", r"포스파티딜세린"], 1.8),
         ("기억력", [r"기억", r"포스파티딜세린"], 1.5),
+        ("기억력/인지력", MEMORY_NAME_PATTERNS, 3.2),
+        ("피부 건강", SKIN_NAME_PATTERNS, 2.9),
+        ("남성 건강", MALE_NAME_PATTERNS, 2.7),
     ]
     for category, patterns, score in rules:
         if any(re.search(pattern, name, flags=re.IGNORECASE) for pattern in patterns):
@@ -204,6 +220,9 @@ def compute_profile_for_product(product_id: str, group: pd.DataFrame) -> dict:
     product_name = str(group.iloc[0]["product_name"] or "").strip()
     report_no = extract_report_no(group.iloc[0])
     name_boosts = get_name_keyword_boosts(product_name)
+    product_name_is_memory = product_matches_patterns(product_name, MEMORY_NAME_PATTERNS)
+    product_name_is_skin = product_matches_patterns(product_name, SKIN_NAME_PATTERNS)
+    product_name_is_male = product_matches_patterns(product_name, MALE_NAME_PATTERNS)
 
     category_scores: dict[str, float] = defaultdict(float)
     ingredient_rows = []
@@ -256,11 +275,41 @@ def compute_profile_for_product(product_id: str, group: pd.DataFrame) -> dict:
             }
         )
 
+    memory_ingredients = [item["ingredient"] for item in ingredient_rows if ingredient_matches_patterns(item["ingredient"], MEMORY_INGREDIENT_PATTERNS)]
+    skin_ingredients = [item["ingredient"] for item in ingredient_rows if ingredient_matches_patterns(item["ingredient"], SKIN_INGREDIENT_PATTERNS)]
+    skin_primary_ingredients = [item["ingredient"] for item in ingredient_rows if ingredient_matches_patterns(item["ingredient"], SKIN_PRIMARY_PATTERNS)]
+    male_ingredients = [item["ingredient"] for item in ingredient_rows if ingredient_matches_patterns(item["ingredient"], MALE_INGREDIENT_PATTERNS)]
+    male_primary_ingredients = [item["ingredient"] for item in ingredient_rows if ingredient_matches_patterns(item["ingredient"], MALE_PRIMARY_PATTERNS)]
+    has_phosphatidylserine = any(ingredient_matches_patterns(name, [r"포스파티딜세린", r"phosphatidylserine", r"\bps\b"]) for name in memory_ingredients)
+    has_collagen = any(ingredient_matches_patterns(name, [r"콜라겐", r"저분자콜라겐", r"콜라겐펩타이드"]) for name in skin_primary_ingredients)
+    has_skin_support_pair = any(ingredient_matches_patterns(name, [r"비오틴", r"비타민 a", r"레티놀"]) for name in skin_ingredients)
+    has_male_core = any(ingredient_matches_patterns(name, [r"쏘팔메토", r"saw palmetto", r"로르산", r"옥타코사놀"]) for name in male_primary_ingredients)
+    has_male_zinc_only = product_name_is_male and any(ingredient_matches_patterns(name, [r"아연"]) for name in male_ingredients)
+
     for category, boost in name_boosts.items():
         category_scores[category] += boost
 
+    if product_name_is_memory and has_phosphatidylserine:
+        category_scores["기억력/인지력"] += 7.5
+        category_scores["기억력"] += 2.0
+        category_scores["인지력"] += 2.0
+
+    if product_name_is_skin and (has_collagen or has_skin_support_pair):
+        category_scores["피부 건강"] += 6.5 if has_collagen else 5.2
+
+    if product_name_is_male and (has_male_core or has_male_zinc_only or male_ingredients):
+        category_scores["남성 건강"] += 6.0 if has_male_core else 4.0
+
     sorted_categories = sorted(category_scores.items(), key=lambda item: (-item[1], item[0]))
     product_main_category = sorted_categories[0][0] if sorted_categories else "기타"
+    if product_name_is_memory and has_phosphatidylserine:
+        product_main_category = "기억력/인지력"
+    elif product_name_is_skin and (has_collagen or has_skin_support_pair):
+        product_main_category = "피부 건강"
+    elif has_male_core:
+        product_main_category = "남성 건강"
+    elif product_name_is_male and has_male_zinc_only:
+        product_main_category = "남성 건강"
     top_score = sorted_categories[0][1] if sorted_categories else 0.0
     second_score = sorted_categories[1][1] if len(sorted_categories) > 1 else 0.0
 
@@ -311,6 +360,56 @@ def compute_profile_for_product(product_id: str, group: pd.DataFrame) -> dict:
             role = "secondary"
             if ingredient in support_ingredients:
                 support_ingredients = [name for name in support_ingredients if name != ingredient]
+        elif product_main_category == "기억력/인지력" and ingredient_matches_patterns(
+            ingredient,
+            [r"포스파티딜세린", r"phosphatidylserine", r"\bps\b"],
+        ):
+            role = "primary"
+        elif product_main_category == "기억력/인지력" and ingredient_matches_patterns(
+            ingredient,
+            [r"은행잎", r"은행잎추출물", r"테아닌", r"\bdha\b"],
+        ):
+            role = "secondary"
+        elif product_main_category == "기억력/인지력" and ingredient_matches_patterns(
+            ingredient,
+            [r"비타민 a", r"비타민 b", r"비타민 e", r"아연", r"비타민 d", r"비타민 k"],
+        ):
+            role = "support"
+        elif product_main_category == "피부 건강" and ingredient_matches_patterns(
+            ingredient,
+            [r"콜라겐", r"저분자콜라겐", r"저분자콜라겐펩타이드", r"콜라겐펩타이드"],
+        ):
+            role = "primary"
+        elif product_main_category == "피부 건강" and ingredient_matches_patterns(
+            ingredient,
+            [r"비오틴", r"비타민 a", r"레티놀", r"히알루론산", r"세라마이드", r"엘라스틴"],
+        ):
+            role = "primary" if product_name_is_skin and weight >= top_weight * 0.45 else "secondary"
+        elif product_main_category == "피부 건강" and ingredient_matches_patterns(
+            ingredient,
+            [r"셀렌", r"셀레늄", r"아연"],
+        ):
+            role = "secondary"
+        elif product_main_category == "피부 건강" and ingredient_matches_patterns(
+            ingredient,
+            [r"마그네슘", r"비타민 d", r"비타민 k"],
+        ):
+            role = "support"
+        elif product_main_category == "남성 건강" and ingredient_matches_patterns(
+            ingredient,
+            [r"쏘팔메토", r"쏘팔메토열매추출물", r"saw palmetto", r"로르산", r"옥타코사놀", r"녹용", r"마카", r"l-아르지닌", r"아르기닌", r"아연"],
+        ):
+            role = "primary"
+        elif product_main_category == "남성 건강" and ingredient_matches_patterns(
+            ingredient,
+            [r"비타민 b", r"망간", r"판토텐산", r"마그네슘"],
+        ):
+            role = "support"
+        elif product_main_category == "남성 건강" and ingredient_matches_patterns(
+            ingredient,
+            [r"난소화성말토덱스트린"],
+        ):
+            role = "secondary"
 
         payload = {
             "ingredient": ingredient,
@@ -333,6 +432,13 @@ def compute_profile_for_product(product_id: str, group: pd.DataFrame) -> dict:
     if not primary_ingredients and ingredient_rows:
         primary_ingredients.append(ingredient_rows[0]["ingredient"])
         secondary_ingredients = [name for name in secondary_ingredients if name != ingredient_rows[0]["ingredient"]]
+
+    if product_main_category == "기억력/인지력":
+        primary_ingredients = sorted(primary_ingredients, key=lambda name: (0 if ingredient_matches_patterns(name, [r"포스파티딜세린", r"phosphatidylserine", r"\bps\b"]) else 1, primary_ingredients.index(name)))
+    elif product_main_category == "피부 건강":
+        primary_ingredients = sorted(primary_ingredients, key=lambda name: (0 if ingredient_matches_patterns(name, [r"콜라겐", r"저분자콜라겐", r"콜라겐펩타이드"]) else 1 if ingredient_matches_patterns(name, [r"비오틴", r"비타민 a", r"레티놀"]) else 2, primary_ingredients.index(name)))
+    elif product_main_category == "남성 건강":
+        primary_ingredients = sorted(primary_ingredients, key=lambda name: (0 if ingredient_matches_patterns(name, [r"쏘팔메토", r"쏘팔메토열매추출물", r"saw palmetto", r"로르산", r"옥타코사놀"]) else 1 if ingredient_matches_patterns(name, [r"녹용", r"마카", r"l-아르지닌", r"아르기닌"]) else 2, primary_ingredients.index(name)))
 
     ratio = top_score / second_score if second_score > 0 else 9.99
     confidence = 0.45
@@ -363,6 +469,9 @@ def compute_profile_for_product(product_id: str, group: pd.DataFrame) -> dict:
         notes.append("비타민/미네랄 중심 제품으로 판단")
     if name_boosts:
         notes.append(f"제품명 기반 가중치 반영: {dict(name_boosts)}")
+    if product_name_is_male and has_male_zinc_only and not has_male_core:
+        confidence = min(confidence, 0.72)
+        notes.append("전립선/남성 제품명과 아연 기반으로 남성 건강 보정")
 
     confidence = max(0.1, min(0.99, round(confidence, 4)))
     category_scores_json = {key: round(float(value), 6) for key, value in sorted_categories}
