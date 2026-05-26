@@ -1,9 +1,21 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
+from pathlib import Path
 from typing import Any, Dict, List
 
+from api.db import default_sqlite_path, sqlite_connection
 from api.local_llm_client import call_local_llm, extract_json_from_llm_content
+from api.ocr_text_sectionizer import sectionize_ocr_text
+
+
+PARSE_PROMPT_VERSION = "ingredient_parse_v2_sectionized"
+PARSE_SCHEMA_VERSION = "ingredient_parse_schema_v1"
+PARSE_NORMALIZER_VERSION = "ingredient_normalizer_v2"
+PARSE_SECTIONIZER_VERSION = "ocr_text_sectionizer_v1"
+LLM_PARSE_CACHE_TABLE_NAME = "llm_parse_cache"
 
 
 EXCIPIENT_KEYWORDS = [
@@ -151,6 +163,10 @@ ALLERGEN_WARNING_TOKENS = {
 
 NOTICE_WARNING_PATTERNS = [
     r"알레르기 체질",
+    r"알레르기 반응 가능성",
+    r"알러지 유발물질 안내",
+    r"유발물질 안내",
+    r"특정 알레르기 체질 주의",
     r"특이체질",
     r"함유",
     r"제조시설",
@@ -262,9 +278,35 @@ def _contains_keyword(text: str, keyword: str) -> bool:
     return target in normalized
 
 
+def _looks_like_functional_premix(name: str) -> bool:
+    normalized = normalize_lookup_key(name)
+    if "혼합제제" not in normalized:
+        return False
+    functional_tokens = [
+        "비타민",
+        "레티닐",
+        "토코페롤",
+        "아연",
+        "셀렌",
+        "셀레늄",
+        "엽산",
+        "나이아신",
+        "니코틴산아미드",
+        "망간",
+        "구리",
+        "비오틴",
+        "실리마린",
+        "밀크씨슬",
+        "마리골드",
+    ]
+    return any(token in normalized for token in functional_tokens)
+
+
 def is_excipient(name: str) -> bool:
     normalized = normalize_lookup_key(name)
     if not normalized:
+        return False
+    if _looks_like_functional_premix(name):
         return False
     if any(normalize_lookup_key(item) in normalized for item in FUNCTIONAL_EXCEPTIONS):
         return False
@@ -329,7 +371,7 @@ def classify_warning_message(message: str, default_code: str = "llm_warning") ->
         return {"code": "info_warning", "message": text, "severity": "info"}
     if any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in CRITICAL_WARNING_PATTERNS):
         return {"code": "critical_warning", "message": text, "severity": "critical"}
-    return {"code": default_code, "message": text, "severity": "critical"}
+    return {"code": default_code, "message": text, "severity": "warning"}
 
 
 def canonicalize_ingredient_for_matching(name: str) -> str:
@@ -605,13 +647,368 @@ def _normalize_quality_warnings(items: Any) -> List[dict]:
     for item in items:
         if isinstance(item, dict):
             warning = dict(item)
-            warning["code"] = str(warning.get("code", "") or "").strip() or "unknown_warning"
-            warning["message"] = str(warning.get("message", "") or "").strip()
-            warning["severity"] = str(warning.get("severity", "") or "critical")
+            code = str(warning.get("code", "") or "").strip() or "unknown_warning"
+            message = str(warning.get("message", "") or "").strip()
+            severity = str(warning.get("severity", "") or "").strip().lower()
+            if severity not in {"critical", "warning", "notice", "info"}:
+                inferred = classify_warning_message(message, code)
+                code = str(inferred.get("code", "") or code)
+                message = str(inferred.get("message", "") or message)
+                severity = str(inferred.get("severity", "") or "warning")
+            warning["code"] = code
+            warning["message"] = message
+            warning["severity"] = severity or "warning"
             warnings.append(warning)
         elif isinstance(item, str) and item.strip():
             warnings.append(classify_warning_message(item.strip()))
     return warnings
+
+
+def _build_sectionized_context(raw_text: str) -> Dict[str, Any]:
+    context = sectionize_ocr_text(raw_text)
+    sections = dict(context.get("sections", {}) or {})
+    llm_blocks: List[str] = []
+    for key in ["product_name_area", "ingredient_area", "functional_info_area", "intake_area"]:
+        value = str(sections.get(key, "") or "").strip()
+        if value:
+            llm_blocks.append(f"[{key.upper()}]\n{value}")
+    llm_text = "\n\n".join(llm_blocks).strip() or str(raw_text or "")
+    llm_lines = [normalize_spacing(line) for line in llm_text.splitlines() if normalize_spacing(line)]
+    return {
+        **context,
+        "llm_text": llm_text,
+        "llm_lines": llm_lines,
+    }
+
+
+def _derive_ingredient_section_text(source_text: str, sections: Dict[str, Any]) -> str:
+    ingredient_area = normalize_spacing(str(sections.get("ingredient_area", "") or ""))
+    functional_area = str(sections.get("functional_info_area", "") or "")
+    source_text = str(source_text or "")
+
+    if ingredient_area and len(re.sub(r"\s+", "", ingredient_area)) >= 20 and "," in ingredient_area:
+        return ingredient_area
+
+    if functional_area:
+        lines = [line.strip() for line in functional_area.splitlines() if line.strip()]
+        collecting = False
+        collected: List[str] = []
+        for line in lines:
+            normalized_line = normalize_spacing(line)
+            if not normalized_line:
+                continue
+            if any(token in normalized_line for token in ["영양기능정보", "영양성분기준치", "%영양성분기준치", "1일 섭취량 당"]):
+                break
+            if not collecting and any(token in normalized_line for token in ["원료명", "원료명 및 함량", "마리골드", "밀크씨슬", "키토산분말", "캡슐기제"]):
+                collecting = True
+            if collecting:
+                if any(token in normalized_line for token in ["제품명", "제품의유형", "내용량", "눈 건강&영양소", "건강기능식품 /"]):
+                    continue
+                collected.append(normalized_line)
+        candidate = normalize_spacing(" ".join(collected))
+        if len(re.sub(r"\s+", "", candidate)) >= 20 and "," in candidate:
+            return candidate
+
+    extracted = _extract_first_match(source_text, INGREDIENT_SECTION_PATTERNS)
+    if extracted:
+        return extracted
+
+    return ingredient_area
+
+
+def _validate_and_repair_parsed_result(parsed: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        quality_warnings = list(parsed.get("quality_warnings", []))
+        corrected_fields: List[str] = []
+        rebuilt_objects: List[dict] = []
+        seen_by_normalized: Dict[str, dict] = {}
+        role_priority = {"primary": 0, "secondary": 1, "support": 2, "excipient": 3}
+        source_text = "\n".join(
+            [
+                str(parsed.get("ingredient_section_text", "") or ""),
+                str(parsed.get("raw_text", "") or ""),
+                str(parsed.get("source_text", "") or ""),
+            ]
+        )
+        source_lookup = normalize_lookup_key(source_text)
+        low_confidence_primary_count = 0
+        unknown_count = 0
+
+        for item in parsed.get("ingredient_objects", []) or []:
+            rebuilt = dict(item or {})
+            raw = normalize_spacing(rebuilt.get("raw", ""))
+            display_name = normalize_spacing(rebuilt.get("display_name", raw))
+            normalized = canonicalize_ingredient_for_matching(rebuilt.get("normalized_for_matching") or raw or display_name)
+            standard_name = normalize_spacing(rebuilt.get("standard_name", normalized))
+            evidence_text = normalize_spacing(rebuilt.get("evidence_text", ""))
+            confidence = float(rebuilt.get("confidence", parsed.get("confidence", 0.0)) or 0.0)
+            role = normalize_spacing(rebuilt.get("role", "")) or classify_ingredient_role(raw or display_name)
+            original_role = role
+            dedupe_key = normalize_lookup_key(normalized or standard_name or display_name or raw)
+
+            if role not in {"primary", "secondary", "support", "excipient"}:
+                role = classify_ingredient_role(raw or display_name)
+                if role != original_role:
+                    corrected_fields.append("ingredient_objects.role")
+
+            excipient_like = is_excipient(raw or display_name)
+            if excipient_like and role in {"primary", "secondary"}:
+                quality_warnings.append(
+                    {
+                        "code": "excipient_in_core_role",
+                        "message": f"부형제/첨가물 성격의 원료가 핵심 역할로 분류되어 보정했습니다: {display_name or raw}",
+                        "severity": "critical" if role == "primary" else "warning",
+                    }
+                )
+                role = "support" if role == "secondary" else "excipient"
+                corrected_fields.append("ingredient_objects.role")
+            elif excipient_like:
+                role = "excipient"
+
+            if evidence_text and source_lookup and normalize_lookup_key(evidence_text) not in source_lookup:
+                quality_warnings.append(
+                    {
+                        "code": "evidence_text_not_found",
+                        "message": f"근거 텍스트가 OCR 원문과 일치하지 않습니다: {display_name or raw}",
+                        "severity": "warning",
+                    }
+                )
+
+            if role == "primary" and confidence < 0.45:
+                low_confidence_primary_count += 1
+                quality_warnings.append(
+                    {
+                        "code": "low_confidence_primary_ingredient",
+                        "message": f"신뢰도가 낮은 원료가 primary로 분류되었습니다: {display_name or raw}",
+                        "severity": "warning",
+                        "confidence": round(confidence, 4),
+                    }
+                )
+
+            if role == "primary" and not normalize_lookup_key(normalized or standard_name):
+                quality_warnings.append(
+                    {
+                        "code": "missing_normalized_primary",
+                        "message": f"정규화 정보가 없는 원료가 primary로 분류되었습니다: {display_name or raw}",
+                        "severity": "critical",
+                    }
+                )
+                corrected_fields.append("ingredient_objects.normalized_for_matching")
+
+            if not normalize_lookup_key(normalized or standard_name):
+                unknown_count += 1
+
+            rebuilt.update(
+                {
+                    "raw": raw,
+                    "display_name": display_name,
+                    "normalized_for_matching": normalized,
+                    "standard_name": standard_name,
+                    "evidence_text": evidence_text,
+                    "confidence": round(confidence, 4),
+                    "role": role,
+                }
+            )
+
+            if dedupe_key and dedupe_key in seen_by_normalized:
+                existing = seen_by_normalized[dedupe_key]
+                existing_role = str(existing.get("role", "support") or "support")
+                if role_priority.get(role, 9) < role_priority.get(existing_role, 9):
+                    existing["role"] = role
+                    existing["confidence"] = max(float(existing.get("confidence", 0.0) or 0.0), confidence)
+                corrected_fields.append("ingredient_objects.deduped")
+                continue
+
+            if dedupe_key:
+                seen_by_normalized[dedupe_key] = rebuilt
+            rebuilt_objects.append(rebuilt)
+
+        parsed["ingredient_objects"] = rebuilt_objects
+
+        primary_fields = _collect_primary_fields(rebuilt_objects)
+        parsed["primary_ingredients"] = primary_fields["primary_ingredients"]
+        parsed["primary_ingredients_normalized"] = primary_fields["primary_ingredients_normalized"]
+        parsed["excluded_ingredient_objects"] = [item for item in rebuilt_objects if str(item.get("role", "")) == "excipient"]
+        parsed["excluded_ingredients"] = list(
+            dict.fromkeys(
+                [
+                    normalize_spacing(item.get("display_name", "") or item.get("raw", ""))
+                    for item in parsed["excluded_ingredient_objects"]
+                    if normalize_spacing(item.get("display_name", "") or item.get("raw", ""))
+                ]
+            )
+        )
+        parsed["normalized_ingredients"] = list(
+            dict.fromkeys(
+                [
+                    normalize_spacing(item.get("normalized_for_matching", ""))
+                    for item in rebuilt_objects
+                    if str(item.get("role", "")) != "excipient" and normalize_spacing(item.get("normalized_for_matching", ""))
+                ]
+            )
+        )
+        parsed["raw_ingredients"] = list(
+            dict.fromkeys(
+                [
+                    normalize_spacing(item.get("raw", ""))
+                    for item in rebuilt_objects
+                    if str(item.get("role", "")) != "excipient" and normalize_spacing(item.get("raw", ""))
+                ]
+            )
+        )
+
+        found_primary = bool(parsed.get("primary_ingredients_normalized"))
+        if not found_primary and parsed.get("normalized_ingredients"):
+            quality_warnings.append(
+                {
+                    "code": "missing_primary_ingredients",
+                    "message": "primary 원료가 비어 있어 파싱 신뢰도가 낮습니다.",
+                    "severity": "critical",
+                }
+            )
+            parsed["needs_user_review"] = True
+
+        if not parsed.get("normalized_ingredients"):
+            quality_warnings.append(
+                {
+                    "code": "missing_functional_ingredients",
+                    "message": "정규화된 기능성 원료를 추출하지 못했습니다.",
+                    "severity": "critical",
+                }
+            )
+            parsed["needs_user_review"] = True
+
+        normalized_count = len(parsed.get("normalized_ingredients", []) or [])
+        unknown_ratio = float(unknown_count / max(1, len(rebuilt_objects))) if rebuilt_objects else 1.0
+        base_confidence = float(parsed.get("confidence", 0.0) or 0.0)
+        critical_count = sum(1 for item in quality_warnings if str(item.get("severity", "") or "") == "critical")
+        warning_count = sum(
+            1
+            for item in quality_warnings
+            if str(item.get("severity", "") or "") == "warning"
+            and str(item.get("code", "") or "") not in {"allergen_notice"}
+        )
+        notice_count = sum(
+            1
+            for item in quality_warnings
+            if str(item.get("severity", "") or "") == "notice"
+            and str(item.get("code", "") or "") not in {"allergen_notice"}
+        )
+        normalization_coverage = float(normalized_count / max(1, len(rebuilt_objects))) if rebuilt_objects else 0.0
+        evidence_count = sum(
+            1
+            for item in rebuilt_objects
+            if normalize_lookup_key(str(item.get("evidence_text", "") or "")) in source_lookup and normalize_lookup_key(str(item.get("evidence_text", "") or ""))
+        )
+        evidence_coverage = float(evidence_count / max(1, len(rebuilt_objects))) if rebuilt_objects else 0.0
+        role_consistency_score = 1.0
+        if low_confidence_primary_count:
+            role_consistency_score -= 0.2
+        if not found_primary and normalized_count:
+            role_consistency_score -= 0.25
+        role_consistency_score = max(0.0, min(1.0, role_consistency_score))
+        category_confidence = 1.0 if parsed.get("primary_ingredients_normalized") else 0.55 if normalized_count else 0.0
+        ocr_quality_score = 1.0 if len(source_text) >= 120 else 0.7 if len(source_text) >= 60 else 0.35
+
+        profile_confidence = max(
+            0.0,
+            min(
+                1.0,
+                (
+                    0.25 * ocr_quality_score
+                    + 0.25 * normalization_coverage
+                    + 0.2 * evidence_coverage
+                    + 0.15 * role_consistency_score
+                    + 0.15 * category_confidence
+                )
+                - (critical_count * 0.08)
+                - (warning_count * 0.03)
+                - (notice_count * 0.01)
+                - (unknown_ratio * 0.15),
+            ),
+        )
+
+        if unknown_ratio >= 0.5:
+            quality_warnings.append(
+                {
+                    "code": "high_unknown_ingredient_ratio",
+                    "message": "정규화가 불명확한 원료 비율이 높습니다.",
+                    "severity": "warning",
+                    "unknown_ratio": round(unknown_ratio, 4),
+                }
+            )
+            corrected_fields.append("quality_grade")
+
+        if critical_count:
+            quality_grade = "D" if critical_count >= 2 or unknown_ratio >= 0.6 else "C"
+        elif profile_confidence >= 0.9 and unknown_ratio < 0.15:
+            quality_grade = "A"
+        elif profile_confidence >= 0.7 and unknown_ratio < 0.35:
+            quality_grade = "B"
+        elif normalized_count >= 1:
+            quality_grade = "C"
+        else:
+            quality_grade = "D"
+
+        parsed["validator_result"] = {
+            "warnings": _finalize_warning_list(_normalize_quality_warnings(quality_warnings)),
+            "corrected_fields": list(dict.fromkeys(corrected_fields)),
+            "quality_grade": quality_grade,
+            "profile_confidence": round(profile_confidence, 4),
+            "unknown_ratio": round(unknown_ratio, 4),
+            "confidence_breakdown": {
+                "ocr_quality_score": round(ocr_quality_score, 4),
+                "normalization_coverage": round(normalization_coverage, 4),
+                "evidence_coverage": round(evidence_coverage, 4),
+                "role_consistency_score": round(role_consistency_score, 4),
+                "category_confidence": round(category_confidence, 4),
+                "warning_counts": {
+                    "critical": critical_count,
+                    "warning": warning_count,
+                    "notice": notice_count,
+                },
+            },
+        }
+        parsed["quality_warnings"] = parsed["validator_result"]["warnings"]
+        parsed["quality_grade"] = quality_grade
+        parsed["profile_confidence"] = parsed["validator_result"]["profile_confidence"]
+        parsed["parse_metadata"] = {
+            "prompt_version": PARSE_PROMPT_VERSION,
+            "schema_version": PARSE_SCHEMA_VERSION,
+            "normalizer_version": PARSE_NORMALIZER_VERSION,
+            "sectionizer_version": PARSE_SECTIONIZER_VERSION,
+            "ocr_text_hash": compute_ocr_text_hash(str(parsed.get("ingredient_section_text", "") or "")),
+            "parsed_signature": compute_parsed_signature(parsed),
+        }
+        return parsed
+    except Exception as exc:  # noqa: BLE001
+        quality_warnings = list(parsed.get("quality_warnings", []))
+        quality_warnings.append(
+            {
+                "code": "validator_error",
+                "message": f"validator 보정 중 오류가 발생했습니다: {exc}",
+                "severity": "warning",
+            }
+        )
+        parsed["validator_result"] = {
+            "warnings": _finalize_warning_list(_normalize_quality_warnings(quality_warnings)),
+            "corrected_fields": [],
+            "quality_grade": str(parsed.get("quality_grade", "") or "C"),
+            "profile_confidence": float(parsed.get("profile_confidence", parsed.get("confidence", 0.0)) or 0.0),
+            "unknown_ratio": 0.0,
+        }
+        parsed["quality_warnings"] = parsed["validator_result"]["warnings"]
+        parsed["quality_grade"] = parsed["validator_result"]["quality_grade"]
+        parsed["profile_confidence"] = parsed["validator_result"]["profile_confidence"]
+        parsed["parse_metadata"] = {
+            "prompt_version": PARSE_PROMPT_VERSION,
+            "schema_version": PARSE_SCHEMA_VERSION,
+            "normalizer_version": PARSE_NORMALIZER_VERSION,
+            "sectionizer_version": PARSE_SECTIONIZER_VERSION,
+            "ocr_text_hash": compute_ocr_text_hash(str(parsed.get("ingredient_section_text", "") or "")),
+            "parsed_signature": compute_parsed_signature(parsed),
+        }
+        return parsed
 
 
 def _build_ingredient_objects(raw_ingredients: List[str]) -> List[dict]:
@@ -676,13 +1073,155 @@ def _finalize_warning_list(warnings: List[dict]) -> List[dict]:
     return deduped
 
 
-def rule_based_extract_ingredient_section(raw_text: str) -> Dict[str, Any]:
+def compute_ocr_text_hash(raw_text: str) -> str:
+    normalized = normalize_spacing(raw_text)
+    if not normalized:
+        return ""
+    return hashlib.sha1(normalized.encode("utf-8")).hexdigest()
+
+
+def compute_parsed_signature(parsed: Dict[str, Any]) -> str:
+    normalized_objects = []
+    for item in parsed.get("ingredient_objects", []) or []:
+        normalized_objects.append(
+            {
+                "normalized_for_matching": normalize_spacing(item.get("normalized_for_matching", "")),
+                "display_name": normalize_spacing(item.get("display_name", "")),
+                "role": normalize_spacing(item.get("role", "")),
+            }
+        )
+    payload = {
+        "product_name_candidate": normalize_spacing(parsed.get("product_name_candidate", "")),
+        "normalized_ingredients": sorted(
+            normalize_spacing(item)
+            for item in parsed.get("normalized_ingredients", []) or []
+            if normalize_spacing(item)
+        ),
+        "primary_ingredients_normalized": sorted(
+            normalize_spacing(item)
+            for item in parsed.get("primary_ingredients_normalized", []) or []
+            if normalize_spacing(item)
+        ),
+        "ingredient_objects": sorted(
+            normalized_objects,
+            key=lambda row: (row["normalized_for_matching"], row["role"], row["display_name"]),
+        ),
+        "prompt_version": PARSE_PROMPT_VERSION,
+        "schema_version": PARSE_SCHEMA_VERSION,
+        "normalizer_version": PARSE_NORMALIZER_VERSION,
+    }
+    return hashlib.sha1(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _ensure_llm_parse_cache_table(sqlite_path: Path) -> None:
+    with sqlite_connection(sqlite_path) as conn:
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {LLM_PARSE_CACHE_TABLE_NAME} (
+                cache_key TEXT PRIMARY KEY,
+                ocr_text_hash TEXT,
+                cleaned_text TEXT,
+                prompt_version TEXT,
+                schema_version TEXT,
+                normalizer_version TEXT,
+                parsed_signature TEXT,
+                response_json TEXT,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            f"CREATE INDEX IF NOT EXISTS idx_{LLM_PARSE_CACHE_TABLE_NAME}_ocr_text_hash ON {LLM_PARSE_CACHE_TABLE_NAME}(ocr_text_hash)"
+        )
+        conn.commit()
+
+
+def _build_parse_cache_key(raw_text: str) -> str:
+    source = {
+        "ocr_text_hash": compute_ocr_text_hash(raw_text),
+        "prompt_version": PARSE_PROMPT_VERSION,
+        "schema_version": PARSE_SCHEMA_VERSION,
+        "normalizer_version": PARSE_NORMALIZER_VERSION,
+    }
+    return hashlib.sha1(json.dumps(source, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _load_parse_cache(sqlite_path: Path, raw_text: str) -> Dict[str, Any]:
+    cache_key = _build_parse_cache_key(raw_text)
+    _ensure_llm_parse_cache_table(sqlite_path)
+    with sqlite_connection(sqlite_path) as conn:
+        conn.row_factory = None
+        row = conn.execute(
+            f"""
+            SELECT response_json
+            FROM {LLM_PARSE_CACHE_TABLE_NAME}
+            WHERE cache_key = ?
+            """,
+            (cache_key,),
+        ).fetchone()
+    if not row or not row[0]:
+        return {}
+    try:
+        value = json.loads(str(row[0]))
+        return value if isinstance(value, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_parse_cache(sqlite_path: Path, raw_text: str, parsed: Dict[str, Any]) -> None:
+    cache_key = _build_parse_cache_key(raw_text)
+    _ensure_llm_parse_cache_table(sqlite_path)
+    payload_json = json.dumps(parsed, ensure_ascii=False)
+    with sqlite_connection(sqlite_path) as conn:
+        conn.execute(
+            f"""
+            INSERT INTO {LLM_PARSE_CACHE_TABLE_NAME} (
+                cache_key, ocr_text_hash, cleaned_text, prompt_version, schema_version,
+                normalizer_version, parsed_signature, response_json, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(cache_key) DO UPDATE SET
+                ocr_text_hash=excluded.ocr_text_hash,
+                cleaned_text=excluded.cleaned_text,
+                prompt_version=excluded.prompt_version,
+                schema_version=excluded.schema_version,
+                normalizer_version=excluded.normalizer_version,
+                parsed_signature=excluded.parsed_signature,
+                response_json=excluded.response_json,
+                updated_at=CURRENT_TIMESTAMP
+            """,
+            (
+                cache_key,
+                compute_ocr_text_hash(raw_text),
+                normalize_spacing(raw_text),
+                PARSE_PROMPT_VERSION,
+                PARSE_SCHEMA_VERSION,
+                PARSE_NORMALIZER_VERSION,
+                compute_parsed_signature(parsed),
+                payload_json,
+            ),
+        )
+        conn.commit()
+
+
+def rule_based_extract_ingredient_section(raw_text: str, section_context: Dict[str, Any] | None = None) -> Dict[str, Any]:
     source_text = str(raw_text or "")
+    section_context = section_context or _build_sectionized_context(source_text)
+    sections = dict(section_context.get("sections", {}) or {})
     lines = [normalize_spacing(line) for line in source_text.splitlines() if normalize_spacing(line)]
 
-    product_name_candidate = _extract_first_match(source_text, PRODUCT_NAME_PATTERNS)
-    ingredient_section_text = _extract_first_match(source_text, INGREDIENT_SECTION_PATTERNS)
-    daily_intake_text = _extract_first_match(source_text, DAILY_INTAKE_PATTERNS)
+    product_name_source = "\n".join(filter(None, [str(sections.get("product_name_area", "") or ""), source_text]))
+    ingredient_section_text = _derive_ingredient_section_text(source_text, sections)
+    functional_info_text = normalize_spacing(str(sections.get("functional_info_area", "") or ""))
+    daily_intake_source = "\n".join(filter(None, [str(sections.get("intake_area", "") or ""), source_text]))
+
+    product_name_candidate = _extract_first_match(product_name_source, PRODUCT_NAME_PATTERNS)
+    if not product_name_candidate:
+        product_name_lines = [normalize_spacing(line) for line in str(sections.get("product_name_area", "") or "").splitlines() if normalize_spacing(line)]
+        product_name_candidate = product_name_lines[0] if product_name_lines else ""
+    daily_intake_text = _extract_first_match(daily_intake_source, DAILY_INTAKE_PATTERNS)
+    if not daily_intake_text:
+        daily_intake_text = normalize_spacing(str(sections.get("intake_area", "") or ""))
 
     if not ingredient_section_text:
         for index, line in enumerate(lines):
@@ -736,10 +1275,26 @@ def rule_based_extract_ingredient_section(raw_text: str) -> Dict[str, Any]:
         "daily_intake_text": daily_intake_text,
         "confidence": 0.62 if normalized_ingredients else 0.2,
         "needs_user_review": not bool(ingredient_section_text and normalized_ingredients),
+        "ocr_sections": sections,
+        "ocr_section_line_counts": dict(section_context.get("section_line_counts", {}) or {}),
+        "sectionized_text_for_llm": str(section_context.get("llm_text", "") or ""),
     }
 
 
-def normalize_ingredients_with_llm(raw_text: str, ocr_lines: List[str]) -> Dict[str, Any]:
+def normalize_ingredients_with_llm(raw_text: str, ocr_lines: List[str], section_context: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    section_context = section_context or _build_sectionized_context(raw_text)
+    sections = dict(section_context.get("sections", {}) or {})
+    llm_text = str(section_context.get("llm_text", "") or raw_text)
+    llm_lines = list(section_context.get("llm_lines", []) or ocr_lines)
+    llm_ingredient_area = _derive_ingredient_section_text(raw_text, sections)
+    llm_sections = dict(sections)
+    if llm_ingredient_area:
+        llm_sections["ingredient_area"] = llm_ingredient_area
+    sectioned_payload = "\n\n".join(
+        f"[{key.upper()}]\n{value}"
+        for key, value in llm_sections.items()
+        if str(value or "").strip() and key in {"product_name_area", "ingredient_area", "functional_info_area", "intake_area"}
+    ).strip() or llm_text
     system_prompt = (
         "너는 건강기능식품 라벨 OCR 텍스트에서 원재료명과 기능성원료를 추출하는 파서다.\n"
         "OCR 텍스트에는 줄바꿈 오류, 띄어쓰기 오류, 오타가 있을 수 있다.\n"
@@ -748,15 +1303,18 @@ def normalize_ingredients_with_llm(raw_text: str, ocr_lines: List[str]) -> Dict[
         "부형제, 캡슐기제, HPMC 등은 excipient로 분리하라.\n"
         "난각막, 난각막분말, 난각막가수분해물, NEM, DEMR은 부형제가 아니라 관절/연골 후보로 유지하라.\n"
         "계란 함유, 알레르기 유발 물질 안내는 원료가 아니라 quality_warnings로 넣어라.\n"
+        "warning_area, company_area, unknown_area 성격의 문구는 원료로 추출하지 마라.\n"
         "긴 원료명은 display_name과 normalized_for_matching을 분리하라.\n"
         "예: DW2009 프로바이오틱스 복합물 -> normalized_for_matching=프로바이오틱스.\n"
         "반드시 JSON만 출력하라."
     )
     user_prompt = (
-        "아래 OCR 텍스트에서 건강기능식품 추천에 사용할 원료 정보를 추출하라.\n\n"
-        f"OCR_TEXT:\n{raw_text}\n\n"
+        "아래 OCR 텍스트에서 건강기능식품 추천에 사용할 원료 정보를 추출하라.\n"
+        "우선 SECTIONED_OCR_TEXT를 기준으로 판단하고, 필요할 때만 RAW_OCR_TEXT를 참고하라.\n\n"
+        f"SECTIONED_OCR_TEXT:\n{sectioned_payload}\n\n"
+        f"RAW_OCR_TEXT:\n{llm_text}\n\n"
         "OCR_LINES:\n"
-        + "\n".join(ocr_lines[:80])
+        + "\n".join(llm_lines[:80])
         + "\n\n"
         "출력 JSON 스키마:\n"
         "{\n"
@@ -792,12 +1350,34 @@ def normalize_ingredients_with_llm(raw_text: str, ocr_lines: List[str]) -> Dict[
     return parsed
 
 
-def parse_ingredients_from_ocr_text(raw_text: str) -> Dict[str, Any]:
-    fallback = rule_based_extract_ingredient_section(raw_text)
-    lines = [normalize_spacing(line) for line in str(raw_text or "").splitlines() if normalize_spacing(line)]
+def parse_ingredients_from_ocr_text(raw_text: str, sqlite_path: Path | None = None) -> Dict[str, Any]:
+    runtime_sqlite_path = Path(sqlite_path) if sqlite_path else default_sqlite_path()
+    section_context = _build_sectionized_context(str(raw_text or ""))
+    cached = _load_parse_cache(runtime_sqlite_path, str(raw_text or ""))
+    if cached:
+        cached["raw_text"] = str(raw_text or "")
+        cached["source_text"] = str(raw_text or "")
+        cached["ocr_sections"] = dict(section_context.get("sections", {}) or {})
+        cached["ocr_section_line_counts"] = dict(section_context.get("section_line_counts", {}) or {})
+        cached["sectionized_text_for_llm"] = str(section_context.get("llm_text", "") or "")
+        cached = _validate_and_repair_parsed_result(cached)
+        cached["parse_metadata"] = {
+            **dict(cached.get("parse_metadata", {}) or {}),
+            "cache_hit": True,
+            "prompt_version": PARSE_PROMPT_VERSION,
+            "schema_version": PARSE_SCHEMA_VERSION,
+            "normalizer_version": PARSE_NORMALIZER_VERSION,
+            "sectionizer_version": PARSE_SECTIONIZER_VERSION,
+            "ocr_text_hash": compute_ocr_text_hash(str(raw_text or "")),
+            "parsed_signature": compute_parsed_signature(cached),
+        }
+        return cached
+
+    fallback = rule_based_extract_ingredient_section(raw_text, section_context)
+    lines = list(section_context.get("llm_lines", []) or [normalize_spacing(line) for line in str(raw_text or "").splitlines() if normalize_spacing(line)])
 
     try:
-        llm_result = normalize_ingredients_with_llm(str(raw_text or ""), lines)
+        llm_result = normalize_ingredients_with_llm(str(raw_text or ""), lines, section_context)
     except Exception as exc:  # noqa: BLE001
         fallback["quality_warnings"] = list(fallback.get("quality_warnings", [])) + [
             {
@@ -810,6 +1390,8 @@ def parse_ingredients_from_ocr_text(raw_text: str) -> Dict[str, Any]:
 
     merged = {
         "product_name_candidate": str(llm_result.get("product_name_candidate") or fallback.get("product_name_candidate") or ""),
+        "raw_text": str(raw_text or ""),
+        "source_text": str(raw_text or ""),
         "ingredient_section_text": str(llm_result.get("ingredient_section_text") or fallback.get("ingredient_section_text") or ""),
         "functional_ingredient_candidates": list(llm_result.get("functional_ingredient_candidates") or fallback.get("functional_ingredient_candidates") or []),
         "raw_ingredients": list(llm_result.get("raw_ingredients") or fallback.get("raw_ingredients") or []),
@@ -828,6 +1410,9 @@ def parse_ingredients_from_ocr_text(raw_text: str) -> Dict[str, Any]:
         "daily_intake_text": str(llm_result.get("daily_intake_text") or fallback.get("daily_intake_text") or ""),
         "confidence": float(llm_result.get("confidence") or fallback.get("confidence") or 0.0),
         "needs_user_review": bool(llm_result.get("needs_user_review", fallback.get("needs_user_review", False))),
+        "ocr_sections": dict(llm_result.get("ocr_sections") or fallback.get("ocr_sections") or {}),
+        "ocr_section_line_counts": dict(llm_result.get("ocr_section_line_counts") or fallback.get("ocr_section_line_counts") or {}),
+        "sectionized_text_for_llm": str(llm_result.get("sectionized_text_for_llm") or fallback.get("sectionized_text_for_llm") or section_context.get("llm_text") or ""),
     }
 
     if not merged["ingredient_objects"]:
@@ -922,4 +1507,13 @@ def parse_ingredients_from_ocr_text(raw_text: str) -> Dict[str, Any]:
         )
 
     merged["quality_warnings"] = _finalize_warning_list(quality_warnings)
+    merged = _validate_and_repair_parsed_result(merged)
+    merged["parse_metadata"] = {
+        **dict(merged.get("parse_metadata", {}) or {}),
+        "cache_hit": False,
+        "sectionizer_version": PARSE_SECTIONIZER_VERSION,
+        "ocr_text_hash": compute_ocr_text_hash(str(raw_text or "")),
+        "parsed_signature": compute_parsed_signature(merged),
+    }
+    _save_parse_cache(runtime_sqlite_path, str(raw_text or ""), merged)
     return merged

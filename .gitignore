@@ -1,6 +1,7 @@
 node_modules/
 __pycache__/
 .vscode/
+.venv/
 .env
 .env.*
 .DS_Store
@@ -21,6 +22,7 @@ output/*.jsonl
 output/*.sqlite
 output/*.db
 output/failed_*.csv
+logs/
 logs/*.log
 
 건강기능식품_*.csv

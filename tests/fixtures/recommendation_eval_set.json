@@ -1,0 +1,270 @@
+{
+  "version": "mini_eval_v3",
+  "description": "건강기능식품 OCR/LLM 기반 추천 품질 평가셋. 이미지 입력과 OCR 텍스트 입력을 함께 평가하고, keyword-sensitive 케이스와 function-first 케이스를 분리 추적한다. acceptable top product 힌트와 bad recommendation 판정용 메타데이터를 포함한다.",
+  "cases": [
+    {
+      "case_id": "check_007_image",
+      "input_mode": "image",
+      "evaluation_track": "keyword_sensitive",
+      "image_path": "D:\\health_project\\input_images\\check_007.png",
+      "expected_category": "혈당",
+      "expected_primary_ingredients": ["키토산", "바나바잎 추출물"],
+      "expected_primary_groups": [["키토산"], ["바나바잎 추출물", "바나바주정추출물"]],
+      "acceptable_product_keywords": ["혈당", "바나바", "키토산"],
+      "acceptable_top_product_keywords": ["고투플러스", "혈당케어", "바나바"]
+    },
+    {
+      "case_id": "check_010_image",
+      "input_mode": "image",
+      "evaluation_track": "function_first",
+      "image_path": "D:\\health_project\\input_images\\check_010.png",
+      "expected_category": "영양보충",
+      "expected_primary_ingredients": ["표고버섯균사체추출물", "테아닌"],
+      "expected_primary_groups": [["표고버섯균사체추출물"], ["테아닌"]],
+      "acceptable_product_keywords": [],
+      "acceptable_top_product_keywords": ["테아닌", "포뮬러", "파워킹"]
+    },
+    {
+      "case_id": "check_010_2_image",
+      "input_mode": "image",
+      "evaluation_track": "keyword_sensitive",
+      "image_path": "D:\\health_project\\input_images\\check_010_2.png",
+      "expected_category": "간 건강",
+      "expected_primary_ingredients": ["밀크씨슬추출물"],
+      "expected_primary_groups": [["밀크씨슬추출물", "실리마린", "밀크씨슬"]],
+      "acceptable_product_keywords": ["밀크씨슬", "간"],
+      "acceptable_top_product_keywords": ["밀크씨슬", "간건강", "리버"]
+    },
+    {
+      "case_id": "check_010_3_image",
+      "input_mode": "image",
+      "evaluation_track": "keyword_sensitive",
+      "image_path": "D:\\health_project\\input_images\\check_010_3.png",
+      "expected_category": "간 건강",
+      "expected_primary_ingredients": ["밀크씨슬추출물"],
+      "expected_primary_groups": [["밀크씨슬추출물", "실리마린", "밀크씨슬"]],
+      "acceptable_product_keywords": ["밀크씨슬", "간"],
+      "acceptable_top_product_keywords": ["밀크씨슬", "헬씨칸", "리버"]
+    },
+    {
+      "case_id": "product_001_image",
+      "input_mode": "image",
+      "evaluation_track": "keyword_sensitive",
+      "image_path": "D:\\health_project\\input_images\\product_001.png",
+      "expected_category": "면역",
+      "expected_primary_ingredients": ["홍삼"],
+      "expected_primary_groups": [["홍삼"]],
+      "acceptable_product_keywords": ["홍삼"],
+      "acceptable_top_product_keywords": ["홍삼", "진액", "고려홍삼"]
+    },
+    {
+      "case_id": "product_002_image",
+      "input_mode": "image",
+      "evaluation_track": "function_first",
+      "image_path": "D:\\health_project\\input_images\\product_002.jpg",
+      "expected_category": "영양보충",
+      "expected_primary_ingredients": ["칼슘", "비타민 B1", "비타민 B6"],
+      "expected_primary_groups": [["칼슘"], ["비타민 B1"], ["비타민 B6"]],
+      "acceptable_product_keywords": [],
+      "acceptable_top_product_keywords": ["비타민", "멀티비타민", "칼슘"]
+    },
+    {
+      "case_id": "product_003_image",
+      "input_mode": "image",
+      "evaluation_track": "keyword_sensitive",
+      "image_path": "D:\\health_project\\input_images\\product_003.png",
+      "expected_category": "간 건강",
+      "expected_primary_ingredients": ["밀크씨슬추출물"],
+      "expected_primary_groups": [["밀크씨슬추출물", "실리마린", "밀크씨슬"]],
+      "acceptable_product_keywords": ["밀크씨슬", "간"],
+      "acceptable_top_product_keywords": ["밀크씨슬", "리버", "헛개"]
+    },
+    {
+      "case_id": "product_004_image",
+      "input_mode": "image",
+      "evaluation_track": "keyword_sensitive",
+      "image_path": "D:\\health_project\\input_images\\product_004.jpg",
+      "expected_category": "장 건강",
+      "expected_primary_ingredients": ["프로바이오틱스"],
+      "expected_primary_groups": [["프로바이오틱스", "유산균"]],
+      "acceptable_product_keywords": ["유산균", "프로바이오틱스", "장"],
+      "acceptable_top_product_keywords": ["프로바이오틱스", "유산균", "장건강", "바이오틱스"]
+    },
+    {
+      "case_id": "product_005_image",
+      "input_mode": "image",
+      "evaluation_track": "function_first",
+      "image_path": "D:\\health_project\\input_images\\product_005.jpg",
+      "expected_category": "관절/연골",
+      "expected_primary_ingredients": ["셀레늄", "망간", "아연"],
+      "expected_primary_groups": [["셀레늄", "셀렌"], ["망간"], ["아연"]],
+      "acceptable_product_keywords": [],
+      "acceptable_top_product_keywords": ["관절", "연골", "콘드로이친", "뮤코다당"]
+    },
+    {
+      "case_id": "product_006_image",
+      "input_mode": "image",
+      "evaluation_track": "keyword_sensitive",
+      "image_path": "D:\\health_project\\input_images\\product_006.jpg",
+      "expected_category": "장 건강",
+      "expected_primary_ingredients": ["프로바이오틱스"],
+      "expected_primary_groups": [["프로바이오틱스", "유산균"]],
+      "acceptable_product_keywords": ["유산균", "프로바이오틱스"],
+      "acceptable_top_product_keywords": ["프로바이오틱스", "유산균", "장건강"]
+    },
+    {
+      "case_id": "product_007_image",
+      "input_mode": "image",
+      "evaluation_track": "keyword_sensitive",
+      "image_path": "D:\\health_project\\input_images\\product_007.jpg",
+      "expected_category": "혈당",
+      "expected_primary_ingredients": ["키토산", "바나바잎 추출물"],
+      "expected_primary_groups": [["키토산"], ["바나바잎 추출물", "바나바주정추출물"]],
+      "acceptable_product_keywords": ["혈당", "바나바", "키토산"],
+      "acceptable_top_product_keywords": ["혈당", "바나바", "당당자유", "고투플러스"]
+    },
+    {
+      "case_id": "product_008_image",
+      "input_mode": "image",
+      "evaluation_track": "function_first",
+      "image_path": "D:\\health_project\\input_images\\product_008.jpg",
+      "expected_category": "영양보충",
+      "expected_primary_ingredients": ["요오드", "비타민 D", "아연"],
+      "expected_primary_groups": [["요오드"], ["비타민 D"], ["아연"]],
+      "acceptable_product_keywords": ["요오드"],
+      "acceptable_top_product_keywords": ["요오드", "프리나탈", "멀티비타민"]
+    },
+    {
+      "case_id": "product_009_image",
+      "input_mode": "image",
+      "evaluation_track": "function_first",
+      "image_path": "D:\\health_project\\input_images\\product_009.jpg",
+      "expected_category": "영양보충",
+      "expected_primary_ingredients": ["비타민 C", "칼슘"],
+      "expected_primary_groups": [["비타민 C"], ["칼슘"]],
+      "acceptable_product_keywords": ["비타민C", "비타민 C"],
+      "acceptable_top_product_keywords": ["비타민C", "비타민 C", "메가 비타민C"]
+    },
+    {
+      "case_id": "product_010_image",
+      "input_mode": "image",
+      "evaluation_track": "keyword_sensitive",
+      "image_path": "D:\\health_project\\input_images\\product_010.jpg",
+      "expected_category": "간 건강",
+      "expected_primary_ingredients": ["밀크씨슬추출물"],
+      "expected_primary_groups": [["밀크씨슬추출물", "실리마린", "밀크씨슬"]],
+      "acceptable_product_keywords": ["밀크씨슬", "간"],
+      "acceptable_top_product_keywords": ["밀크씨슬", "간건강", "리버"]
+    },
+    {
+      "case_id": "product_011_image",
+      "input_mode": "image",
+      "evaluation_track": "keyword_sensitive",
+      "image_path": "D:\\health_project\\input_images\\product_011.jpg",
+      "expected_category": "간 건강",
+      "expected_primary_ingredients": ["밀크씨슬추출물"],
+      "expected_primary_groups": [["밀크씨슬추출물", "실리마린", "밀크씨슬"]],
+      "acceptable_product_keywords": ["밀크씨슬", "간"],
+      "acceptable_top_product_keywords": ["밀크씨슬", "간건강", "리버"]
+    },
+    {
+      "case_id": "product_012_image",
+      "input_mode": "image",
+      "evaluation_track": "keyword_sensitive",
+      "image_path": "D:\\health_project\\input_images\\product_012.jpg",
+      "expected_category": "눈 건강",
+      "expected_primary_ingredients": ["마리골드꽃추출물", "비타민 A", "베타카로틴"],
+      "expected_primary_groups": [["루테인", "마리골드꽃추출물"], ["비타민 A"], ["베타카로틴"]],
+      "acceptable_product_keywords": ["루테인", "눈"],
+      "acceptable_top_product_keywords": ["루테인", "눈", "카타드라이", "오메가3루테인"]
+    },
+    {
+      "case_id": "check_007_ocr_text",
+      "input_mode": "ocr_text_from_image",
+      "evaluation_track": "keyword_sensitive",
+      "image_path": "D:\\health_project\\input_images\\check_007.png",
+      "expected_category": "혈당",
+      "expected_primary_ingredients": ["키토산", "바나바잎 추출물"],
+      "expected_primary_groups": [["키토산"], ["바나바잎 추출물", "바나바주정추출물"]],
+      "acceptable_product_keywords": ["혈당", "바나바", "키토산"],
+      "acceptable_top_product_keywords": ["고투플러스", "혈당케어", "바나바"]
+    },
+    {
+      "case_id": "check_010_2_ocr_text",
+      "input_mode": "ocr_text_from_image",
+      "evaluation_track": "keyword_sensitive",
+      "image_path": "D:\\health_project\\input_images\\check_010_2.png",
+      "expected_category": "간 건강",
+      "expected_primary_ingredients": ["밀크씨슬추출물"],
+      "expected_primary_groups": [["밀크씨슬추출물", "실리마린", "밀크씨슬"]],
+      "acceptable_product_keywords": ["밀크씨슬", "간"],
+      "acceptable_top_product_keywords": ["밀크씨슬", "간건강", "리버"]
+    },
+    {
+      "case_id": "product_001_ocr_text",
+      "input_mode": "ocr_text_from_image",
+      "evaluation_track": "keyword_sensitive",
+      "image_path": "D:\\health_project\\input_images\\product_001.png",
+      "expected_category": "면역",
+      "expected_primary_ingredients": ["홍삼"],
+      "expected_primary_groups": [["홍삼"]],
+      "acceptable_product_keywords": ["홍삼"],
+      "acceptable_top_product_keywords": ["홍삼", "진액", "홍삼정"]
+    },
+    {
+      "case_id": "product_004_ocr_text",
+      "input_mode": "ocr_text_from_image",
+      "evaluation_track": "keyword_sensitive",
+      "image_path": "D:\\health_project\\input_images\\product_004.jpg",
+      "expected_category": "장 건강",
+      "expected_primary_ingredients": ["프로바이오틱스"],
+      "expected_primary_groups": [["프로바이오틱스", "유산균"]],
+      "acceptable_product_keywords": ["유산균", "프로바이오틱스", "장"],
+      "acceptable_top_product_keywords": ["프로바이오틱스", "유산균", "장건강", "바이오틱스"]
+    },
+    {
+      "case_id": "product_007_ocr_text",
+      "input_mode": "ocr_text_from_image",
+      "evaluation_track": "keyword_sensitive",
+      "image_path": "D:\\health_project\\input_images\\product_007.jpg",
+      "expected_category": "혈당",
+      "expected_primary_ingredients": ["키토산", "바나바잎 추출물"],
+      "expected_primary_groups": [["키토산"], ["바나바잎 추출물", "바나바주정추출물"]],
+      "acceptable_product_keywords": ["혈당", "바나바", "키토산"],
+      "acceptable_top_product_keywords": ["혈당", "바나바", "당당자유", "고투플러스"]
+    },
+    {
+      "case_id": "product_008_ocr_text",
+      "input_mode": "ocr_text_from_image",
+      "evaluation_track": "function_first",
+      "image_path": "D:\\health_project\\input_images\\product_008.jpg",
+      "expected_category": "영양보충",
+      "expected_primary_ingredients": ["요오드", "비타민 D", "아연"],
+      "expected_primary_groups": [["요오드"], ["비타민 D"], ["아연"]],
+      "acceptable_product_keywords": ["요오드"],
+      "acceptable_top_product_keywords": ["요오드", "프리나탈", "멀티비타민"]
+    },
+    {
+      "case_id": "product_010_ocr_text",
+      "input_mode": "ocr_text_from_image",
+      "evaluation_track": "keyword_sensitive",
+      "image_path": "D:\\health_project\\input_images\\product_010.jpg",
+      "expected_category": "간 건강",
+      "expected_primary_ingredients": ["밀크씨슬추출물"],
+      "expected_primary_groups": [["밀크씨슬추출물", "실리마린", "밀크씨슬"]],
+      "acceptable_product_keywords": ["밀크씨슬", "간"],
+      "acceptable_top_product_keywords": ["밀크씨슬", "간건강", "리버"]
+    },
+    {
+      "case_id": "product_012_ocr_text",
+      "input_mode": "ocr_text_from_image",
+      "evaluation_track": "keyword_sensitive",
+      "image_path": "D:\\health_project\\input_images\\product_012.jpg",
+      "expected_category": "눈 건강",
+      "expected_primary_ingredients": ["마리골드꽃추출물", "비타민 A", "베타카로틴"],
+      "expected_primary_groups": [["루테인", "마리골드꽃추출물"], ["비타민 A"], ["베타카로틴"]],
+      "acceptable_product_keywords": ["루테인", "눈"],
+      "acceptable_top_product_keywords": ["루테인", "눈", "카타드라이", "오메가3루테인"]
+    }
+  ]
+}

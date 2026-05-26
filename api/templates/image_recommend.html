@@ -1,0 +1,1176 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>건강기능식품 성분 기반 유사 제품 추천</title>
+  <style>
+    :root {
+      --bg: #f5f3ee;
+      --card: #fffdf8;
+      --ink: #1f2a1f;
+      --muted: #667066;
+      --line: #d8d2c3;
+      --accent: #215c46;
+      --accent-soft: #e8f2ed;
+      --warn: #8f6a14;
+      --warn-soft: #fff4cf;
+      --critical: #a63f2e;
+      --critical-soft: #fde8e4;
+      --info: #315d89;
+      --info-soft: #eaf3fb;
+      --shadow: 0 18px 40px rgba(38, 42, 39, 0.08);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(71, 123, 95, 0.10), transparent 24%),
+        linear-gradient(180deg, #f7f4ee 0%, #eef3ef 100%);
+      color: var(--ink);
+    }
+    .wrap { max-width: 1360px; margin: 0 auto; padding: 28px 20px 64px; }
+    .hero {
+      display: grid;
+      gap: 12px;
+      padding: 28px;
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background: rgba(255, 253, 248, 0.84);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(8px);
+    }
+    h1 { margin: 0; font-size: 34px; }
+    .hero p { margin: 0; color: var(--muted); line-height: 1.7; }
+    .caution-banner {
+      padding: 14px 16px;
+      border-radius: 16px;
+      background: #f5efe3;
+      border: 1px solid #e2d8c2;
+      color: #5f594f;
+      font-size: 14px;
+      line-height: 1.7;
+    }
+    .flow-steps {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 8px;
+    }
+    .flow-step {
+      border: 1px solid #dcd4c4;
+      border-radius: 18px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.92) 0%, rgba(246,242,233,0.96) 100%);
+      padding: 14px;
+      display: grid;
+      gap: 8px;
+    }
+    .flow-step .step-no {
+      width: 34px;
+      height: 34px;
+      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 700;
+      font-size: 13px;
+    }
+    .flow-step strong { font-size: 15px; }
+    .flow-step p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(360px, 520px);
+      gap: 20px;
+      margin-top: 22px;
+      align-items: start;
+    }
+    .stack { display: grid; gap: 18px; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      padding: 20px;
+      box-shadow: var(--shadow);
+    }
+    .card h2, .card h3 { margin: 0 0 14px; }
+    .subtext { color: var(--muted); font-size: 14px; line-height: 1.6; }
+    .upload-box {
+      border: 1px dashed #adc0b3;
+      border-radius: 18px;
+      background: linear-gradient(180deg, #f7fbf8 0%, #eef6f0 100%);
+      padding: 18px;
+      display: grid;
+      gap: 14px;
+    }
+    .dropzone {
+      border: 2px dashed #b7cbbf;
+      border-radius: 16px;
+      padding: 28px 18px;
+      text-align: center;
+      background: rgba(255, 255, 255, 0.7);
+      transition: border-color 0.2s ease, background 0.2s ease;
+      cursor: pointer;
+    }
+    .dropzone.dragover {
+      border-color: var(--accent);
+      background: #eef7f2;
+    }
+    .dropzone strong { display: block; margin-bottom: 6px; }
+    .upload-controls {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .upload-controls button,
+    .ingredient-add button,
+    .rerun-button {
+      border: 0;
+      border-radius: 12px;
+      padding: 13px 16px;
+      font-weight: 700;
+      cursor: pointer;
+      background: var(--accent);
+      color: #fff;
+    }
+    .upload-controls button[disabled],
+    .ingredient-add button[disabled],
+    .rerun-button[disabled] {
+      background: #b8c4bc;
+      cursor: not-allowed;
+    }
+    .ghost-button {
+      background: #fff;
+      color: var(--accent);
+      border: 1px solid #bfd1c5;
+    }
+    input[type="file"] { display: none; }
+    .preview-wrap {
+      display: grid;
+      gap: 10px;
+    }
+    .preview-image {
+      width: 100%;
+      max-height: 320px;
+      object-fit: contain;
+      border-radius: 16px;
+      border: 1px solid #dcd7ca;
+      background: #fbfaf7;
+    }
+    .meta-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .meta-item {
+      border: 1px solid #ebe4d7;
+      border-radius: 14px;
+      padding: 12px;
+      background: #fff;
+    }
+    .meta-item .label {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .meta-item .value {
+      line-height: 1.6;
+      word-break: break-word;
+    }
+    .chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 13px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .chip.small { font-size: 12px; padding: 6px 10px; }
+    .chip.warning { background: var(--warn-soft); color: var(--warn); }
+    .chip.gray { background: #f2f1ed; color: #596058; }
+    .review-box,
+    .warning-box {
+      border-radius: 16px;
+      padding: 14px 16px;
+      border: 1px solid transparent;
+      line-height: 1.7;
+      font-size: 14px;
+    }
+    .review-box { background: var(--warn-soft); border-color: #edd78d; color: #6d5314; }
+    .warning-box.critical { background: var(--critical-soft); border-color: #efb7ac; color: var(--critical); }
+    .warning-box.notice { background: var(--warn-soft); border-color: #edd78d; color: #6d5314; }
+    .warning-box.info { background: var(--info-soft); border-color: #b8d4ee; color: var(--info); }
+    .warning-box ul { margin: 8px 0 0; padding-left: 18px; }
+    .debug-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .debug-item {
+      border: 1px solid #ebe4d7;
+      border-radius: 14px;
+      padding: 12px;
+      background: #fff;
+    }
+    .debug-item code,
+    pre {
+      font-family: Consolas, "SFMono-Regular", monospace;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .placeholder-panel {
+      border: 1px dashed #d3cbbb;
+      border-radius: 14px;
+      padding: 14px;
+      background: #faf8f3;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.7;
+    }
+    .ingredient-editor {
+      display: grid;
+      gap: 12px;
+    }
+    .ingredient-list {
+      display: grid;
+      gap: 10px;
+    }
+    .ingredient-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: center;
+    }
+    .ingredient-row input,
+    .ingredient-add input,
+    .api-base-row input {
+      width: 100%;
+      border: 1px solid #d7d2c6;
+      border-radius: 12px;
+      padding: 12px 14px;
+      font-size: 14px;
+      background: #fff;
+    }
+    .ingredient-row button {
+      border: 1px solid #e2cbc6;
+      background: #fff4f1;
+      color: #9a4131;
+      border-radius: 12px;
+      padding: 11px 14px;
+      cursor: pointer;
+      font-weight: 700;
+    }
+    .ingredient-add {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+    }
+    .editor-status {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .editor-status strong { color: var(--accent); }
+    .recommendation-list {
+      display: grid;
+      gap: 14px;
+    }
+    .recommendation-card {
+      border: 1px solid #e7e0d3;
+      border-radius: 18px;
+      padding: 16px;
+      background: #fff;
+      display: grid;
+      gap: 10px;
+    }
+    .recommendation-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 14px;
+    }
+    .recommendation-title {
+      display: grid;
+      gap: 4px;
+    }
+    .recommendation-title strong { font-size: 18px; }
+    .recommendation-title span { color: var(--muted); font-size: 13px; }
+    .score-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      border-radius: 14px;
+      background: #eef6f1;
+      color: var(--accent);
+      font-weight: 800;
+      font-size: 13px;
+    }
+    .sub-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 6px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .sub-badge.high { background: #e7f6ee; color: #1f7f52; }
+    .sub-badge.medium { background: #fff3db; color: #9a6c12; }
+    .sub-badge.low { background: #fde9e5; color: #ad4332; }
+    .recommendation-section { display: grid; gap: 6px; }
+    .recommendation-section .label {
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .recommendation-section .value {
+      line-height: 1.6;
+      font-size: 14px;
+    }
+    details {
+      border: 1px solid #e5ded1;
+      border-radius: 16px;
+      padding: 12px 14px;
+      background: #fff;
+    }
+    summary {
+      cursor: pointer;
+      font-weight: 700;
+      color: #284e3e;
+    }
+    pre {
+      margin: 12px 0 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: Consolas, monospace;
+      font-size: 13px;
+      line-height: 1.6;
+      color: #384438;
+    }
+    .status-message {
+      padding: 14px 16px;
+      border-radius: 16px;
+      font-size: 14px;
+      line-height: 1.7;
+    }
+    .status-message.error {
+      background: var(--critical-soft);
+      color: var(--critical);
+      border: 1px solid #efb7ac;
+    }
+    .status-message.success {
+      background: #edf8f2;
+      color: #1f7a52;
+      border: 1px solid #c2e7d2;
+    }
+    .loading-overlay {
+      position: fixed;
+      inset: 0;
+      display: none;
+      place-items: center;
+      background: rgba(19, 25, 21, 0.28);
+      backdrop-filter: blur(3px);
+      z-index: 10;
+    }
+    .loading-overlay.active { display: grid; }
+    .loading-card {
+      padding: 22px 24px;
+      border-radius: 18px;
+      background: rgba(255, 253, 248, 0.96);
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
+      font-weight: 700;
+      color: #234d3c;
+    }
+    .section-caption {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .section-step {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 30px;
+      height: 30px;
+      padding: 0 10px;
+      border-radius: 999px;
+      background: #e4efe8;
+      color: var(--accent);
+      font-weight: 700;
+      font-size: 12px;
+    }
+    .helper-note {
+      padding: 12px 14px;
+      border-radius: 14px;
+      background: #f7f5ee;
+      border: 1px solid #e8e0d0;
+      color: #5f625a;
+      font-size: 13px;
+      line-height: 1.65;
+    }
+    .recommendation-meta-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .recommendation-mini {
+      border: 1px solid #eee6da;
+      border-radius: 14px;
+      padding: 10px 12px;
+      background: #fcfbf8;
+    }
+    .recommendation-mini .label {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+    .recommendation-mini .value {
+      font-size: 14px;
+      line-height: 1.55;
+      word-break: break-word;
+    }
+    .inline-note {
+      margin-top: 6px;
+      color: #786f61;
+      font-size: 12px;
+      line-height: 1.6;
+    }
+    .hint-text {
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .empty-panel {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.7;
+      padding: 22px;
+      border: 1px dashed #d9d3c4;
+      border-radius: 16px;
+      background: #fbfaf6;
+    }
+    @media (max-width: 1080px) {
+      .layout { grid-template-columns: 1fr; }
+      .flow-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 720px) {
+      .wrap { padding: 16px 14px 40px; }
+      h1 { font-size: 28px; }
+      .hero, .card { padding: 16px; }
+      .flow-steps, .recommendation-meta-grid { grid-template-columns: 1fr; }
+      .meta-grid { grid-template-columns: 1fr; }
+      .ingredient-add, .ingredient-row, .upload-controls { grid-template-columns: 1fr; }
+      .recommendation-head { flex-direction: column; }
+    }
+  </style>
+</head>
+<body>
+  <div class="loading-overlay" id="loadingOverlay">
+    <div class="loading-card" id="loadingMessage">OCR 분석 및 추천 생성 중...</div>
+  </div>
+  <div class="wrap">
+    <section class="hero">
+      <h1>건강기능식품 성분 기반 유사 제품 추천</h1>
+      <p>성분표 이미지를 업로드하면 기능성원료 기준으로 유사 제품을 추천합니다. OCR 결과를 확인한 뒤 원료를 수정하고 다시 추천받을 수 있습니다.</p>
+      <div class="caution-banner">
+        본 결과는 건강기능식품의 기능성원료/원재료 기준 비교이며, 질병 예방·치료 효과를 의미하지 않습니다.
+      </div>
+      <div class="flow-steps" aria-label="사용 흐름 안내">
+        <div class="flow-step">
+          <span class="step-no">1</span>
+          <strong>이미지 업로드</strong>
+          <p>성분표 또는 원재료 표시 이미지를 업로드합니다.</p>
+        </div>
+        <div class="flow-step">
+          <span class="step-no">2</span>
+          <strong>OCR 결과 확인</strong>
+          <p>추출된 제품명, 카테고리, 원료와 검토 필요 안내를 확인합니다.</p>
+        </div>
+        <div class="flow-step">
+          <span class="step-no">3</span>
+          <strong>원료 수정</strong>
+          <p>잘못 추출된 원료를 삭제하거나 필요한 원료를 직접 추가합니다.</p>
+        </div>
+        <div class="flow-step">
+          <span class="step-no">4</span>
+          <strong>재추천 확인</strong>
+          <p>수정된 원료 기준으로 유사 제품 TOP10을 다시 받아 비교합니다.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="layout">
+      <div class="stack">
+        <section class="card">
+          <div class="section-caption">
+            <div>
+              <h2>1. 이미지 업로드</h2>
+              <div class="hint-text">jpg, jpeg, png, webp 파일을 업로드할 수 있습니다.</div>
+            </div>
+            <span class="section-step">STEP 1</span>
+          </div>
+          <div class="upload-box">
+            <label class="dropzone" id="dropzone" for="fileInput">
+              <strong>이미지를 드래그하거나 클릭해서 선택하세요</strong>
+              <span class="subtext">건강기능식품 라벨, 원재료명, 성분표 이미지를 올리면 OCR 분석을 시작합니다.</span>
+            </label>
+            <input id="fileInput" type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp">
+            <div class="api-base-row">
+              <label class="subtext" for="apiBaseInput">API Base URL</label>
+              <input id="apiBaseInput" type="text" value="" placeholder="http://localhost:8000">
+            </div>
+            <div class="helper-note">이미지 업로드 후 바로 OCR 분석과 첫 추천이 실행됩니다. 결과가 불안정하면 아래 원료 편집 영역에서 직접 수정한 뒤 다시 추천받을 수 있습니다.</div>
+            <div class="upload-controls">
+              <button id="analyzeButton" disabled>이미지 분석하기</button>
+              <button class="ghost-button" id="resetButton" type="button">초기화</button>
+              <span class="hint-text" id="fileMeta">선택된 파일이 없습니다.</span>
+            </div>
+            <div class="preview-wrap" id="previewWrap" hidden>
+              <img id="previewImage" class="preview-image" alt="업로드 미리보기">
+            </div>
+            <div id="errorBox" hidden class="status-message error"></div>
+            <div id="successBox" hidden class="status-message success"></div>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="section-caption">
+            <div>
+              <h2>2. OCR 결과 확인</h2>
+              <div class="hint-text">추출된 제품명, 카테고리, 주요 원료, warning을 먼저 확인하세요.</div>
+            </div>
+            <span class="section-step">STEP 2</span>
+          </div>
+          <div id="resultPanel" class="empty-panel">이미지를 분석하면 OCR 결과와 추정 프로필이 여기에 표시됩니다.</div>
+        </section>
+
+        <section class="card">
+          <div class="section-caption">
+            <div>
+              <h2>3. 원료 수정 후 재추천</h2>
+              <div class="hint-text">OCR이 추출한 원료를 삭제/수정/추가한 뒤 직접 입력 기준으로 다시 추천받을 수 있습니다.</div>
+            </div>
+            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+              <span class="section-step">STEP 3</span>
+              <span class="chip gray" id="dirtyChip" hidden>수정 사항 있음</span>
+            </div>
+          </div>
+          <div id="ingredientEditor" class="ingredient-editor">
+            <div class="empty-panel">분석 결과가 있어야 수정 가능한 원료 리스트가 생성됩니다.</div>
+          </div>
+        </section>
+      </div>
+
+      <div class="stack">
+        <section class="card">
+          <div class="section-caption">
+            <div>
+              <h2>추천 결과 TOP10</h2>
+              <div class="hint-text" id="recommendationModeText">이미지를 분석하면 추천 결과가 표시됩니다.</div>
+            </div>
+            <span class="section-step">STEP 4</span>
+          </div>
+          <div id="recommendationList" class="empty-panel">추천 결과가 아직 없습니다.</div>
+        </section>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const defaultApiBase = "{{ api_base_url or '' }}";
+    const defaultTopK = {{ default_top_k }};
+    const defaultCandidateLimit = {{ default_candidate_limit }};
+    const debugResponseEnabled = {{ 'true' if debug_response_enabled else 'false' }};
+    const cautionText = "본 추천은 건강기능식품의 기능성원료, 표시 기능, 원재료 정보를 기준으로 한 비교 결과입니다. 질병의 예방·치료 효과를 의미하지 않으며, 실제 섭취 전 제품 라벨의 함량, 1일 섭취량, 주의사항을 확인해야 합니다.";
+
+    const state = {
+      file: null,
+      previewUrl: "",
+      imageResponse: null,
+      ingredientResponse: null,
+      editableIngredients: [],
+      originalIngredients: [],
+      ingredientDraft: "",
+      baseUrl: defaultApiBase || window.location.origin,
+      dirty: false,
+      latestMode: "image",
+    };
+
+    const fileInput = document.getElementById("fileInput");
+    const dropzone = document.getElementById("dropzone");
+    const previewWrap = document.getElementById("previewWrap");
+    const previewImage = document.getElementById("previewImage");
+    const analyzeButton = document.getElementById("analyzeButton");
+    const resetButton = document.getElementById("resetButton");
+    const fileMeta = document.getElementById("fileMeta");
+    const resultPanel = document.getElementById("resultPanel");
+    const ingredientEditor = document.getElementById("ingredientEditor");
+    const recommendationList = document.getElementById("recommendationList");
+    const loadingOverlay = document.getElementById("loadingOverlay");
+    const loadingMessage = document.getElementById("loadingMessage");
+    const errorBox = document.getElementById("errorBox");
+    const successBox = document.getElementById("successBox");
+    const recommendationModeText = document.getElementById("recommendationModeText");
+    const dirtyChip = document.getElementById("dirtyChip");
+    const apiBaseInput = document.getElementById("apiBaseInput");
+
+    apiBaseInput.value = state.baseUrl;
+
+    function escapeHtml(value) {
+      return String(value || "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
+    }
+
+    function setLoading(active, message = "처리 중...") {
+      loadingOverlay.classList.toggle("active", active);
+      loadingMessage.textContent = message;
+    }
+
+    function setError(message) {
+      errorBox.hidden = !message;
+      errorBox.textContent = message || "";
+    }
+
+    function setSuccess(message) {
+      successBox.hidden = !message;
+      successBox.textContent = message || "";
+    }
+
+    function getApiBase() {
+      const value = apiBaseInput.value.trim();
+      state.baseUrl = value || window.location.origin;
+      return state.baseUrl.replace(/\/+$/, "");
+    }
+
+    function formatScore(score) {
+      if (score === null || score === undefined || Number.isNaN(Number(score))) return "-";
+      return Number(score).toFixed(3);
+    }
+
+    function renderChips(items, className = "") {
+      if (!Array.isArray(items) || !items.length) {
+        return '<span class="chip gray">없음</span>';
+      }
+      return items.map((item) => `<span class="chip ${className}">${escapeHtml(item)}</span>`).join("");
+    }
+
+    function badgeClass(value) {
+      const label = String(value || "");
+      if (label.includes("높")) return "high";
+      if (label.includes("낮")) return "low";
+      return "medium";
+    }
+
+    function safeArray(value) {
+      return Array.isArray(value) ? value : [];
+    }
+
+    function buildEditorIngredientSource(response) {
+      if (!response) return [];
+      const parsed = response.parsed || {};
+      const direct = safeArray(response.parsed_ingredients_for_review);
+      const normalized = safeArray(parsed.normalized_ingredients);
+      const primaryNormalized = safeArray(parsed.primary_ingredients_normalized);
+      const ingredientObjects = safeArray(parsed.ingredient_objects).map((item) => item.normalized_for_matching || item.display_name || item.raw).filter(Boolean);
+      const merged = [...direct, ...normalized, ...primaryNormalized, ...ingredientObjects].map((item) => String(item || "").trim()).filter(Boolean);
+      return [...new Set(merged)];
+    }
+
+    function showResponsePanels(response) {
+      renderResultPanel(response);
+      renderIngredientEditor(response);
+      renderRecommendations(response);
+    }
+
+    function renderResultPanel(response) {
+      if (!response) {
+        resultPanel.className = "empty-panel";
+        resultPanel.innerHTML = "이미지를 분석하면 OCR 결과와 추정 프로필이 여기에 표시됩니다.";
+        return;
+      }
+
+      const parsed = response.parsed || {};
+      const estimated = response.estimated_profile || {};
+      const notices = safeArray(response.notices);
+      const criticalWarnings = safeArray(response.critical_warnings);
+      const infoWarnings = safeArray(response.info_warnings);
+      const ocr = response.ocr || {};
+      const quality = response.quality || {};
+      const debug = response.debug || {};
+
+      const html = [];
+      html.push('<div class="stack">');
+
+      if (response.needs_user_review) {
+        html.push(`<div class="review-box"><strong>검토 필요</strong><br>${escapeHtml(response.review_message || "추출된 원료를 확인해주세요.")}</div>`);
+      }
+
+      html.push('<div class="meta-grid">');
+      html.push(`<div class="meta-item"><div class="label">제품명 후보</div><div class="value">${escapeHtml(parsed.product_name_candidate || "-")}</div></div>`);
+      html.push(`<div class="meta-item"><div class="label">추정 메인 카테고리</div><div class="value">${escapeHtml(estimated.product_main_category || "-")}</div></div>`);
+      html.push(`<div class="meta-item"><div class="label">주요 원료</div><div class="value">${renderChips(safeArray(estimated.primary_ingredients), "small")}</div></div>`);
+      html.push(`<div class="meta-item"><div class="label">정규화 주요 원료</div><div class="value">${renderChips(safeArray(parsed.primary_ingredients_normalized), "small")}</div></div>`);
+      html.push(`<div class="meta-item"><div class="label">품질 등급</div><div class="value">${escapeHtml(quality.quality_grade || estimated.quality_grade || "-")}</div></div>`);
+      html.push(`<div class="meta-item"><div class="label">프로필 신뢰도</div><div class="value">${formatScore(quality.profile_confidence ?? estimated.confidence)}</div></div>`);
+      html.push('</div>');
+
+      if (criticalWarnings.length) {
+        html.push(`<div class="warning-box critical"><strong>검토가 필요한 항목</strong><ul>${criticalWarnings.map((item) => `<li>${escapeHtml(item.message || item.code)}</li>`).join("")}</ul></div>`);
+      }
+      if (notices.length) {
+        html.push(`<div class="warning-box notice"><strong>참고 안내</strong><ul>${notices.map((item) => `<li>${escapeHtml(item.message || item.code)}</li>`).join("")}</ul></div>`);
+      }
+      if (infoWarnings.length) {
+        html.push(`<div class="warning-box info"><strong>추가 정보</strong><ul>${infoWarnings.map((item) => `<li>${escapeHtml(item.message || item.code)}</li>`).join("")}</ul></div>`);
+      }
+
+      if (safeArray(quality.warnings).length) {
+        html.push(`<div class="warning-box notice"><strong>품질 warning</strong><ul>${safeArray(quality.warnings).map((item) => `<li>${escapeHtml(item.message || item.code)}</li>`).join("")}</ul></div>`);
+      }
+
+      html.push('<div class="meta-grid">');
+      html.push(`<div class="meta-item"><div class="label">추출 원료 목록</div><div class="value chip-row">${renderChips(safeArray(parsed.normalized_ingredients), "small")}</div></div>`);
+      html.push(`<div class="meta-item"><div class="label">후보 상태</div><div class="value">${escapeHtml(quality.status || estimated.status || "-")} / candidate ${escapeHtml(String(quality.candidate_enabled ?? estimated.is_candidate_enabled ?? "-"))}</div></div>`);
+      html.push('</div>');
+
+      if (debugResponseEnabled && response.trace_id) {
+        html.push('<div class="debug-grid">');
+        html.push(`<div class="debug-item"><div class="label">trace_id</div><div class="value"><code>${escapeHtml(response.trace_id)}</code></div></div>`);
+        html.push(`<div class="debug-item"><div class="label">parse_cache_hit / exact_match</div><div class="value"><code>${escapeHtml(String(debug.parse_cache_hit ?? false))} / ${escapeHtml(String(debug.exact_match_detected ?? false))}</code></div></div>`);
+        html.push('</div>');
+      }
+
+      html.push(`<details><summary>OCR 원문 보기</summary><pre>${escapeHtml(ocr.raw_text || "OCR 원문이 없습니다.")}</pre></details>`);
+      if (debugResponseEnabled && response.debug) {
+        html.push('<details><summary>디버그 시그니처 보기</summary>');
+        html.push('<div class="debug-grid">');
+        html.push(`<div class="debug-item"><div class="label">image_hash</div><div class="value"><code>${escapeHtml(debug.image_hash || "-")}</code></div></div>`);
+        html.push(`<div class="debug-item"><div class="label">ocr_text_hash</div><div class="value"><code>${escapeHtml(debug.ocr_text_hash || "-")}</code></div></div>`);
+        html.push(`<div class="debug-item"><div class="label">parsed_signature</div><div class="value"><code>${escapeHtml(debug.parsed_signature || "-")}</code></div></div>`);
+        html.push(`<div class="debug-item"><div class="label">profile_signature</div><div class="value"><code>${escapeHtml(debug.profile_signature || "-")}</code></div></div>`);
+        html.push('</div></details>');
+      }
+      html.push('<div class="placeholder-panel"><strong>추후 수정/재추천 확장 영역</strong><br>사용자 수정 이력, 수정 전/후 비교, 관리자 검수 로그를 이 영역에 연결할 수 있도록 비워두었습니다.</div>');
+      html.push('</div>');
+
+      resultPanel.className = "";
+      resultPanel.innerHTML = html.join("");
+    }
+
+    function renderIngredientEditor(response) {
+      if (!response) {
+        ingredientEditor.innerHTML = '<div class="empty-panel">분석 결과가 있어야 수정 가능한 원료 리스트가 생성됩니다.</div>';
+        return;
+      }
+
+      const rows = state.editableIngredients.map((ingredient, index) => `
+        <div class="ingredient-row">
+          <input type="text" value="${escapeHtml(ingredient)}" data-index="${index}" class="ingredient-input" />
+          <button type="button" data-remove-index="${index}">삭제</button>
+        </div>
+      `).join("");
+
+      ingredientEditor.innerHTML = `
+        <div class="editor-status">
+          <span>현재 원료 수: <strong>${state.editableIngredients.length}</strong></span>
+          <span>${state.dirty ? "수정 사항이 있습니다." : "OCR 추출 원료를 그대로 사용 중입니다."}</span>
+        </div>
+        <div class="ingredient-list">
+          ${rows || '<div class="empty-panel">수정 가능한 원료가 없습니다. 이미지를 다시 확인해주세요.</div>'}
+        </div>
+        <div class="ingredient-add">
+          <input type="text" id="newIngredientInput" placeholder="새 원료 추가 (예: 진세노사이드)" />
+          <button type="button" id="addIngredientButton">원료 추가</button>
+        </div>
+        <button type="button" class="rerun-button" id="rerunButton" ${state.editableIngredients.length ? "" : "disabled"}>수정한 원료로 다시 추천받기</button>
+      `;
+
+      document.querySelectorAll(".ingredient-input").forEach((input) => {
+        input.addEventListener("input", (event) => {
+          const index = Number(event.target.dataset.index);
+          state.editableIngredients[index] = event.target.value.trim();
+          cleanIngredients();
+          syncDirtyState();
+        });
+      });
+
+      document.querySelectorAll("[data-remove-index]").forEach((button) => {
+        button.addEventListener("click", (event) => {
+          const index = Number(event.target.dataset.removeIndex);
+          state.editableIngredients.splice(index, 1);
+          cleanIngredients();
+          syncDirtyState();
+          renderIngredientEditor(response);
+        });
+      });
+
+      document.getElementById("addIngredientButton").addEventListener("click", () => {
+        const input = document.getElementById("newIngredientInput");
+        const value = input.value.trim();
+        if (!value) return;
+        state.editableIngredients.push(value);
+        cleanIngredients();
+        syncDirtyState();
+        input.value = "";
+        renderIngredientEditor(response);
+      });
+
+      document.getElementById("rerunButton").addEventListener("click", rerunWithEditedIngredients);
+    }
+
+    function cleanIngredients() {
+      state.editableIngredients = [...new Set(state.editableIngredients.map((item) => String(item || "").trim()).filter(Boolean))];
+    }
+
+    function syncDirtyState() {
+      const current = JSON.stringify(state.editableIngredients);
+      const original = JSON.stringify(state.originalIngredients);
+      state.dirty = current !== original;
+      dirtyChip.hidden = !state.dirty;
+    }
+
+    function renderRecommendations(response) {
+      const recommendations = safeArray(response && response.recommendations);
+      const modeLabel = state.latestMode === "ingredients" ? "수정된 원료 기준 추천 결과입니다." : "OCR 추출 결과 기준 추천 결과입니다.";
+      recommendationModeText.textContent = response ? modeLabel : "이미지를 분석하면 추천 결과가 표시됩니다.";
+
+      if (!recommendations.length) {
+        recommendationList.className = "empty-panel";
+        recommendationList.innerHTML = "추천 결과가 아직 없습니다.";
+        return;
+      }
+
+      const html = ['<div class="recommendation-list">'];
+      recommendations.forEach((item) => {
+        const productName = item.target_product_name || item.product_name || item.name || "-";
+        const reportNo = item.target_report_no || item.report_no || "-";
+        const rank = item.rank || item.order || "-";
+        const similarityScore = item.similarity_score;
+        const substitutability = item.substitutability || "-";
+        const sharedIngredients = safeArray(item.shared_ingredients && item.shared_ingredients.length ? item.shared_ingredients : item.matched_ingredients);
+        const sharedCategories = safeArray(item.shared_categories && item.shared_categories.length ? item.shared_categories : item.categories);
+        const categoryValue = item.target_product_main_category || item.product_main_category || item.estimated_category || (sharedCategories[0] || "-");
+        const reason = item.reason || item.recommendation_reason || (item.explanation && item.explanation.reason) || "정보 없음";
+        const itemNotices = safeArray(item.notices || item.warning_notices);
+        const uploadedLabels = safeArray(item.uploaded_match_labels);
+        html.push(`
+          <article class="recommendation-card">
+            <div class="recommendation-head">
+              <div class="recommendation-title">
+                <strong>${escapeHtml(productName)}</strong>
+                <span>report_no ${escapeHtml(reportNo)} · 순번 ${escapeHtml(rank)}</span>
+              </div>
+              <div class="score-badge">
+                <span class="sub-badge ${badgeClass(substitutability)}">${escapeHtml(substitutability)}</span>
+                <span>${formatScore(similarityScore)}</span>
+              </div>
+            </div>
+            ${showUploadedBadges ? `
+              <div class="chip-row">
+                ${renderChips(uploadedLabels, "small")}
+                ${item.uploaded_quality_grade ? `<span class="chip gray small">grade ${escapeHtml(item.uploaded_quality_grade)}</span>` : ""}
+                ${item.uploaded_status ? `<span class="chip gray small">${escapeHtml(item.uploaded_status)}</span>` : ""}
+              </div>
+            ` : ""}
+            <div class="recommendation-meta-grid">
+              <div class="recommendation-mini">
+                <div class="label">카테고리</div>
+                <div class="value">${escapeHtml(categoryValue || "-")}</div>
+              </div>
+              <div class="recommendation-mini">
+                <div class="label">유사도</div>
+                <div class="value">${formatScore(similarityScore)}</div>
+              </div>
+            </div>
+            <div class="recommendation-section">
+              <div class="label">일치 원료</div>
+              <div class="value chip-row">${renderChips(sharedIngredients, "small")}</div>
+            </div>
+            <div class="recommendation-section">
+              <div class="label">공통 카테고리</div>
+              <div class="value chip-row">${renderChips(sharedCategories, "small")}</div>
+            </div>
+            <div class="recommendation-section">
+              <div class="label">추천 이유</div>
+              <div class="value">${escapeHtml(reason)}</div>
+            </div>
+            ${itemNotices.length ? `<div class="inline-note">참고: ${escapeHtml(itemNotices.map((notice) => notice.message || notice.code || notice).join(" / "))}</div>` : ""}
+            <div class="recommendation-section">
+              <div class="label">주의 문구</div>
+              <div class="value">${escapeHtml(item.caution || cautionText)}</div>
+            </div>
+          </article>
+        `);
+      });
+      html.push(`<div class="caution-banner">${escapeHtml(cautionText)}</div>`);
+      html.push("</div>");
+      recommendationList.className = "";
+      recommendationList.innerHTML = html.join("");
+    }
+
+    function buildRecommendationSection(recommendations, sectionTitle, sectionNote, options = {}) {
+      const collapsible = Boolean(options.collapsible);
+      const opened = Boolean(options.opened);
+      const showUploadedBadges = Boolean(options.showUploadedBadges || collapsible);
+      if (!recommendations.length) {
+        return `
+          <div class="recommendation-section">
+            <div class="label">${escapeHtml(sectionTitle)}</div>
+            <div class="empty-panel">${escapeHtml(sectionNote)}</div>
+          </div>
+        `;
+      }
+
+      const headerHtml = collapsible
+        ? `<details ${opened ? "open" : ""}><summary>${escapeHtml(sectionTitle)} <span class="inline-note">(${recommendations.length}건)</span></summary>`
+        : `<div class="label">${escapeHtml(sectionTitle)}</div>`;
+      const html = ['<div class="recommendation-section">', headerHtml, '<div class="recommendation-list">'];
+      recommendations.forEach((item) => {
+        const productName = item.target_product_name || item.product_name || item.name || "-";
+        const reportNo = item.target_report_no || item.report_no || "-";
+        const rank = item.rank || item.order || "-";
+        const similarityScore = item.similarity_score;
+        const substitutability = item.substitutability || "-";
+        const sharedIngredients = safeArray(item.shared_ingredients && item.shared_ingredients.length ? item.shared_ingredients : item.matched_ingredients);
+        const sharedCategories = safeArray(item.shared_categories && item.shared_categories.length ? item.shared_categories : item.categories);
+        const categoryValue = item.target_product_main_category || item.product_main_category || item.estimated_category || (sharedCategories[0] || "-");
+        const reason = item.reason || item.recommendation_reason || (item.explanation && item.explanation.reason) || "?뺣낫 ?놁쓬";
+        const itemNotices = safeArray(item.notices || item.warning_notices);
+        html.push(`
+          <article class="recommendation-card">
+            <div class="recommendation-head">
+              <div class="recommendation-title">
+                <strong>${escapeHtml(productName)}</strong>
+                <span>report_no ${escapeHtml(reportNo)} 쨌 ?쒕쾲 ${escapeHtml(rank)}</span>
+              </div>
+              <div class="score-badge">
+                <span class="sub-badge ${badgeClass(substitutability)}">${escapeHtml(substitutability)}</span>
+                <span>${formatScore(similarityScore)}</span>
+              </div>
+            </div>
+            <div class="recommendation-meta-grid">
+              <div class="recommendation-mini">
+                <div class="label">移댄뀒怨좊━</div>
+                <div class="value">${escapeHtml(categoryValue || "-")}</div>
+              </div>
+              <div class="recommendation-mini">
+                <div class="label">?좎궗??/div>
+                <div class="value">${formatScore(similarityScore)}</div>
+              </div>
+            </div>
+            <div class="recommendation-section">
+              <div class="label">?쇱튂 ?먮즺</div>
+              <div class="value chip-row">${renderChips(sharedIngredients, "small")}</div>
+            </div>
+            <div class="recommendation-section">
+              <div class="label">怨듯넻 移댄뀒怨좊━</div>
+              <div class="value chip-row">${renderChips(sharedCategories, "small")}</div>
+            </div>
+            <div class="recommendation-section">
+              <div class="label">異붿쿇 ?댁쑀</div>
+              <div class="value">${escapeHtml(reason)}</div>
+            </div>
+            ${itemNotices.length ? `<div class="inline-note">李멸퀬: ${escapeHtml(itemNotices.map((notice) => notice.message || notice.code || notice).join(" / "))}</div>` : ""}
+            <div class="recommendation-section">
+              <div class="label">二쇱쓽 臾멸뎄</div>
+              <div class="value">${escapeHtml(item.caution || cautionText)}</div>
+            </div>
+          </article>
+        `);
+      });
+      html.push("</div>");
+      if (collapsible) {
+        html.push("</details>");
+      }
+      html.push("</div>");
+      return html.join("");
+    }
+
+    function renderRecommendations(response) {
+      const recommendations = safeArray(response && response.recommendations);
+      const officialRecommendations = safeArray(response && response.official_recommendations);
+      const uploadedSimilarCases = safeArray(response && response.uploaded_similar_cases);
+      const modeLabel = state.latestMode === "ingredients" ? "?섏젙???먮즺 湲곗? 異붿쿇 寃곌낵?낅땲??" : "OCR 異붿텧 寃곌낵 湲곗? 異붿쿇 寃곌낵?낅땲??";
+      recommendationModeText.textContent = response ? modeLabel : "?대?吏瑜?遺꾩꽍?섎㈃ 異붿쿇 寃곌낵媛 ?쒖떆?⑸땲??";
+
+      if (!recommendations.length) {
+        recommendationList.className = "empty-panel";
+        recommendationList.innerHTML = "異붿쿇 寃곌낵媛 ?꾩쭅 ?놁뒿?덈떎.";
+        return;
+      }
+
+      const html = ['<div class="stack">'];
+      html.push('<div class="helper-note"><strong>공식 제품 추천 우선</strong><br>공식 카탈로그 추천을 먼저 보여주고, 업로드 기반 유사 사례는 아래 참고 영역으로 분리했습니다.</div>');
+      html.push(buildRecommendationSection(officialRecommendations, "공식 카탈로그 추천", "공식 카탈로그 추천 결과가 없습니다.", { collapsible: false }));
+      if (uploadedSimilarCases.length) {
+        html.push(buildRecommendationSection(uploadedSimilarCases, "업로드 유사 사례", "업로드 유사 사례가 없습니다.", { collapsible: true, opened: false }));
+      }
+      html.push(`<div class="caution-banner">${escapeHtml(cautionText)}</div>`);
+      html.push("</div>");
+      recommendationList.className = "";
+      recommendationList.innerHTML = html.join("");
+    }
+
+    function setFile(file) {
+      const allowed = [".jpg", ".jpeg", ".png", ".webp"];
+      const name = (file && file.name) || "";
+      const lower = name.toLowerCase();
+      if (!file || !allowed.some((ext) => lower.endsWith(ext))) {
+        state.file = null;
+        analyzeButton.disabled = true;
+        fileMeta.textContent = "이미지 파일만 업로드할 수 있습니다.";
+        setError("이미지 파일이 아닙니다. jpg, jpeg, png, webp만 업로드할 수 있습니다.");
+        return;
+      }
+      setError("");
+      state.file = file;
+      analyzeButton.disabled = false;
+      fileMeta.textContent = `${file.name} · ${(file.size / 1024 / 1024).toFixed(2)} MB`;
+      if (state.previewUrl) URL.revokeObjectURL(state.previewUrl);
+      state.previewUrl = URL.createObjectURL(file);
+      previewImage.src = state.previewUrl;
+      previewWrap.hidden = false;
+    }
+
+    async function recommendByImage() {
+      if (!state.file) return;
+      setError("");
+      setSuccess("");
+      setLoading(true, "OCR 분석 및 추천 생성 중...");
+      try {
+        const formData = new FormData();
+        formData.append("file", state.file);
+        formData.append("top_k", String(defaultTopK));
+        formData.append("candidate_limit", String(defaultCandidateLimit));
+
+        const response = await fetch(`${getApiBase()}/api/recommend/by-image`, {
+          method: "POST",
+          body: formData,
+        });
+        if (!response.ok) {
+          throw new Error(`이미지 분석 실패 (${response.status})`);
+        }
+        const data = await response.json();
+        state.imageResponse = data;
+        state.ingredientResponse = null;
+        state.originalIngredients = buildEditorIngredientSource(data);
+        state.editableIngredients = [...state.originalIngredients];
+        cleanIngredients();
+        syncDirtyState();
+        state.latestMode = "image";
+        showResponsePanels(data);
+        setSuccess("이미지 분석이 완료되었습니다. 추출된 원료를 확인한 뒤 필요하면 수정해서 다시 추천받으세요.");
+      } catch (error) {
+        setError(buildErrorMessage(error));
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    async function rerunWithEditedIngredients() {
+      cleanIngredients();
+      syncDirtyState();
+      if (!state.editableIngredients.length) {
+        setError("최소 1개 이상의 원료가 필요합니다.");
+        return;
+      }
+      setError("");
+      setSuccess("");
+      setLoading(true, "수정한 원료 기준으로 추천 재생성 중...");
+      try {
+        const response = await fetch(`${getApiBase()}/api/recommend/by-ingredients`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ingredients: state.editableIngredients,
+            top_k: defaultTopK,
+            candidate_limit: defaultCandidateLimit,
+          }),
+        });
+        if (!response.ok) {
+          throw new Error(`재추천 실패 (${response.status})`);
+        }
+        const data = await response.json();
+        state.ingredientResponse = data;
+        state.latestMode = "ingredients";
+        renderResultPanel(data);
+        renderRecommendations(data);
+        setSuccess("수정된 원료 기준 추천 결과입니다.");
+      } catch (error) {
+        setError(buildErrorMessage(error));
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    function buildErrorMessage(error) {
+      const message = error && error.message ? error.message : String(error || "알 수 없는 오류");
+      if (/Failed to fetch|NetworkError|fetch/i.test(message)) {
+        return "백엔드 서버가 실행 중인지 확인해주세요.";
+      }
+      return message;
+    }
+
+    function resetAll() {
+      setError("");
+      setSuccess("");
+      state.file = null;
+      state.imageResponse = null;
+      state.ingredientResponse = null;
+      state.originalIngredients = [];
+      state.editableIngredients = [];
+      state.dirty = false;
+      dirtyChip.hidden = true;
+      if (state.previewUrl) URL.revokeObjectURL(state.previewUrl);
+      state.previewUrl = "";
+      fileInput.value = "";
+      previewWrap.hidden = true;
+      previewImage.removeAttribute("src");
+      fileMeta.textContent = "선택된 파일이 없습니다.";
+      analyzeButton.disabled = true;
+      renderResultPanel(null);
+      renderIngredientEditor(null);
+      renderRecommendations(null);
+    }
+
+    dropzone.addEventListener("dragover", (event) => {
+      event.preventDefault();
+      dropzone.classList.add("dragover");
+    });
+    dropzone.addEventListener("dragleave", () => dropzone.classList.remove("dragover"));
+    dropzone.addEventListener("drop", (event) => {
+      event.preventDefault();
+      dropzone.classList.remove("dragover");
+      const file = event.dataTransfer.files && event.dataTransfer.files[0];
+      if (file) setFile(file);
+    });
+    fileInput.addEventListener("change", (event) => {
+      const file = event.target.files && event.target.files[0];
+      if (file) setFile(file);
+    });
+    analyzeButton.addEventListener("click", recommendByImage);
+    resetButton.addEventListener("click", resetAll);
+  </script>
+</body>
+</html>

@@ -37,18 +37,37 @@ def health() -> HealthResponse:
 @app.get("/", response_class=HTMLResponse)
 def root_page(request: Request) -> HTMLResponse:
     initial_catalog = service.list_catalog_products("", 1, 20)
-    return templates.TemplateResponse("products.html", {"request": request, "initial_catalog": initial_catalog})
+    return templates.TemplateResponse(request, "products.html", {"initial_catalog": initial_catalog})
 
 
 @app.get("/products", response_class=HTMLResponse)
 def products_page(request: Request) -> HTMLResponse:
     initial_catalog = service.list_catalog_products("", 1, 20)
-    return templates.TemplateResponse("products.html", {"request": request, "initial_catalog": initial_catalog})
+    return templates.TemplateResponse(request, "products.html", {"initial_catalog": initial_catalog})
 
 
 @app.get("/products/{report_no}", response_class=HTMLResponse)
 def product_detail_page(request: Request, report_no: str) -> HTMLResponse:
-    return templates.TemplateResponse("product_detail.html", {"request": request, "report_no": report_no})
+    return templates.TemplateResponse(request, "product_detail.html", {"report_no": report_no})
+
+
+@app.get("/recommend/image", response_class=HTMLResponse)
+def image_recommend_page(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request,
+        "image_recommend.html",
+        {
+            "api_base_url": "",
+            "default_top_k": settings.default_top_k,
+            "default_candidate_limit": settings.default_candidate_limit,
+            "debug_response_enabled": settings.debug_response,
+        },
+    )
+
+
+@app.get("/ocr-recommend", response_class=HTMLResponse)
+def ocr_recommend_page(request: Request) -> HTMLResponse:
+    return image_recommend_page(request)
 
 
 @app.get("/api/catalog/products")

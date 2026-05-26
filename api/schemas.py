@@ -41,7 +41,9 @@ class ProductProfileResponse(BaseModel):
 
 class RecommendationItem(BaseModel):
     rank: int
+    report_no: str = ""
     target_report_no: str
+    product_name: str = ""
     target_product_name: str
     similarity_score: float
     function_similarity_score: float
@@ -52,6 +54,11 @@ class RecommendationItem(BaseModel):
     reason: str
     caution: str
     explanation: Dict[str, Any]
+    exact_same_upload: bool = False
+    uploaded_match_types: List[str] = Field(default_factory=list)
+    uploaded_match_labels: List[str] = Field(default_factory=list)
+    uploaded_status: str = ""
+    uploaded_quality_grade: str = ""
 
 
 class RecommendationBaseProduct(BaseModel):
@@ -124,15 +131,52 @@ class EstimatedProfilePayload(BaseModel):
     primary_ingredients: List[str] = Field(default_factory=list)
     secondary_ingredients: List[str] = Field(default_factory=list)
     support_ingredients: List[str] = Field(default_factory=list)
+    upload_signature: str = ""
+    profile_signature: str = ""
+    status: str = ""
+    quality_grade: str = ""
+    is_candidate_enabled: Optional[bool] = None
+    candidate_scope: str = ""
+    candidate_disabled_reason: str = ""
+    confidence: Optional[float] = None
+
+
+class RecommendationQualityPayload(BaseModel):
+    ocr_confidence: Optional[float] = None
+    profile_confidence: float = 0.0
+    quality_grade: str = ""
+    warnings: List[Dict[str, Any]] = Field(default_factory=list)
+    candidate_enabled: Optional[bool] = None
+    status: str = ""
+    candidate_scope: str = ""
+    candidate_disabled_reason: str = ""
+
+
+class RecommendationDebugPayload(BaseModel):
+    image_hash: str = ""
+    ocr_text_hash: str = ""
+    parsed_signature: str = ""
+    profile_signature: str = ""
+    parse_cache_hit: bool = False
+    exact_match_detected: bool = False
+
+
+class SavedUploadedProduct(BaseModel):
+    report_no: str
+    product_name: str
+    included_in_recommendations: bool = True
 
 
 class UploadRecommendationResponse(BaseModel):
     input_type: str
+    trace_id: str = ""
     ocr: Optional[OCRPayload] = None
     parsed: ParsedOCRPayload
     detected_functional_ingredients: List[DetectedFunctionalIngredient] = Field(default_factory=list)
     estimated_profile: EstimatedProfilePayload
     recommendations: List[RecommendationItem] = Field(default_factory=list)
+    official_recommendations: List[RecommendationItem] = Field(default_factory=list)
+    uploaded_similar_cases: List[RecommendationItem] = Field(default_factory=list)
     execution_seconds: float = 0.0
     needs_user_review: bool = False
     review_message: str = ""
@@ -144,3 +188,6 @@ class UploadRecommendationResponse(BaseModel):
     excluded_ingredients: List[str] = Field(default_factory=list)
     product_name_category_hint: str = ""
     category_diversity_count: int = 0
+    quality: RecommendationQualityPayload = Field(default_factory=RecommendationQualityPayload)
+    debug: Optional[RecommendationDebugPayload] = None
+    saved_product: Optional[SavedUploadedProduct] = None

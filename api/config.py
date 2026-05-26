@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple
@@ -25,6 +26,7 @@ class ApiSettings:
     upload_temp_dir: Path
     upload_max_file_size_mb: int
     upload_allowed_extensions: Tuple[str, ...]
+    debug_response: bool
 
 
 def _nested_value(config: dict, section: str, key: str, default):
@@ -58,6 +60,8 @@ def get_settings() -> ApiSettings:
     upload_max_file_size_mb = int(_nested_value(config, "upload", "max_file_size_mb", 10))
     allowed = _nested_value(config, "upload", "allowed_extensions", [".jpg", ".jpeg", ".png", ".webp"])
     upload_allowed_extensions = tuple(str(item).lower() for item in allowed)
+    debug_response_value = os.getenv("DEBUG_RESPONSE", _nested_value(config, "api", "debug_response", True))
+    debug_response = str(debug_response_value).strip().lower() not in {"0", "false", "off", "no", ""}
 
     templates_dir = root_dir / "api" / "templates"
     return ApiSettings(
@@ -77,4 +81,5 @@ def get_settings() -> ApiSettings:
         upload_temp_dir=upload_temp_dir,
         upload_max_file_size_mb=upload_max_file_size_mb,
         upload_allowed_extensions=upload_allowed_extensions,
+        debug_response=debug_response,
     )

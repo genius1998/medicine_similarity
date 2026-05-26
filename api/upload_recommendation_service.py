@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import sqlite3
@@ -13,6 +14,8 @@ from api.db import sqlite_connection
 from api.ingredient_parse_service import (
     canonicalize_ingredient_for_matching,
     classify_ingredient_role,
+    compute_ocr_text_hash,
+    compute_parsed_signature,
     is_excipient,
     parse_ingredients_from_ocr_text,
     split_ingredients,
@@ -226,6 +229,127 @@ def normalize_lookup_key(value: str) -> str:
     return re.sub(r"\s+", "", str(value or "").strip().lower())
 
 
+def build_upload_signature(source_type: str, payload: str) -> str:
+    normalized_payload = str(payload or "").strip()
+    if not normalized_payload:
+        return ""
+    digest = hashlib.sha1(normalized_payload.encode("utf-8")).hexdigest()
+    return f"{str(source_type or 'upload').strip().lower()}::{digest}"
+
+
+def build_image_hash(image_bytes: bytes) -> str:
+    return hashlib.sha1(bytes(image_bytes or b"")).hexdigest() if image_bytes is not None else ""
+
+
+def build_profile_signature(temp_profile: dict, temp_vector: Dict[str, float]) -> str:
+    payload = {
+        "product_main_category": str(temp_profile.get("product_main_category", "") or ""),
+        "primary_ingredients": sorted(str(item or "") for item in temp_profile.get("primary_ingredients", []) if str(item or "")),
+        "secondary_ingredients": sorted(str(item or "") for item in temp_profile.get("secondary_ingredients", []) if str(item or "")),
+        "support_ingredients": sorted(str(item or "") for item in temp_profile.get("support_ingredients", []) if str(item or "")),
+        "vector": {str(key): round(float(value), 6) for key, value in sorted(temp_vector.items()) if float(value or 0.0) > 0},
+    }
+    return hashlib.sha1(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def determine_upload_candidate_state(parsed: dict, estimated_profile: dict, needs_user_review: bool) -> dict:
+    normalized_count = len(parsed.get("normalized_ingredients", []) or [])
+    confidence = float(parsed.get("profile_confidence", parsed.get("confidence", 0.0)) or 0.0)
+    quality_grade = str(parsed.get("quality_grade", "") or "")
+    main_category = str(estimated_profile.get("product_main_category", "") or "")
+    primary_normalized = [
+        str(item or "").strip()
+        for item in (
+            parsed.get("primary_ingredients_normalized")
+            or parsed.get("primary_ingredients")
+            or estimated_profile.get("primary_ingredients", [])
+            or []
+        )
+        if str(item or "").strip()
+    ]
+    primary_count = len(primary_normalized)
+    critical_codes = {
+        str(item.get("code", "") or "")
+        for item in parsed.get("quality_warnings", []) or []
+        if str(item.get("severity", "") or "") == "critical"
+    }
+    has_valid_category = bool(main_category and len(main_category.strip()) >= 2 and "?" not in main_category)
+    soft_review_only = bool(
+        needs_user_review
+        and not critical_codes
+        and confidence >= 0.7
+        and primary_count >= 1
+        and has_valid_category
+    )
+    candidate_disabled_reason = ""
+    candidate_scope = "none"
+    base_candidate_enabled = bool(
+        normalized_count >= 2
+        and confidence >= 0.7
+        and (not needs_user_review or soft_review_only)
+        and not critical_codes
+        and quality_grade in {"", "A", "B"}
+        and has_valid_category
+    )
+    candidate_enabled = bool(base_candidate_enabled)
+    if candidate_enabled:
+        candidate_scope = "uploaded_auto"
+    elif normalized_count < 2:
+        candidate_disabled_reason = "normalized_ingredients_too_few"
+    elif confidence < 0.7:
+        candidate_disabled_reason = "profile_confidence_below_threshold"
+    elif needs_user_review and not soft_review_only:
+        candidate_disabled_reason = "needs_user_review"
+    elif critical_codes:
+        candidate_disabled_reason = f"critical_warnings:{','.join(sorted(critical_codes))}"
+    elif quality_grade not in {"", "A", "B"}:
+        candidate_disabled_reason = f"quality_grade_{quality_grade.lower()}"
+    elif not has_valid_category:
+        candidate_disabled_reason = "missing_or_generic_main_category"
+    else:
+        candidate_disabled_reason = "policy_gate_unspecified"
+    if (
+        not candidate_enabled
+        and normalized_count >= 1
+        and primary_count >= 1
+        and confidence >= 0.75
+        and (not needs_user_review or soft_review_only)
+        and not critical_codes
+        and has_valid_category
+    ):
+        candidate_enabled = True
+        candidate_scope = "uploaded_auto_notice_review" if soft_review_only else "uploaded_auto_single_core"
+        candidate_disabled_reason = ""
+    elif candidate_enabled and soft_review_only:
+        candidate_scope = "uploaded_auto_notice_review"
+    if not quality_grade:
+        if candidate_enabled and confidence >= 0.9:
+            quality_grade = "A"
+        elif candidate_enabled:
+            quality_grade = "B"
+        elif normalized_count >= 1:
+            quality_grade = "C"
+        else:
+            quality_grade = "D"
+    elif candidate_enabled and quality_grade not in {"A", "B"}:
+        quality_grade = "A" if confidence >= 0.9 else "B"
+    elif not candidate_enabled and quality_grade in {"A", "B"}:
+        quality_grade = "C" if normalized_count >= 1 else "D"
+    if candidate_enabled:
+        status = "verified" if normalized_count >= 2 and confidence >= 0.7 and not critical_codes and not soft_review_only else "auto_eligible"
+    elif needs_user_review and not soft_review_only:
+        status = "review_needed"
+    else:
+        status = "raw"
+    return {
+        "status": status,
+        "quality_grade": quality_grade,
+        "is_candidate_enabled": candidate_enabled,
+        "candidate_scope": candidate_scope,
+        "candidate_disabled_reason": candidate_disabled_reason,
+    }
+
+
 def contains_keyword(text: str, keywords: List[str]) -> bool:
     normalized = normalize_lookup_key(text)
     return any(normalize_lookup_key(keyword) in normalized for keyword in keywords)
@@ -325,9 +449,11 @@ def normalize_warning_severity(warning: dict) -> dict:
         item["severity"] = "info"
     elif code in NOTICE_WARNING_CODES:
         item["severity"] = "notice"
+    elif code == "excipient_in_core_role" and ("비타민" in message or "혼합제" in message):
+        item["severity"] = "warning"
     elif code in CRITICAL_WARNING_CODES:
         item["severity"] = "critical"
-    elif severity in {"info", "notice", "critical"}:
+    elif severity in {"info", "notice", "warning", "critical"}:
         item["severity"] = severity
     elif "알레르기" in message or "알러지" in message or "함유" in message or "제조시설" in message or "주의" in message or "보관" in message:
         item["severity"] = "notice"
@@ -386,6 +512,60 @@ class UploadRecommendationService:
             item["categories"] = safe_json_loads(item.get("categories_json", "[]"), [])
             category_map[normalize_lookup_key(item["functional_ingredient_name"])] = item
         self._category_map = category_map
+
+    def _log_trace(
+        self,
+        *,
+        input_type: str,
+        parsed: dict,
+        estimated_profile: dict,
+        recommendations: List[dict],
+        execution_seconds: float,
+        upload_signature: str = "",
+        image_hash: str = "",
+        ocr_text_hash: str = "",
+        candidate_count: int = 0,
+    ) -> str:
+        trace_payload = {
+            "input_type": input_type,
+            "product_name_candidate": str(parsed.get("product_name_candidate", "") or ""),
+            "upload_signature": str(upload_signature or ""),
+            "image_hash": str(image_hash or ""),
+            "ocr_text_hash": str(ocr_text_hash or ""),
+            "parsed_signature": str((parsed.get("parse_metadata") or {}).get("parsed_signature", "") or compute_parsed_signature(parsed)),
+            "profile_signature": str(estimated_profile.get("profile_signature", "") or ""),
+            "top_recommendations": [
+                {
+                    "report_no": str(item.get("target_report_no", "") or ""),
+                    "product_name": str(item.get("target_product_name", "") or ""),
+                    "similarity_score": float(item.get("similarity_score", 0.0) or 0.0),
+                }
+                for item in recommendations[:10]
+            ],
+        }
+        trace_id = hashlib.sha1(json.dumps(trace_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+        warnings = list(parsed.get("quality_warnings", []) or [])
+        metadata = {
+            "needs_user_review": bool(parsed.get("needs_user_review")),
+            "parse_metadata": parsed.get("parse_metadata", {}),
+            "product_main_category": estimated_profile.get("product_main_category", ""),
+        }
+        self.recommendation_service.log_recommendation_trace(
+            trace_id=trace_id,
+            input_type=input_type,
+            product_name=str(parsed.get("product_name_candidate", "") or estimated_profile.get("product_name", "") or ""),
+            image_hash=image_hash,
+            ocr_text_hash=ocr_text_hash,
+            parsed_signature=str((parsed.get("parse_metadata") or {}).get("parsed_signature", "") or compute_parsed_signature(parsed)),
+            profile_signature=str(estimated_profile.get("profile_signature", "") or ""),
+            upload_signature=upload_signature,
+            candidate_count=candidate_count,
+            recommendations=recommendations[:20],
+            warnings=warnings,
+            metadata=metadata,
+            execution_seconds=execution_seconds,
+        )
+        return trace_id
 
     def _lookup_category_row(self, functional_name: str) -> Optional[dict]:
         self._ensure_loaded()
@@ -540,6 +720,8 @@ class UploadRecommendationService:
         return estimated_profile
 
     def _override_recommendation_reason(self, temp_profile: dict, row: dict) -> str:
+        if row.get("exact_same_upload"):
+            return str(row.get("reason", "") or "")
         shared_ingredients = [str(item or "") for item in row.get("shared_ingredients", [])]
         if temp_profile.get("product_main_category") == "간 건강" and contains_any_keyword(shared_ingredients, CATEGORY_HINT_RULES["간 건강"]["ingredient_keywords"]):
             return "밀크씨슬추출물 성분이 공통으로 포함되어 간 건강 기능성 측면에서 유사합니다."
@@ -754,6 +936,9 @@ class UploadRecommendationService:
         recommendations: List[dict],
     ) -> dict:
         estimated_profile = self._apply_domain_category_overrides(parsed_result, estimated_profile)
+        estimated_profile["confidence"] = float(
+            parsed_result.get("profile_confidence", estimated_profile.get("confidence", parsed_result.get("confidence", 0.0))) or 0.0
+        )
         base_warnings = []
         for warning in parsed_result.get("quality_warnings", []):
             normalized = normalize_warning_severity(warning)
@@ -934,6 +1119,9 @@ class UploadRecommendationService:
     def calculate_similar_products_for_temp_vector(self, temp_vector: Dict[str, float], temp_profile: dict, top_k: int, candidate_limit: int) -> List[dict]:
         service = self.recommendation_service
         temp_product_id = str(temp_profile["product_id"])
+        temp_upload_signature = str(temp_profile.get("upload_signature", "") or "")
+        temp_profile_signature = str(temp_profile.get("profile_signature", "") or "")
+        temp_ocr_text_hash = str(temp_profile.get("ocr_text_hash", "") or "")
         candidate_pool = build_candidate_pool(
             temp_product_id,
             temp_profile,
@@ -944,6 +1132,18 @@ class UploadRecommendationService:
             candidate_limit,
             get_settings().default_max_df_for_seed,
         )
+        candidate_target_ids = [str(candidate.get("target_product_id", "") or "") for candidate in candidate_pool]
+        if temp_upload_signature:
+            exact_upload_target_ids = [
+                str(product_id)
+                for product_id, profile in service.profiles.items()
+                if str(product_id or "") != temp_product_id
+                and str((profile or {}).get("upload_signature", "") or "") == temp_upload_signature
+            ]
+            for exact_target_id in exact_upload_target_ids:
+                if exact_target_id and exact_target_id not in candidate_target_ids:
+                    candidate_pool.insert(0, {"target_product_id": exact_target_id})
+                    candidate_target_ids.insert(0, exact_target_id)
 
         rows: List[dict] = []
         total_product_count = len(service.product_vectors)
@@ -951,26 +1151,73 @@ class UploadRecommendationService:
             target_product_id = candidate["target_product_id"]
             target_profile = service.profiles[target_product_id]
             target_vector = service.product_vectors[target_product_id]
-            similarity_score, _ = calculate_weighted_jaccard_with_idf(
-                temp_vector,
-                target_vector,
-                service.ingredient_frequency,
-                total_product_count,
-                temp_profile,
-                target_profile,
-            )
-            if similarity_score <= 0:
-                continue
             comparison = compare_product_profiles(temp_profile, target_profile, temp_vector, target_vector)
-            function_similarity_score = calculate_function_similarity(temp_profile, target_profile)
-            core_match_score = calculate_core_match_score(temp_profile, target_profile)
-            substitutability = classify_substitutability(similarity_score, temp_profile, target_profile)
-            reason = generate_recommendation_reason(temp_profile, target_profile, comparison, service.ingredient_frequency)
+            target_upload_signature = str(target_profile.get("upload_signature", "") or "")
+            target_profile_signature = str(target_profile.get("profile_signature", "") or "")
+            target_ocr_text_hash = str(target_profile.get("ocr_text_hash", "") or "")
+            exact_same_upload = bool(temp_upload_signature) and temp_upload_signature == target_upload_signature
+            candidate_enabled = bool(target_profile.get("is_candidate_enabled", True))
+            if not exact_same_upload and not candidate_enabled:
+                continue
+
+            uploaded_match_types: List[str] = []
+            uploaded_match_labels: List[str] = []
+            if str(target_profile.get("report_no", "") or "").startswith("UPLOADED-"):
+                if exact_same_upload:
+                    uploaded_match_types.append("exact_same_upload")
+                    uploaded_match_labels.append("동일 업로드")
+                if temp_profile_signature and target_profile_signature and temp_profile_signature == target_profile_signature:
+                    uploaded_match_types.append("same_profile_signature")
+                    uploaded_match_labels.append("동일 프로필")
+                if temp_ocr_text_hash and target_ocr_text_hash and temp_ocr_text_hash == target_ocr_text_hash:
+                    uploaded_match_types.append("same_ocr_text")
+                    uploaded_match_labels.append("동일 OCR 텍스트")
+                if not uploaded_match_types:
+                    uploaded_match_types.append("similar_uploaded_case")
+                    uploaded_match_labels.append("유사 업로드 사례")
+
+            if exact_same_upload:
+                all_ingredients = sorted(
+                    set(comparison["shared_ingredients"])
+                    | set(comparison["base_only_ingredients"])
+                    | set(comparison["target_only_ingredients"])
+                )
+                all_categories = sorted(set(comparison["shared_categories"]) | set(comparison["different_categories"]))
+                comparison = {
+                    **comparison,
+                    "shared_ingredients": all_ingredients,
+                    "base_only_ingredients": [],
+                    "target_only_ingredients": [],
+                    "shared_categories": all_categories,
+                    "different_categories": [],
+                }
+                similarity_score = 1.0
+                function_similarity_score = 1.0
+                core_match_score = 1.0
+                substitutability = "높음"
+                reason = "이전에 업로드된 동일 이미지와 일치해 동일 제품으로 판정했습니다."
+            else:
+                similarity_score, _ = calculate_weighted_jaccard_with_idf(
+                    temp_vector,
+                    target_vector,
+                    service.ingredient_frequency,
+                    total_product_count,
+                    temp_profile,
+                    target_profile,
+                )
+                if similarity_score <= 0:
+                    continue
+                function_similarity_score = calculate_function_similarity(temp_profile, target_profile)
+                core_match_score = calculate_core_match_score(temp_profile, target_profile)
+                substitutability = classify_substitutability(similarity_score, temp_profile, target_profile)
+                reason = generate_recommendation_reason(temp_profile, target_profile, comparison, service.ingredient_frequency)
             explanation = build_explanation_json(reason, comparison, substitutability)
             rows.append(
                 {
                     "rank": 0,
+                    "report_no": str(target_profile.get("report_no", "") or ""),
                     "target_report_no": str(target_profile.get("report_no", "") or ""),
+                    "product_name": str(target_profile.get("product_name", "") or ""),
                     "target_product_name": str(target_profile.get("product_name", "") or ""),
                     "similarity_score": float(similarity_score),
                     "function_similarity_score": float(function_similarity_score),
@@ -981,14 +1228,140 @@ class UploadRecommendationService:
                     "reason": reason,
                     "caution": generate_caution(),
                     "explanation": explanation,
+                    "exact_same_upload": exact_same_upload,
+                    "profile_signature": str(target_profile.get("profile_signature", "") or ""),
+                    "uploaded_match_types": uploaded_match_types,
+                    "uploaded_match_labels": uploaded_match_labels,
+                    "uploaded_status": str(target_profile.get("status", "") or ""),
+                    "uploaded_quality_grade": str(target_profile.get("quality_grade", "") or ""),
                 }
             )
-        rows = sorted(rows, key=lambda item: (-item["similarity_score"], -item["core_match_score"], -item["function_similarity_score"], item["target_report_no"]))[:top_k]
+        rows = sorted(
+            rows,
+            key=lambda item: (
+                -int(bool(item.get("exact_same_upload"))),
+                -item["similarity_score"],
+                -item["core_match_score"],
+                -item["function_similarity_score"],
+                item["target_report_no"],
+            ),
+        )
+
+        exact_rows: List[dict] = []
+        uploaded_rows: List[dict] = []
+        official_rows: List[dict] = []
+        exact_profile_signatures = set()
+        seen_uploaded_profile_signatures = set()
+        seen_uploaded_report_nos = set()
+        for item in rows:
+            report_no = str(item.get("report_no", "") or "")
+            if bool(item.get("exact_same_upload")):
+                exact_rows.append(item)
+                exact_profile_signature = str(item.get("profile_signature", "") or "")
+                if exact_profile_signature:
+                    exact_profile_signatures.add(exact_profile_signature)
+                continue
+            if report_no.startswith("UPLOADED-"):
+                profile_signature = str(item.get("profile_signature", "") or "")
+                dedupe_key = profile_signature or report_no
+                if profile_signature and profile_signature in exact_profile_signatures:
+                    continue
+                if dedupe_key in seen_uploaded_profile_signatures or report_no in seen_uploaded_report_nos:
+                    continue
+                seen_uploaded_profile_signatures.add(dedupe_key)
+                seen_uploaded_report_nos.add(report_no)
+                uploaded_rows.append(item)
+            else:
+                official_rows.append(item)
+
+        final_rows: List[dict] = list(exact_rows[:1])
+        remaining_slots = max(0, top_k - len(final_rows))
+        if remaining_slots > 0:
+            if official_rows:
+                # Conservative mix policy:
+                # - Keep at most one exact uploaded match in the visible top area.
+                # - When official candidates exist, prefer official rows heavily.
+                # - Allow at most one additional non-exact uploaded row after official rows
+                #   so uploaded similarity context remains visible without crowding out catalog products.
+                uploaded_cap = min(len(uploaded_rows), 0 if exact_rows else 1)
+                official_budget = min(len(official_rows), remaining_slots)
+                final_rows.extend(official_rows[:official_budget])
+
+                consumed_official = official_budget
+                consumed_uploaded = 0
+                if uploaded_cap > 0 and len(final_rows) < top_k:
+                    final_rows.extend(uploaded_rows[:uploaded_cap])
+                    consumed_uploaded = uploaded_cap
+
+                while len(final_rows) < top_k:
+                    next_official = official_rows[consumed_official] if consumed_official < len(official_rows) else None
+                    next_uploaded = uploaded_rows[consumed_uploaded] if consumed_uploaded < len(uploaded_rows) else None
+                    if next_official is None and next_uploaded is None:
+                        break
+                    if next_official is not None:
+                        final_rows.append(next_official)
+                        consumed_official += 1
+                        continue
+                    final_rows.append(next_uploaded)
+                    consumed_uploaded += 1
+            else:
+                final_rows.extend(uploaded_rows[:remaining_slots])
+
+        rows = final_rows[:top_k]
         for index, item in enumerate(rows, start=1):
             item["rank"] = index
             item["reason"] = self._override_recommendation_reason(temp_profile, item)
             item["explanation"]["reason"] = item["reason"]
         return rows
+
+    def _prepend_stored_exact_match_if_available(self, recommendations: List[dict], temp_profile: dict) -> List[dict]:
+        upload_signature = str(temp_profile.get("upload_signature", "") or "")
+        if not upload_signature:
+            return recommendations
+        if any(bool(item.get("exact_same_upload")) for item in recommendations):
+            return recommendations
+        stored = self.recommendation_service.find_uploaded_record_by_upload_signature(upload_signature)
+        if not stored:
+            return recommendations
+        synthetic = {
+            "rank": 1,
+            "report_no": str(stored.get("report_no", "") or ""),
+            "target_report_no": str(stored.get("report_no", "") or ""),
+            "product_name": str(stored.get("product_name", "") or temp_profile.get("product_name", "") or ""),
+            "target_product_name": str(stored.get("product_name", "") or temp_profile.get("product_name", "") or ""),
+            "similarity_score": 1.0,
+            "function_similarity_score": 1.0,
+            "core_match_score": 1.0,
+            "substitutability": "?믪쓬",
+            "shared_ingredients": sorted(
+                set(str(item or "") for item in temp_profile.get("primary_ingredients", []))
+                | set(str(item or "") for item in temp_profile.get("secondary_ingredients", []))
+                | set(str(item or "") for item in temp_profile.get("support_ingredients", []))
+            ),
+            "shared_categories": [str(temp_profile.get("product_main_category", "") or "")] if str(temp_profile.get("product_main_category", "") or "") else [],
+            "reason": "?숈씪 ?낅젰 signature濡?湲곕줉??寃곗꽍?대? ?곹뭹?낅땲??",
+            "caution": generate_caution(),
+            "explanation": build_explanation_json(
+                "?숈씪 ?낅젰 signature濡?湲곕줉??寃곗꽍?대? ?곹뭹?낅땲??",
+                {
+                    "shared_ingredients": sorted(
+                        set(str(item or "") for item in temp_profile.get("primary_ingredients", []))
+                        | set(str(item or "") for item in temp_profile.get("secondary_ingredients", []))
+                        | set(str(item or "") for item in temp_profile.get("support_ingredients", []))
+                    ),
+                    "base_only_ingredients": [],
+                    "target_only_ingredients": [],
+                    "shared_categories": [str(temp_profile.get("product_main_category", "") or "")] if str(temp_profile.get("product_main_category", "") or "") else [],
+                    "different_categories": [],
+                },
+                "?믪쓬",
+            ),
+            "exact_same_upload": True,
+        }
+        merged = [synthetic] + [item for item in recommendations if str(item.get("report_no", "") or "") != synthetic["report_no"]]
+        for index, item in enumerate(merged, start=1):
+            item["rank"] = index
+        return merged
 
     def _build_response(
         self,
@@ -999,8 +1372,60 @@ class UploadRecommendationService:
         estimated_profile: dict,
         recommendations: List[dict],
         execution_seconds: float,
+        saved_product: Optional[dict] = None,
+        trace_id: str = "",
+        image_hash: str = "",
+        ocr_text_hash: str = "",
+        parsed_signature: str = "",
+        profile_signature: str = "",
     ) -> dict:
         corrected = self.apply_ocr_specific_profile_corrections(input_type, parsed, matched_ingredients, estimated_profile, ocr_payload, recommendations)
+        settings = get_settings()
+        exact_match_detected = any(bool(item.get("exact_same_upload")) for item in recommendations)
+        official_recommendations = [
+            item for item in recommendations
+            if not str(item.get("report_no", "") or "").startswith("UPLOADED-")
+        ]
+        uploaded_similar_cases = [
+            item for item in recommendations
+            if str(item.get("report_no", "") or "").startswith("UPLOADED-")
+        ]
+        parse_metadata = dict((corrected["parsed_result"] or {}).get("parse_metadata", {}) or {})
+        resolved_ocr_confidence = (
+            (ocr_payload or {}).get("confidence")
+            if ocr_payload is not None
+            else corrected["parsed_result"].get("ocr_confidence")
+        )
+        quality_payload = {
+            "ocr_confidence": resolved_ocr_confidence,
+            "profile_confidence": float(
+                corrected["parsed_result"].get(
+                    "profile_confidence",
+                    corrected["estimated_profile"].get("confidence", corrected["parsed_result"].get("confidence", 0.0)),
+                )
+                or 0.0
+            ),
+            "quality_grade": str(
+                corrected["estimated_profile"].get("quality_grade", "")
+                or corrected["parsed_result"].get("quality_grade", "")
+                or ""
+            ),
+            "warnings": corrected["quality_warnings"],
+            "candidate_enabled": corrected["estimated_profile"].get("is_candidate_enabled"),
+            "status": str(corrected["estimated_profile"].get("status", "") or ""),
+            "candidate_scope": str(corrected["estimated_profile"].get("candidate_scope", "") or ""),
+            "candidate_disabled_reason": str(corrected["estimated_profile"].get("candidate_disabled_reason", "") or ""),
+        }
+        debug_payload = None
+        if settings.debug_response:
+            debug_payload = {
+                "image_hash": str(image_hash or ""),
+                "ocr_text_hash": str(ocr_text_hash or parse_metadata.get("ocr_text_hash", "") or ""),
+                "parsed_signature": str(parsed_signature or parse_metadata.get("parsed_signature", "") or ""),
+                "profile_signature": str(profile_signature or corrected["estimated_profile"].get("profile_signature", "") or ""),
+                "parse_cache_hit": bool(parse_metadata.get("cache_hit")),
+                "exact_match_detected": exact_match_detected,
+            }
 
         if corrected["product_name_category_hint"] and recommendations:
             top_shared_categories = recommendations[0].get("shared_categories", [])
@@ -1026,6 +1451,7 @@ class UploadRecommendationService:
 
         return {
             "input_type": input_type,
+            "trace_id": str(trace_id or ""),
             "ocr": ocr_payload,
             "parsed": corrected["parsed_result"],
             "detected_functional_ingredients": [
@@ -1044,8 +1470,18 @@ class UploadRecommendationService:
                 "primary_ingredients": corrected["estimated_profile"].get("primary_ingredients", []),
                 "secondary_ingredients": corrected["estimated_profile"].get("secondary_ingredients", []),
                 "support_ingredients": corrected["estimated_profile"].get("support_ingredients", []),
+                "upload_signature": corrected["estimated_profile"].get("upload_signature", ""),
+                "profile_signature": corrected["estimated_profile"].get("profile_signature", ""),
+                "status": corrected["estimated_profile"].get("status", ""),
+                "quality_grade": corrected["estimated_profile"].get("quality_grade", ""),
+                "is_candidate_enabled": corrected["estimated_profile"].get("is_candidate_enabled"),
+                "candidate_scope": corrected["estimated_profile"].get("candidate_scope", ""),
+                "candidate_disabled_reason": corrected["estimated_profile"].get("candidate_disabled_reason", ""),
+                "confidence": corrected["parsed_result"].get("profile_confidence", corrected["estimated_profile"].get("confidence")),
             },
             "recommendations": recommendations,
+            "official_recommendations": official_recommendations,
+            "uploaded_similar_cases": uploaded_similar_cases,
             "execution_seconds": execution_seconds,
             "needs_user_review": corrected["needs_user_review"],
             "review_message": corrected["review_message"],
@@ -1057,6 +1493,9 @@ class UploadRecommendationService:
             "excluded_ingredients": corrected["excluded_ingredients"],
             "product_name_category_hint": corrected["product_name_category_hint"],
             "category_diversity_count": corrected["category_diversity_count"],
+            "quality": quality_payload,
+            "debug": debug_payload,
+            "saved_product": saved_product,
         }
 
     def recommend_from_ingredients(self, ingredients: List[str], top_k: int = 10, candidate_limit: int = 1000, product_name_candidate: str = "") -> dict:
@@ -1095,24 +1534,64 @@ class UploadRecommendationService:
         }
         matched = self.match_raw_ingredients_to_functional_ingredients(ingredient_objects)
         temp_vector = self.build_temp_product_vector_from_ingredients(ingredient_objects)
+        upload_signature = ""
         temp_hash = hashlib.sha1("|".join(sorted(parsed["normalized_ingredients"])).encode("utf-8")).hexdigest()[:16]
         name_hint = self.infer_category_from_product_name(product_name_candidate)
         temp_profile = self._build_temp_profile(f"uploaded::{temp_hash}", product_name_candidate or "업로드 입력 제품", matched, name_hint)
+        temp_profile["upload_signature"] = upload_signature
+        temp_profile["profile_signature"] = build_profile_signature(temp_profile, temp_vector)
         temp_profile = self._apply_domain_category_overrides(parsed, temp_profile)
+        temp_profile["profile_signature"] = build_profile_signature(temp_profile, temp_vector)
         recommendations = self.calculate_similar_products_for_temp_vector(temp_vector, temp_profile, top_k, candidate_limit) if temp_vector else []
-        return self._build_response("ingredients", None, parsed, matched, temp_profile, recommendations, round(time.perf_counter() - started, 6))
+        recommendations = self._prepend_stored_exact_match_if_available(recommendations, temp_profile)
+        candidate_state = determine_upload_candidate_state(parsed, temp_profile, False)
+        temp_profile["status"] = candidate_state["status"]
+        temp_profile["quality_grade"] = candidate_state["quality_grade"]
+        temp_profile["is_candidate_enabled"] = candidate_state["is_candidate_enabled"]
+        temp_profile["candidate_scope"] = candidate_state["candidate_scope"]
+        temp_profile["candidate_disabled_reason"] = candidate_state["candidate_disabled_reason"]
+        temp_profile["candidate_scope"] = candidate_state["candidate_scope"]
+        temp_profile["candidate_disabled_reason"] = candidate_state["candidate_disabled_reason"]
+        execution_seconds = round(time.perf_counter() - started, 6)
+        trace_id = self._log_trace(
+            input_type="ingredients",
+            parsed=parsed,
+            estimated_profile=temp_profile,
+            recommendations=recommendations,
+            execution_seconds=execution_seconds,
+            candidate_count=len(recommendations),
+        )
+        return self._build_response(
+            "ingredients",
+            None,
+            parsed,
+            matched,
+            temp_profile,
+            recommendations,
+            execution_seconds,
+            trace_id=trace_id,
+            parsed_signature=str((parsed.get("parse_metadata") or {}).get("parsed_signature", "") or compute_parsed_signature(parsed)),
+            profile_signature=str(temp_profile.get("profile_signature", "") or ""),
+        )
 
     def recommend_from_ocr_text(self, raw_text: str, top_k: int = 10, candidate_limit: int = 1000) -> dict:
         self._ensure_loaded()
         started = time.perf_counter()
-        parsed = parse_ingredients_from_ocr_text(raw_text)
+        parsed = parse_ingredients_from_ocr_text(raw_text, self.recommendation_service.runtime["sqlite_path"])
         matched = self.match_raw_ingredients_to_functional_ingredients(parsed.get("ingredient_objects", []))
         temp_vector = self.build_temp_product_vector_from_ingredients(parsed.get("ingredient_objects", []))
-        temp_hash = hashlib.sha1((raw_text or "").encode("utf-8")).hexdigest()[:16]
+        upload_signature = build_upload_signature("ocr_text", raw_text or "")
+        ocr_text_hash = compute_ocr_text_hash(raw_text or "")
+        parsed_signature = str((parsed.get("parse_metadata") or {}).get("parsed_signature", "") or compute_parsed_signature(parsed))
+        temp_hash = hashlib.sha1(upload_signature.encode("utf-8")).hexdigest()[:16]
         name_hint = self.infer_category_from_product_name(parsed.get("product_name_candidate", ""))
         temp_profile = self._build_temp_profile(f"uploaded::{temp_hash}", parsed.get("product_name_candidate") or "OCR 입력 제품", matched, name_hint)
+        temp_profile["upload_signature"] = upload_signature
+        temp_profile["profile_signature"] = build_profile_signature(temp_profile, temp_vector)
         temp_profile = self._apply_domain_category_overrides(parsed, temp_profile)
+        temp_profile["profile_signature"] = build_profile_signature(temp_profile, temp_vector)
         recommendations = self.calculate_similar_products_for_temp_vector(temp_vector, temp_profile, top_k, candidate_limit) if temp_vector else []
+        recommendations = self._prepend_stored_exact_match_if_available(recommendations, temp_profile)
         ocr_payload = {
             "raw_text": raw_text,
             "confidence": None,
@@ -1121,20 +1600,97 @@ class UploadRecommendationService:
             "blocks": [],
             "source": "ocr_text",
         }
-        return self._build_response("ocr_text", ocr_payload, parsed, matched, temp_profile, recommendations, round(time.perf_counter() - started, 6))
+        candidate_state = determine_upload_candidate_state(parsed, temp_profile, False)
+        temp_profile["status"] = candidate_state["status"]
+        temp_profile["quality_grade"] = candidate_state["quality_grade"]
+        temp_profile["is_candidate_enabled"] = candidate_state["is_candidate_enabled"]
+        execution_seconds = round(time.perf_counter() - started, 6)
+        trace_id = self._log_trace(
+            input_type="ocr_text",
+            parsed=parsed,
+            estimated_profile=temp_profile,
+            recommendations=recommendations,
+            execution_seconds=execution_seconds,
+            upload_signature=upload_signature,
+            ocr_text_hash=ocr_text_hash,
+            candidate_count=len(recommendations),
+        )
+        response = self._build_response(
+            "ocr_text",
+            ocr_payload,
+            parsed,
+            matched,
+            temp_profile,
+            recommendations,
+            execution_seconds,
+            trace_id=trace_id,
+            ocr_text_hash=ocr_text_hash,
+            parsed_signature=parsed_signature,
+            profile_signature=str(temp_profile.get("profile_signature", "") or ""),
+        )
+        candidate_state = determine_upload_candidate_state(response["parsed"], temp_profile, bool(response.get("needs_user_review")))
+        temp_profile["status"] = candidate_state["status"]
+        temp_profile["quality_grade"] = candidate_state["quality_grade"]
+        temp_profile["is_candidate_enabled"] = candidate_state["is_candidate_enabled"]
+        temp_profile["candidate_scope"] = candidate_state["candidate_scope"]
+        temp_profile["candidate_disabled_reason"] = candidate_state["candidate_disabled_reason"]
+        response["estimated_profile"]["status"] = candidate_state["status"]
+        response["estimated_profile"]["quality_grade"] = candidate_state["quality_grade"]
+        response["estimated_profile"]["is_candidate_enabled"] = candidate_state["is_candidate_enabled"]
+        response["estimated_profile"]["candidate_scope"] = candidate_state["candidate_scope"]
+        response["estimated_profile"]["candidate_disabled_reason"] = candidate_state["candidate_disabled_reason"]
+        response["quality"]["status"] = candidate_state["status"]
+        response["quality"]["quality_grade"] = candidate_state["quality_grade"]
+        response["quality"]["candidate_enabled"] = candidate_state["is_candidate_enabled"]
+        response["quality"]["candidate_scope"] = candidate_state["candidate_scope"]
+        response["quality"]["candidate_disabled_reason"] = candidate_state["candidate_disabled_reason"]
+        response["saved_product"] = self.recommendation_service.register_uploaded_product(
+            source_type="ocr_text",
+            product_name=str(temp_profile.get("product_name", "") or parsed.get("product_name_candidate", "") or "OCR 입력 상품"),
+            parsed=response["parsed"],
+            estimated_profile=temp_profile,
+            vector=temp_vector,
+            ocr_payload=ocr_payload,
+            upload_signature=upload_signature,
+            ocr_text_hash=ocr_text_hash,
+            parsed_signature=parsed_signature,
+            profile_signature=str(temp_profile.get("profile_signature", "") or ""),
+            status=candidate_state["status"],
+            quality_grade=candidate_state["quality_grade"],
+            is_candidate_enabled=candidate_state["is_candidate_enabled"],
+            notes="created from OCR text upload",
+            needs_user_review=bool(response.get("needs_user_review")),
+            quality_warnings=response.get("quality_warnings", []),
+        )
+        return response
 
     def recommend_from_uploaded_image(self, image_bytes: bytes, filename: str, top_k: int = 10, candidate_limit: int = 1000) -> dict:
         self._ensure_loaded()
         started = time.perf_counter()
+        image_hash = build_image_hash(image_bytes)
+        upload_signature = build_upload_signature("ocr_image", image_hash)
+        cached_ocr_payload = self.recommendation_service.find_cached_ocr_payload_by_upload_signature(upload_signature)
+        if cached_ocr_payload:
+            ocr_result = {
+                "raw_text": str(cached_ocr_payload.get("raw_text", "") or ""),
+                "confidence": cached_ocr_payload.get("confidence"),
+                "confidence_source": str(cached_ocr_payload.get("confidence_source", "cached") or "cached"),
+                "lines": list(cached_ocr_payload.get("lines", []) or []),
+                "blocks": list(cached_ocr_payload.get("blocks", []) or []),
+                "source": "ocr_cache",
+            }
+        else:
+            ocr_result = None
         suffix = Path(filename or "upload.jpg").suffix.lower() or ".jpg"
-        temp_path = save_temp_upload(image_bytes, suffix)
-        try:
-            ocr_result = extract_text_from_image(str(temp_path))
-        finally:
+        if ocr_result is None:
+            temp_path = save_temp_upload(image_bytes, suffix)
             try:
-                os.remove(temp_path)
-            except OSError:
-                pass
+                ocr_result = extract_text_from_image(str(temp_path))
+            finally:
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
 
         if ocr_result.get("error"):
             return {
@@ -1170,22 +1726,113 @@ class UploadRecommendationService:
                 "needs_user_review": True,
                 "review_message": "OCR 인식 결과를 확인해주세요.",
                 "quality_warnings": [{"code": "ocr_error", "message": str(ocr_result.get("error"))}],
+                "quality": {
+                    "ocr_confidence": ocr_result.get("confidence"),
+                    "profile_confidence": 0.0,
+                    "quality_grade": "D",
+                    "warnings": [{"code": "ocr_error", "message": str(ocr_result.get("error"))}],
+                    "candidate_enabled": False,
+                    "status": "review_needed",
+                },
+                "debug": {
+                    "image_hash": "",
+                    "ocr_text_hash": "",
+                    "parsed_signature": "",
+                    "profile_signature": "",
+                    "parse_cache_hit": False,
+                    "exact_match_detected": False,
+                } if get_settings().debug_response else None,
                 "parsed_ingredients_for_review": [],
                 "excluded_ingredients": [],
                 "product_name_category_hint": "",
             }
 
-        parsed = parse_ingredients_from_ocr_text(str(ocr_result.get("raw_text", "")))
+        raw_text = str(ocr_result.get("raw_text", "") or "")
+        parsed = parse_ingredients_from_ocr_text(raw_text, self.recommendation_service.runtime["sqlite_path"])
         parsed["ocr_confidence"] = ocr_result.get("confidence")
         parsed["ocr_confidence_source"] = ocr_result.get("confidence_source", "unavailable")
         matched = self.match_raw_ingredients_to_functional_ingredients(parsed.get("ingredient_objects", []))
         temp_vector = self.build_temp_product_vector_from_ingredients(parsed.get("ingredient_objects", []))
-        temp_hash = hashlib.sha1((filename + str(ocr_result.get("raw_text", ""))).encode("utf-8")).hexdigest()[:16]
+        ocr_text_hash = compute_ocr_text_hash(raw_text)
+        parsed_signature = str((parsed.get("parse_metadata") or {}).get("parsed_signature", "") or compute_parsed_signature(parsed))
+        temp_hash = hashlib.sha1(upload_signature.encode("utf-8")).hexdigest()[:16]
         name_hint = self.infer_category_from_product_name(parsed.get("product_name_candidate", filename))
         temp_profile = self._build_temp_profile(f"uploaded::{temp_hash}", parsed.get("product_name_candidate") or filename, matched, name_hint)
+        temp_profile["upload_signature"] = upload_signature
+        temp_profile["profile_signature"] = build_profile_signature(temp_profile, temp_vector)
         temp_profile = self._apply_domain_category_overrides(parsed, temp_profile)
+        temp_profile["profile_signature"] = build_profile_signature(temp_profile, temp_vector)
         recommendations = self.calculate_similar_products_for_temp_vector(temp_vector, temp_profile, top_k, candidate_limit) if temp_vector else []
-        return self._build_response("image", ocr_result, parsed, matched, temp_profile, recommendations, round(time.perf_counter() - started, 6))
+        recommendations = self._prepend_stored_exact_match_if_available(recommendations, temp_profile)
+        candidate_state = determine_upload_candidate_state(parsed, temp_profile, False)
+        temp_profile["status"] = candidate_state["status"]
+        temp_profile["quality_grade"] = candidate_state["quality_grade"]
+        temp_profile["is_candidate_enabled"] = candidate_state["is_candidate_enabled"]
+        temp_profile["candidate_scope"] = candidate_state["candidate_scope"]
+        temp_profile["candidate_disabled_reason"] = candidate_state["candidate_disabled_reason"]
+        execution_seconds = round(time.perf_counter() - started, 6)
+        trace_id = self._log_trace(
+            input_type="image",
+            parsed=parsed,
+            estimated_profile=temp_profile,
+            recommendations=recommendations,
+            execution_seconds=execution_seconds,
+            upload_signature=upload_signature,
+            image_hash=image_hash,
+            ocr_text_hash=ocr_text_hash,
+            candidate_count=len(recommendations),
+        )
+        response = self._build_response(
+            "image",
+            ocr_result,
+            parsed,
+            matched,
+            temp_profile,
+            recommendations,
+            execution_seconds,
+            trace_id=trace_id,
+            image_hash=image_hash,
+            ocr_text_hash=ocr_text_hash,
+            parsed_signature=parsed_signature,
+            profile_signature=str(temp_profile.get("profile_signature", "") or ""),
+        )
+        candidate_state = determine_upload_candidate_state(response["parsed"], temp_profile, bool(response.get("needs_user_review")))
+        temp_profile["status"] = candidate_state["status"]
+        temp_profile["quality_grade"] = candidate_state["quality_grade"]
+        temp_profile["is_candidate_enabled"] = candidate_state["is_candidate_enabled"]
+        temp_profile["candidate_scope"] = candidate_state["candidate_scope"]
+        temp_profile["candidate_disabled_reason"] = candidate_state["candidate_disabled_reason"]
+        response["estimated_profile"]["status"] = candidate_state["status"]
+        response["estimated_profile"]["quality_grade"] = candidate_state["quality_grade"]
+        response["estimated_profile"]["is_candidate_enabled"] = candidate_state["is_candidate_enabled"]
+        response["estimated_profile"]["candidate_scope"] = candidate_state["candidate_scope"]
+        response["estimated_profile"]["candidate_disabled_reason"] = candidate_state["candidate_disabled_reason"]
+        response["quality"]["status"] = candidate_state["status"]
+        response["quality"]["quality_grade"] = candidate_state["quality_grade"]
+        response["quality"]["candidate_enabled"] = candidate_state["is_candidate_enabled"]
+        response["quality"]["candidate_scope"] = candidate_state["candidate_scope"]
+        response["quality"]["candidate_disabled_reason"] = candidate_state["candidate_disabled_reason"]
+        response["saved_product"] = self.recommendation_service.register_uploaded_product(
+            source_type="ocr_image",
+            product_name=str(temp_profile.get("product_name", "") or parsed.get("product_name_candidate", "") or filename),
+            parsed=response["parsed"],
+            estimated_profile=temp_profile,
+            vector=temp_vector,
+            ocr_payload=ocr_result,
+            source_filename=filename,
+            upload_signature=upload_signature,
+            image_hash=image_hash,
+            ocr_text_hash=ocr_text_hash,
+            parsed_signature=parsed_signature,
+            profile_signature=str(temp_profile.get("profile_signature", "") or ""),
+            status=candidate_state["status"],
+            quality_grade=candidate_state["quality_grade"],
+            is_candidate_enabled=candidate_state["is_candidate_enabled"],
+            notes=f"created from uploaded image: {filename}",
+            needs_user_review=bool(response.get("needs_user_review")),
+            quality_warnings=response.get("quality_warnings", []),
+        )
+        return response
 
 
 def coerce_ingredient_request_payload(ingredients: Optional[List[str]], raw_ingredients: Optional[str]) -> List[str]:
