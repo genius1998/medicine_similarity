@@ -27,6 +27,11 @@ class ApiSettings:
     upload_max_file_size_mb: int
     upload_allowed_extensions: Tuple[str, ...]
     debug_response: bool
+    auth_default_admin_email: str
+    auth_default_admin_password: str
+    auth_session_cookie_name: str
+    auth_session_hours: int
+    auth_cookie_secure: bool
 
 
 def _nested_value(config: dict, section: str, key: str, default):
@@ -62,8 +67,16 @@ def get_settings() -> ApiSettings:
     upload_allowed_extensions = tuple(str(item).lower() for item in allowed)
     debug_response_value = os.getenv("DEBUG_RESPONSE", _nested_value(config, "api", "debug_response", True))
     debug_response = str(debug_response_value).strip().lower() not in {"0", "false", "off", "no", ""}
+    auth_default_admin_email = str(os.getenv("APP_DEFAULT_ADMIN_EMAIL", _nested_value(config, "auth", "default_admin_email", "admin@example.com")))
+    auth_default_admin_password = str(os.getenv("APP_DEFAULT_ADMIN_PASSWORD", _nested_value(config, "auth", "default_admin_password", "")))
+    auth_session_cookie_name = str(os.getenv("APP_SESSION_COOKIE_NAME", _nested_value(config, "auth", "session_cookie_name", "sb_session")))
+    auth_session_hours = int(os.getenv("APP_SESSION_HOURS", _nested_value(config, "auth", "session_hours", 12)))
+    auth_cookie_secure_value = os.getenv("APP_COOKIE_SECURE", _nested_value(config, "auth", "cookie_secure", False))
+    auth_cookie_secure = str(auth_cookie_secure_value).strip().lower() in {"1", "true", "on", "yes"}
 
     templates_dir = root_dir / "api" / "templates"
+    upload_temp_dir.mkdir(parents=True, exist_ok=True)
+    (root_dir / "logs").mkdir(parents=True, exist_ok=True)
     return ApiSettings(
         service_name=service_name,
         root_dir=root_dir,
@@ -82,4 +95,9 @@ def get_settings() -> ApiSettings:
         upload_max_file_size_mb=upload_max_file_size_mb,
         upload_allowed_extensions=upload_allowed_extensions,
         debug_response=debug_response,
+        auth_default_admin_email=auth_default_admin_email,
+        auth_default_admin_password=auth_default_admin_password,
+        auth_session_cookie_name=auth_session_cookie_name,
+        auth_session_hours=auth_session_hours,
+        auth_cookie_secure=auth_cookie_secure,
     )

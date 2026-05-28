@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from openpyxl import Workbook
 
+from api.config import get_settings
 from api.db import default_sqlite_path, sqlite_connection
 
 
@@ -145,13 +146,18 @@ class OperationsService:
             conn.commit()
 
     def ensure_default_admin(self) -> None:
+        settings = get_settings()
+        default_email = str(settings.auth_default_admin_email or "").strip().lower()
+        default_password = str(settings.auth_default_admin_password or "")
+        if not default_email or not default_password:
+            return
         with sqlite_connection(self.sqlite_path) as conn:
             existing = conn.execute("SELECT COUNT(*) FROM app_user").fetchone()[0]
             if existing:
                 return
         self.create_user(
-            email="admin@seongbun.local",
-            password="admin1234!",
+            email=default_email,
+            password=default_password,
             full_name="System Admin",
             organization="SeongbunKok",
             role="admin",

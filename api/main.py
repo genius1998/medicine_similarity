@@ -27,8 +27,6 @@ from api.schemas import (
 from api.upload_recommendation_service import UploadRecommendationService, coerce_ingredient_request_payload
 
 
-SESSION_COOKIE_NAME = "sb_session"
-
 settings = get_settings()
 app = FastAPI(title=settings.service_name)
 service = RecommendationService()
@@ -51,7 +49,7 @@ def _user_to_dict(user: Optional[AuthUser]) -> Optional[dict]:
 
 
 def get_current_user(request: Request) -> Optional[AuthUser]:
-    token = str(request.cookies.get(SESSION_COOKIE_NAME, "") or "").strip()
+    token = str(request.cookies.get(settings.auth_session_cookie_name, "") or "").strip()
     if not token:
         return None
     return ops_service.get_user_by_session(token)
@@ -141,8 +139,6 @@ def login_page(request: Request, error: str = Query(""), joined: str = Query("")
         request,
         error_message=error,
         joined_message="회원가입이 완료되었습니다. 로그인해주세요." if joined else "",
-        default_admin_email="admin@seongbun.local",
-        default_admin_password="admin1234!",
     )
     return templates.TemplateResponse(request, "login.html", context)
 
@@ -157,10 +153,16 @@ def login_submit(
     if not user:
         ops_service.log_event(event_type="auth_login", level="warning", request_path="/login", request_method="POST", message=f"login failed for {email}")
         return RedirectResponse(url="/login?error=이메일 또는 비밀번호가 올바르지 않습니다.", status_code=303)
-    token = ops_service.create_session(user.user_id)
+    token = ops_service.create_session(user.user_id, hours=settings.auth_session_hours)
     ops_service.log_event(event_type="auth_login", level="info", user_id=user.user_id, request_path="/login", request_method="POST", message="login success")
     response = RedirectResponse(url="/home", status_code=303)
-    response.set_cookie(SESSION_COOKIE_NAME, token, httponly=True, samesite="lax")
+    response.set_cookie(
+        settings.auth_session_cookie_name,
+        token,
+        httponly=True,
+        samesite="lax",
+        secure=settings.auth_cookie_secure,
+    )
     return response
 
 
@@ -195,13 +197,13 @@ def signup_submit(
 
 @app.post("/logout")
 def logout_submit(request: Request):
-    token = str(request.cookies.get(SESSION_COOKIE_NAME, "") or "")
+    token = str(request.cookies.get(settings.auth_session_cookie_name, "") or "")
     user = get_current_user(request)
     if token:
         ops_service.delete_session(token)
     ops_service.log_event(event_type="auth_logout", level="info", user_id=user.user_id if user else None, request_path="/logout", request_method="POST", message="logout")
     response = RedirectResponse(url="/login", status_code=303)
-    response.delete_cookie(SESSION_COOKIE_NAME)
+    response.delete_cookie(settings.auth_session_cookie_name)
     return response
 
 

@@ -1,0 +1,31 @@
+{
+  "api_service_name": "seongbunkok",
+  "api_default_top_k": 10,
+  "api_default_candidate_limit": 1000,
+  "api_default_max_df_for_seed": 3000,
+  "api": {
+    "debug_response": false
+  },
+  "auth": {
+    "default_admin_email": "admin@example.com",
+    "default_admin_password": "CHANGE_ME_STRONG_PASSWORD",
+    "session_cookie_name": "sb_session",
+    "session_hours": 12,
+    "cookie_secure": false
+  },
+  "google_ocr": {
+    "enabled": true,
+    "credentials_path": "D:\\health_project\\google_ocr_key"
+  },
+  "local_llm": {
+    "enabled": true,
+    "base_url": "http://169.213.5.157:3000/api/chat",
+    "timeout_sec": 120,
+    "max_retries": 2
+  },
+  "upload": {
+    "temp_dir": "tmp/uploads",
+    "max_file_size_mb": 10,
+    "allowed_extensions": [".jpg", ".jpeg", ".png", ".webp"]
+  }
+}

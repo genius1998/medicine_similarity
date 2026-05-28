@@ -4,6 +4,8 @@ __pycache__/
 .venv/
 .env
 .env.*
+config.json
+deploy_ec2/config.json
 .DS_Store
 google_ocr_key
 google_ocr_key/

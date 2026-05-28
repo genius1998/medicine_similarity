@@ -160,7 +160,7 @@
     {% elif joined_message %}
     <div class="alert-box">{{ joined_message }}</div>
     {% else %}
-    <div class="alert-box">관리자 기본 계정: {{ default_admin_email }} / {{ default_admin_password }}</div>
+    <div class="alert-box">관리자 계정은 배포 시 설정한 `config.json`의 auth 항목을 기준으로 생성됩니다.</div>
     {% endif %}
 
     <section class="section-box">
