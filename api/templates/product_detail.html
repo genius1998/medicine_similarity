@@ -3,102 +3,489 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>품목 상세 조회</title>
+  <title>성분콕</title>
   <style>
-    :root { --bg:#f4f1ea; --card:#fffdf8; --ink:#1f2a1f; --muted:#6a7166; --line:#d8d1c2; --accent:#23684b; --accent-soft:#e6f3ec; }
-    * { box-sizing:border-box; }
-    body { margin:0; font-family:"Malgun Gothic","Apple SD Gothic Neo",sans-serif; background:linear-gradient(180deg,#f7f3eb 0%,#eef4ef 100%); color:var(--ink); }
-    .wrap { max-width:1180px; margin:0 auto; padding:28px 20px 60px; }
-    .back { display:inline-block; margin-bottom:16px; color:#204f39; text-decoration:none; font-weight:700; }
-    .hero { background:rgba(255,255,255,0.78); border:1px solid var(--line); border-radius:22px; padding:24px; margin-bottom:20px; }
-    h1 { margin:0 0 8px; font-size:32px; }
-    .sub { color:var(--muted); }
-    .grid { display:grid; grid-template-columns:1.15fr 0.85fr; gap:18px; }
-    .card { background:var(--card); border:1px solid var(--line); border-radius:20px; padding:20px; }
-    .card h2 { margin:0 0 14px; font-size:20px; }
-    .field { margin-bottom:14px; }
-    .label { font-size:12px; color:var(--muted); margin-bottom:4px; }
-    .value { line-height:1.6; white-space:pre-wrap; }
-    .chip { display:inline-block; padding:6px 10px; border-radius:999px; background:var(--accent-soft); color:var(--accent); font-size:12px; font-weight:700; margin:0 6px 6px 0; }
-    .recommend { display:grid; gap:12px; }
-    .rec { border:1px solid #e5dece; border-radius:16px; padding:16px; background:#fff; }
-    .rec-title { display:flex; justify-content:space-between; gap:10px; margin-bottom:8px; }
-    .score { font-weight:700; color:#173e2c; }
-    .muted { color:var(--muted); font-size:13px; }
-    @media (max-width: 900px) { .grid { grid-template-columns:1fr; } }
+    :root {
+      --bg: #f5f5f5;
+      --panel: #ffffff;
+      --ink: #222222;
+      --muted: #666666;
+      --line: #cfcfcf;
+      --line-strong: #b8b8b8;
+      --accent: #1f5b43;
+      --accent-soft: #edf4f0;
+      --header-bg: #e7efe9;
+      --warn-bg: #f6f1e4;
+      --warn-line: #d8c9a3;
+      --critical-bg: #f8ece9;
+      --critical-line: #d8b2aa;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .app-header {
+      border-bottom: 1px solid var(--line-strong);
+      background: #f0f2f1;
+    }
+    .header-inner {
+      max-width: 1500px;
+      margin: 0 auto;
+      padding: 12px 18px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 22px;
+      line-height: 1.3;
+      font-weight: 700;
+      color: #173d2d;
+    }
+    .header-desc {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .wrap {
+      max-width: 1500px;
+      margin: 0 auto;
+      padding: 12px 18px 32px;
+    }
+    .back-link {
+      display: inline-block;
+      margin-bottom: 12px;
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .caution-banner,
+    .helper-note {
+      padding: 10px 12px;
+      border: 1px solid var(--warn-line);
+      border-radius: 4px;
+      background: var(--warn-bg);
+      color: #5f5644;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 0.95fr) minmax(420px, 1.05fr);
+      gap: 12px;
+      align-items: start;
+    }
+    .stack {
+      display: grid;
+      gap: 12px;
+    }
+    .section-box {
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: var(--panel);
+      padding: 12px;
+    }
+    .section-caption {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #dddddd;
+    }
+    .section-caption h2 {
+      margin: 0;
+      font-size: 17px;
+      font-weight: 700;
+    }
+    .hint-text,
+    .muted,
+    .inline-note {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .summary-table,
+    .data-table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+    .summary-table th,
+    .summary-table td,
+    .data-table th,
+    .data-table td {
+      border: 1px solid #d7d7d7;
+      padding: 8px;
+      vertical-align: top;
+      text-align: left;
+      font-size: 13px;
+      word-break: break-word;
+    }
+    .summary-table th,
+    .data-table th {
+      background: #f0f0f0;
+      font-weight: 700;
+      color: #333;
+    }
+    .summary-table th { width: 160px; }
+    .chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+    }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 7px;
+      border: 1px solid #c9d8cf;
+      border-radius: 12px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 11px;
+      line-height: 1.4;
+      white-space: nowrap;
+    }
+    .chip.gray { background: #f0f0f0; border-color: #d0d0d0; color: #555; }
+    .sub-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 44px;
+      padding: 2px 6px;
+      border-radius: 10px;
+      font-size: 11px;
+      border: 1px solid transparent;
+    }
+    .sub-badge.high { background: #edf6f0; color: #1e6b46; border-color: #b8d2c1; }
+    .sub-badge.medium { background: #faf1dd; color: #8a6512; border-color: #ddc58a; }
+    .sub-badge.low { background: #f8e8e5; color: #9a4232; border-color: #d6b3ac; }
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: #fff;
+    }
+    .data-table tbody tr:hover { background: #f7faf8; }
+    .row-detail {
+      margin-top: 8px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: #fafafa;
+      padding: 10px;
+    }
+    details {
+      border: 1px solid #d7d7d7;
+      border-radius: 4px;
+      background: #fcfcfc;
+      padding: 8px 10px;
+    }
+    summary {
+      cursor: pointer;
+      font-weight: 700;
+      color: #2d4d3e;
+      font-size: 13px;
+    }
+    .detail-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .detail-block {
+      border: 1px solid #dcdcdc;
+      background: #fff;
+      padding: 8px;
+    }
+    .detail-block .label {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+    .detail-block .value {
+      font-size: 13px;
+      line-height: 1.5;
+      word-break: break-word;
+    }
+    .empty-panel {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+      padding: 14px;
+      border: 1px dashed #c9c9c9;
+      border-radius: 4px;
+      background: #fafafa;
+    }
+    .loading-overlay {
+      position: fixed;
+      inset: 0;
+      display: none;
+      place-items: center;
+      background: rgba(0, 0, 0, 0.22);
+      z-index: 20;
+    }
+    .loading-overlay.active { display: grid; }
+    .loading-card {
+      width: min(440px, calc(100vw - 24px));
+      padding: 14px;
+      border-radius: 4px;
+      background: #fff;
+      border: 1px solid var(--line-strong);
+      color: #234d3c;
+    }
+    .loading-title {
+      font-size: 17px;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+    .loading-stage {
+      font-size: 13px;
+      color: #4e6659;
+      margin-bottom: 10px;
+      line-height: 1.5;
+    }
+    .loading-progress-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
+      font-size: 12px;
+      color: #466556;
+    }
+    .loading-bar {
+      width: 100%;
+      height: 8px;
+      background: #e4ece8;
+      border: 1px solid #c9d7d1;
+      overflow: hidden;
+    }
+    .loading-bar-fill {
+      width: 0;
+      height: 100%;
+      background: linear-gradient(90deg, #1f5b43 0%, #4f8f72 100%);
+      transition: width 0.24s ease;
+    }
+    .loading-subtext {
+      margin-top: 8px;
+      font-size: 12px;
+      color: #61766a;
+      line-height: 1.5;
+    }
+    @media (max-width: 980px) {
+      .layout { grid-template-columns: 1fr; }
+      .detail-grid { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <a class="back" href="/products">← 목록으로</a>
-    <div id="root">로딩 중...</div>
+  <div class="loading-overlay" id="loadingOverlay">
+    <div class="loading-card">
+      <div class="loading-title" id="loadingTitle">유사 제품 조회 진행 중</div>
+      <div class="loading-stage" id="loadingMessage">기존 제품 정보를 조회하고 유사 제품 추천을 계산하는 중입니다.</div>
+      <div class="loading-progress-head">
+        <div id="loadingStepLabel">STEP 1 / 4</div>
+        <div id="loadingPercent">0%</div>
+      </div>
+      <div class="loading-bar" aria-hidden="true">
+        <div class="loading-bar-fill" id="loadingBarFill"></div>
+      </div>
+      <div class="loading-subtext" id="loadingSubtext">공식 제품 프로필과 유사도 후보군을 순차적으로 조회합니다.</div>
+    </div>
   </div>
+
+  <header class="app-header">
+    <div class="header-inner">
+      <h1>성분콕</h1>
+      <div class="header-desc">건강기능식품 추천 서비스. 기존 제품 DB 기준으로 품목 상세 정보와 성분 기반 유사 제품 TOP10을 조회합니다.</div>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <a class="back-link" href="/products">목록으로 돌아가기</a>
+    <div id="root" class="empty-panel">제품 정보를 불러오는 중입니다.</div>
+  </div>
+
   <script>
     const reportNo = "{{ report_no }}";
+    const root = document.getElementById("root");
+    const loadingOverlay = document.getElementById("loadingOverlay");
+    const loadingMessage = document.getElementById("loadingMessage");
+    const loadingStepLabel = document.getElementById("loadingStepLabel");
+    const loadingPercent = document.getElementById("loadingPercent");
+    const loadingBarFill = document.getElementById("loadingBarFill");
+    const loadingSubtext = document.getElementById("loadingSubtext");
+
+    const loadingSteps = [
+      { label: "STEP 1 / 4", percent: 12, message: "기준 제품 기본 정보를 조회하는 중입니다.", subtext: "공식 카탈로그 상세 정보 로드" },
+      { label: "STEP 2 / 4", percent: 38, message: "제품 프로필과 카테고리 정보를 조회하는 중입니다.", subtext: "기능성 원료 프로필 로드" },
+      { label: "STEP 3 / 4", percent: 72, message: "유사 제품 후보군을 계산하는 중입니다.", subtext: "기존 제품 DB 후보군 계산" },
+      { label: "STEP 4 / 4", percent: 94, message: "추천 결과를 정리하는 중입니다.", subtext: "LLM 재정렬 및 화면 렌더링 준비" },
+    ];
 
     function escapeHtml(value) {
-      return String(value || '').replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));
+      return String(value || "").replace(/[&<>\"']/g, (s) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "\"":"&quot;", "'":"&#39;" }[s]));
+    }
+
+    function formatScore(score) {
+      if (score === null || score === undefined || Number.isNaN(Number(score))) return "-";
+      return Number(score).toFixed(3);
+    }
+
+    function badgeClass(value) {
+      const label = String(value || "");
+      if (label.includes("높")) return "high";
+      if (label.includes("낮")) return "low";
+      return "medium";
     }
 
     function renderChips(items) {
-      return (items || []).map(item => `<span class="chip">${escapeHtml(item)}</span>`).join('') || '<span class="muted">없음</span>';
+      if (!Array.isArray(items) || !items.length) {
+        return '<span class="chip gray">없음</span>';
+      }
+      return items.map((item) => `<span class="chip">${escapeHtml(item)}</span>`).join("");
+    }
+
+    function makeDomId(value) {
+      return String(value || "")
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]+/g, "-")
+        .replace(/^-+|-+$/g, "") || "item";
+    }
+
+    function setLoadingStep(index) {
+      const step = loadingSteps[Math.max(0, Math.min(index, loadingSteps.length - 1))];
+      loadingStepLabel.textContent = step.label;
+      loadingPercent.textContent = `${step.percent}%`;
+      loadingBarFill.style.width = `${step.percent}%`;
+      loadingMessage.textContent = step.message;
+      loadingSubtext.textContent = step.subtext;
+    }
+
+    function startLoading() {
+      setLoadingStep(0);
+      loadingOverlay.classList.add("active");
+    }
+
+    function finishLoading() {
+      loadingPercent.textContent = "100%";
+      loadingBarFill.style.width = "100%";
+      loadingMessage.textContent = "조회가 완료되었습니다.";
+      loadingSubtext.textContent = "화면에 결과를 표시합니다.";
+      window.setTimeout(() => {
+        loadingOverlay.classList.remove("active");
+      }, 180);
+    }
+
+    async function fetchJson(url, stepIndex) {
+      setLoadingStep(stepIndex);
+      const response = await fetch(url);
+      if (!response.ok) return null;
+      return response.json();
     }
 
     async function loadDetail() {
-      const [detailRes, profileRes, similarRes] = await Promise.all([
-        fetch(`/api/catalog/products/${encodeURIComponent(reportNo)}`),
-        fetch(`/api/products/${encodeURIComponent(reportNo)}/profile`),
-        fetch(`/api/products/${encodeURIComponent(reportNo)}/similar?top_k=10&candidate_limit=1000`)
-      ]);
-
-      const detail = detailRes.ok ? await detailRes.json() : null;
-      const profile = profileRes.ok ? await profileRes.json() : null;
-      const similar = similarRes.ok ? await similarRes.json() : null;
-
-      if (!detail) {
-        document.getElementById('root').innerHTML = '<div class="card">품목 정보를 찾을 수 없습니다.</div>';
-        return;
-      }
-
-      const recommendations = (similar && similar.recommendations) ? similar.recommendations : [];
-      const html = [];
-      html.push('<section class="hero">');
-      html.push(`<h1>${escapeHtml(detail.product_name)}</h1>`);
-      html.push(`<div class="sub">${escapeHtml(detail.company_name || '')} / 품목제조번호 ${escapeHtml(detail.report_no || '')}</div>`);
-      html.push('</section>');
-      html.push('<section class="grid">');
-      html.push('<div class="card">');
-      html.push('<h2>상세 정보</h2>');
-      html.push(`<div class="field"><div class="label">대표 카테고리</div><div class="value">${profile ? renderChips([profile.product_main_category]) : '<span class="muted">프로필 없음</span>'}</div></div>`);
-      html.push(`<div class="field"><div class="label">세부 카테고리</div><div class="value">${profile ? renderChips(profile.product_sub_categories) : '<span class="muted">없음</span>'}</div></div>`);
-      html.push(`<div class="field"><div class="label">주요 기능성원료</div><div class="value">${profile ? renderChips(profile.primary_ingredients) : '<span class="muted">없음</span>'}</div></div>`);
-      html.push(`<div class="field"><div class="label">보조 기능성원료</div><div class="value">${profile ? renderChips(profile.secondary_ingredients) : '<span class="muted">없음</span>'}</div></div>`);
-      html.push(`<div class="field"><div class="label">지원 성분</div><div class="value">${profile ? renderChips(profile.support_ingredients) : '<span class="muted">없음</span>'}</div></div>`);
-      html.push(`<div class="field"><div class="label">주된기능성</div><div class="value">${escapeHtml(detail.main_functionality || '')}</div></div>`);
-      html.push(`<div class="field"><div class="label">섭취방법</div><div class="value">${escapeHtml(detail.intake_method || '')}</div></div>`);
-      html.push(`<div class="field"><div class="label">섭취시주의사항</div><div class="value">${escapeHtml(detail.cautions || '')}</div></div>`);
-      html.push(`<div class="field"><div class="label">원재료</div><div class="value">${escapeHtml(detail.raw_ingredients || '')}</div></div>`);
-      html.push('</div>');
-      html.push('<div class="card">');
-      html.push('<h2>유사 제품 추천</h2>');
-      if (!recommendations.length) {
-        html.push('<div class="muted">이 품목은 현재 프로필 또는 유사도 추천 결과가 없습니다.</div>');
-      } else {
-        html.push('<div class="recommend">');
-        for (const item of recommendations) {
-          html.push('<div class="rec">');
-          html.push(`<div class="rec-title"><div><strong>${escapeHtml(item.target_product_name)}</strong><div class="muted">품목제조번호 ${escapeHtml(item.target_report_no)}</div></div><div class="score">${escapeHtml(item.substitutability)} / ${Number(item.similarity_score).toFixed(3)}</div></div>`);
-          html.push(`<div class="field"><div class="label">공통 원료</div><div class="value">${renderChips(item.shared_ingredients || [])}</div></div>`);
-          html.push(`<div class="field"><div class="label">공통 카테고리</div><div class="value">${renderChips(item.shared_categories || [])}</div></div>`);
-          html.push(`<div class="field"><div class="label">설명</div><div class="value">${escapeHtml(item.reason || '')}</div></div>`);
-          html.push(`<div class="field"><div class="label">주의 문구</div><div class="value muted">${escapeHtml(item.caution || '')}</div></div>`);
-          html.push('</div>');
+      startLoading();
+      try {
+        const detail = await fetchJson(`/api/catalog/products/${encodeURIComponent(reportNo)}`, 0);
+        if (!detail) {
+          root.className = "empty-panel";
+          root.innerHTML = "제품 정보를 찾을 수 없습니다.";
+          finishLoading();
+          return;
         }
-        html.push('</div>');
+
+        const [profile, similar] = await Promise.all([
+          fetchJson(`/api/products/${encodeURIComponent(reportNo)}/profile`, 1),
+          fetchJson(`/api/products/${encodeURIComponent(reportNo)}/similar?top_k=10&candidate_limit=1000&llm_rerank=true`, 2),
+        ]);
+
+        setLoadingStep(3);
+        renderDetail(detail, profile, similar);
+      } catch (error) {
+        root.className = "empty-panel";
+        root.innerHTML = `조회 중 오류가 발생했습니다.<br><span class="inline-note">${escapeHtml(error && error.message ? error.message : String(error || ""))}</span>`;
+      } finally {
+        finishLoading();
       }
+    }
+
+    function renderDetail(detail, profile, similar) {
+      const recommendations = (similar && similar.recommendations) ? similar.recommendations : [];
+      const llmRerankApplied = !!(similar && similar.llm_rerank_applied);
+      const llmRerankError = (similar && similar.llm_rerank_error) ? String(similar.llm_rerank_error) : "";
+      const helperNote = llmRerankApplied
+        ? '<div class="helper-note"><strong>LLM 2차 재정렬 적용됨</strong><br>공식 후보군 계산 후 GPT OSS가 최종 순서를 다시 검토했습니다.</div>'
+        : llmRerankError
+          ? `<div class="helper-note"><strong>LLM 재정렬 미적용</strong><br>${escapeHtml(llmRerankError)}</div>`
+          : '<div class="helper-note"><strong>기본 유사도 순서</strong><br>정량 유사도 기준 순서를 그대로 표시합니다.</div>';
+
+      const html = [];
+      html.push('<section class="layout">');
+      html.push('<div class="stack">');
+      html.push('<section class="section-box">');
+      html.push('<div class="section-caption"><div><h2>기준 제품 정보</h2><div class="hint-text">품목 기본 정보와 제품 프로필입니다.</div></div></div>');
+      html.push('<table class="summary-table"><tbody>');
+      html.push(`<tr><th>품목명</th><td>${escapeHtml(detail.product_name || "-")}</td></tr>`);
+      html.push(`<tr><th>업체명</th><td>${escapeHtml(detail.company_name || "-")}</td></tr>`);
+      html.push(`<tr><th>품목제조번호</th><td>${escapeHtml(detail.report_no || "-")}</td></tr>`);
+      html.push(`<tr><th>메인 카테고리</th><td>${profile ? renderChips([profile.product_main_category]) : '<span class="chip gray">프로필 없음</span>'}</td></tr>`);
+      html.push(`<tr><th>세부 카테고리</th><td>${profile ? renderChips(profile.product_sub_categories) : '<span class="chip gray">없음</span>'}</td></tr>`);
+      html.push(`<tr><th>주된 기능성</th><td>${escapeHtml(detail.main_functionality || "-")}</td></tr>`);
+      html.push(`<tr><th>섭취방법</th><td>${escapeHtml(detail.intake_method || "-")}</td></tr>`);
+      html.push(`<tr><th>섭취시 주의사항</th><td>${escapeHtml(detail.cautions || "-")}</td></tr>`);
+      html.push('</tbody></table>');
+      html.push('</section>');
+
+      html.push('<section class="section-box">');
+      html.push('<div class="section-caption"><div><h2>기능성 원료 프로필</h2><div class="hint-text">유사도 계산에 사용되는 주요 원료와 보조 원료입니다.</div></div></div>');
+      html.push('<div class="detail-grid">');
+      html.push(`<div class="detail-block"><div class="label">주요 기능성 원료</div><div class="value chip-row">${profile ? renderChips(profile.primary_ingredients) : '<span class="chip gray">없음</span>'}</div></div>`);
+      html.push(`<div class="detail-block"><div class="label">보조 기능성 원료</div><div class="value chip-row">${profile ? renderChips(profile.secondary_ingredients) : '<span class="chip gray">없음</span>'}</div></div>`);
+      html.push(`<div class="detail-block"><div class="label">지원 성분</div><div class="value chip-row">${profile ? renderChips(profile.support_ingredients) : '<span class="chip gray">없음</span>'}</div></div>`);
+      html.push(`<div class="detail-block"><div class="label">원재료</div><div class="value">${escapeHtml(detail.raw_ingredients || "-")}</div></div>`);
       html.push('</div>');
       html.push('</section>');
-      document.getElementById('root').innerHTML = html.join('');
+      html.push('</div>');
+
+      html.push('<div class="stack">');
+      html.push('<section class="section-box">');
+      html.push('<div class="section-caption"><div><h2>유사 제품 추천 TOP10</h2><div class="hint-text">기존 제품 DB 기준 유사도 계산 결과입니다.</div></div></div>');
+      html.push(helperNote);
+
+      if (!recommendations.length) {
+        html.push('<div class="empty-panel">현재 이 제품에는 유사 제품 추천 결과가 없습니다.</div>');
+      } else {
+        html.push('<div class="table-wrap"><table class="data-table"><thead><tr><th>순위</th><th>제품명</th><th>report_no</th><th>카테고리</th><th>유사도</th><th>등급</th><th>일치 원료</th><th>상세</th></tr></thead><tbody>');
+        recommendations.forEach((item) => {
+          const detailId = `rec-detail-${makeDomId(item.target_report_no || item.rank)}`;
+          html.push(`<tr><td>${escapeHtml(item.rank || "-")}</td><td><strong>${escapeHtml(item.target_product_name || "-")}</strong></td><td>${escapeHtml(item.target_report_no || "-")}</td><td>${escapeHtml(item.target_product_main_category || "-")}</td><td>${formatScore(item.similarity_score)}</td><td><span class="sub-badge ${badgeClass(item.substitutability)}">${escapeHtml(item.substitutability || "-")}</span></td><td>${renderChips((item.shared_ingredients || []).slice(0, 4))}</td><td><a href="#${detailId}">보기</a></td></tr>`);
+          html.push('<tr><td colspan="8" style="padding:0; border-bottom:1px solid #d9d9d9;">');
+          html.push(`<details class="row-detail" id="${detailId}" ${Number(item.rank) === 1 ? "open" : ""}>`);
+          html.push(`<summary>${escapeHtml(item.target_product_name || "-")} 상세 정보</summary>`);
+          html.push('<div class="detail-grid">');
+          html.push(`<div class="detail-block"><div class="label">일치 원료</div><div class="value chip-row">${renderChips(item.shared_ingredients || [])}</div></div>`);
+          html.push(`<div class="detail-block"><div class="label">공통 카테고리</div><div class="value chip-row">${renderChips(item.shared_categories || [])}</div></div>`);
+          html.push(`<div class="detail-block"><div class="label">추천 제품 전체 원료</div><div class="value chip-row">${renderChips(item.target_all_ingredients || [])}</div></div>`);
+          html.push(`<div class="detail-block"><div class="label">추가 원료</div><div class="value chip-row">${renderChips(item.target_other_ingredients || [])}</div></div>`);
+          html.push(`<div class="detail-block"><div class="label">추천 이유</div><div class="value">${escapeHtml(item.reason || "-")}</div></div>`);
+          html.push(`<div class="detail-block"><div class="label">기존 유사도 점수 참고</div><div class="value">${formatScore(item.similarity_score)}</div></div>`);
+          html.push(`<div class="detail-block"><div class="label">주의 문구</div><div class="value">${escapeHtml(item.caution || "-")}</div></div>`);
+          html.push('</div></details></td></tr>');
+        });
+        html.push('</tbody></table></div>');
+      }
+
+      html.push('</section>');
+      html.push('</div>');
+      html.push('</section>');
+
+      root.className = "";
+      root.innerHTML = html.join("");
     }
 
     loadDetail();

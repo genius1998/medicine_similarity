@@ -10,6 +10,7 @@ from typing import Dict, List, Optional
 import pandas as pd
 
 from api.db import sqlite_connection
+from api.local_llm_client import call_local_llm, extract_json_from_llm_content
 from api.product_search_service import search_profile_records
 from scripts.enhance_similarity_with_explanation import (
     build_vector_indexes,
@@ -28,6 +29,19 @@ CATALOG_TABLE_NAME = "catalog_product_master"
 CATALOG_META_TABLE_NAME = "catalog_product_master_meta"
 UPLOADED_PRODUCT_TABLE_NAME = "uploaded_product_master"
 RECOMMENDATION_TRACE_TABLE_NAME = "recommendation_trace_log"
+INVALID_UPLOADED_PRODUCT_NAMES = {
+    "",
+    '"',
+    "'",
+    "`",
+    "건강정보",
+    "영양정보",
+    "기능정보",
+    "원재료",
+    "원재료명",
+    "섭취방법",
+    "주의사항",
+}
 CATALOG_COLUMN_ALIASES = {
     "license_no": ["인허가번호"],
     "company_name": ["업소명"],
@@ -45,6 +59,21 @@ CATALOG_COLUMN_ALIASES = {
     "standard_spec": ["기준규격"],
     "raw_ingredients": ["원재료"],
 }
+
+
+def normalize_uploaded_product_name(value: object) -> str:
+    return str(value or "").strip()
+
+
+def is_invalid_uploaded_product_name(value: object) -> bool:
+    name = normalize_uploaded_product_name(value)
+    if name in INVALID_UPLOADED_PRODUCT_NAMES:
+        return True
+    if len(name) <= 1:
+        return True
+    if all(char in "\"'`[](){}<>.,:/\\|_-~" for char in name):
+        return True
+    return False
 
 UPLOADED_PRODUCT_ADDITIONAL_COLUMNS = {
     "image_hash": "TEXT",
@@ -388,6 +417,8 @@ class RecommendationService:
         report_no = str(row.get("report_no", "") or "").strip()
         if not product_id or not report_no:
             return
+        if is_invalid_uploaded_product_name(row.get("product_name", "")):
+            return
 
         self._remove_product_from_indexes(product_id)
 
@@ -473,9 +504,10 @@ class RecommendationService:
                 """
             ).fetchall()
 
-        self.uploaded_catalog_count = len(rows)
-        for row in rows:
-            self._register_uploaded_profile_in_memory(dict(row))
+        valid_rows = [dict(row) for row in rows if not is_invalid_uploaded_product_name(row["product_name"])]
+        self.uploaded_catalog_count = len(valid_rows)
+        for row in valid_rows:
+            self._register_uploaded_profile_in_memory(row)
 
     def _merge_catalog_with_profile(self, record: dict) -> dict:
         profile = self.profile_by_report_no.get(str(record.get("report_no", "")), {})
@@ -597,6 +629,7 @@ class RecommendationService:
                     """
                 ).fetchall()
             ]
+            uploaded_rows = [row for row in uploaded_rows if not is_invalid_uploaded_product_name(row.get("product_name", ""))]
 
         combined = [row for row in base_rows if matches(row)] + [row for row in uploaded_rows if matches(row)]
         combined.sort(key=lambda item: (str(item.get("product_name", "")), str(item.get("report_no", ""))))
@@ -625,7 +658,9 @@ class RecommendationService:
         quality_warnings: Optional[List[dict]] = None,
     ) -> Optional[dict]:
         self.ensure_loaded()
-        cleaned_name = str(product_name or "").strip() or "업로드 상품"
+        cleaned_name = normalize_uploaded_product_name(product_name) or "업로드 상품"
+        if is_invalid_uploaded_product_name(cleaned_name):
+            return None
         normalized_ingredients = [str(item).strip() for item in parsed.get("normalized_ingredients", []) if str(item).strip()]
         has_vector_payload = bool(vector)
         has_normalized_ingredients = bool(normalized_ingredients)
@@ -939,26 +974,132 @@ class RecommendationService:
     def _convert_cache_row(self, row: dict, rank: int) -> dict:
         target_product_id = str(row.get("target_product_id", "") or "")
         target_report_no = target_product_id.split("::", 1)[1] if "::" in target_product_id else target_product_id
+        target_profile = self.profiles.get(target_product_id, {})
+        target_primary_ingredients = list(target_profile.get("primary_ingredients", []))
+        target_secondary_ingredients = list(target_profile.get("secondary_ingredients", []))
+        target_support_ingredients = list(target_profile.get("support_ingredients", []))
+        target_all_ingredients = list(
+            dict.fromkeys(target_primary_ingredients + target_secondary_ingredients + target_support_ingredients)
+        )
+        shared_ingredients = safe_json_loads(row.get("shared_ingredients_json", "[]"), [])
+        target_other_ingredients = [item for item in target_all_ingredients if item not in shared_ingredients]
         return {
             "rank": rank,
             "target_report_no": target_report_no,
             "target_product_name": str(row.get("target_product_name", "") or ""),
+            "target_product_main_category": str(target_profile.get("product_main_category", "") or ""),
             "similarity_score": float(row.get("similarity_score", 0.0) or 0.0),
             "function_similarity_score": float(row.get("function_similarity_score", 0.0) or 0.0),
             "core_match_score": float(row.get("core_match_score", 0.0) or 0.0),
             "substitutability": str(row.get("substitutability", "") or ""),
-            "shared_ingredients": safe_json_loads(row.get("shared_ingredients_json", "[]"), []),
+            "shared_ingredients": shared_ingredients,
+            "target_primary_ingredients": target_primary_ingredients,
+            "target_secondary_ingredients": target_secondary_ingredients,
+            "target_support_ingredients": target_support_ingredients,
+            "target_all_ingredients": target_all_ingredients,
+            "target_other_ingredients": target_other_ingredients,
             "shared_categories": safe_json_loads(row.get("shared_categories_json", "[]"), []),
             "reason": str(row.get("reason", "") or ""),
             "caution": str(row.get("caution", "") or ""),
             "explanation": safe_json_loads(row.get("explanation_json", "{}"), {}),
         }
 
-    def get_similar_products(self, report_no: str, top_k: int, candidate_limit: int, force_refresh: bool) -> dict:
+    def _candidate_summary_for_llm(self, recommendation: dict) -> dict:
+        target_report_no = str(recommendation.get("target_report_no", "") or "")
+        target_profile = self.get_profile_by_report_no(target_report_no) or {}
+        return {
+            "report_no": target_report_no,
+            "product_name": str(recommendation.get("target_product_name", "") or ""),
+            "product_main_category": str(target_profile.get("product_main_category", "") or ""),
+            "product_sub_categories": list(target_profile.get("product_sub_categories", []) or []),
+            "primary_ingredients": list(target_profile.get("primary_ingredients", []) or []),
+            "secondary_ingredients": list(target_profile.get("secondary_ingredients", []) or []),
+            "support_ingredients": list(target_profile.get("support_ingredients", []) or []),
+        }
+
+    def _build_llm_rerank_prompt(self, base_profile: dict, recommendations: List[dict]) -> str:
+        candidates = [self._candidate_summary_for_llm(item) for item in recommendations]
+        payload = {
+            "task": "기준 제품과 가장 유사한 후보 제품 순으로 후보를 재정렬하라.",
+            "rules": [
+                "이 작업은 추천이 아니라 재정렬이다.",
+                "제품이 더 좋아 보인다는 이유로 순위를 올리지 마라.",
+                "추가 영양성분이 더 많다는 이유로 순위를 올리지 마라.",
+                "우선순위는 primary_ingredients exact match, secondary_ingredients overlap, support_ingredients overlap, product_main_category/product_sub_categories 일치, extra ingredients penalty 순서다.",
+                "반드시 주어진 후보를 모두 정확히 한 번씩 사용해 1위부터 끝까지 정렬하라.",
+                "반드시 JSON만 출력하라.",
+            ],
+            "output_schema": {
+                "ranking": [
+                    {"rank": 1, "report_no": "string", "reason": "string"},
+                ]
+            },
+            "base_product": {
+                "report_no": str(base_profile.get("report_no", "") or ""),
+                "product_name": str(base_profile.get("product_name", "") or ""),
+                "product_main_category": str(base_profile.get("product_main_category", "") or ""),
+                "product_sub_categories": list(base_profile.get("product_sub_categories", []) or []),
+                "primary_ingredients": list(base_profile.get("primary_ingredients", []) or []),
+                "secondary_ingredients": list(base_profile.get("secondary_ingredients", []) or []),
+                "support_ingredients": list(base_profile.get("support_ingredients", []) or []),
+            },
+            "candidates": candidates,
+        }
+        return "[SYSTEM]\n당신은 건강기능식품 유사 제품 재정렬기다.\n\n[USER]\n" + json.dumps(payload, ensure_ascii=False, indent=2)
+
+    def _validate_llm_rerank_output(self, recommendations: List[dict], parsed: dict) -> List[dict]:
+        ranking = parsed.get("ranking")
+        if not isinstance(ranking, list):
+            raise ValueError("ranking field is missing or invalid")
+        expected_report_nos = [str(item.get("target_report_no", "") or "") for item in recommendations]
+        ranked_report_nos = [str(item.get("report_no", "") or "") for item in ranking]
+        if len(ranking) != len(recommendations):
+            raise ValueError("ranking length does not match candidate count")
+        if sorted(ranked_report_nos) != sorted(expected_report_nos):
+            raise ValueError("ranking report_no set does not match candidates")
+        recommendation_by_report_no = {
+            str(item.get("target_report_no", "") or ""): dict(item)
+            for item in recommendations
+        }
+        reranked: List[dict] = []
+        for idx, item in enumerate(ranking, start=1):
+            report_no = str(item.get("report_no", "") or "")
+            reranked_item = dict(recommendation_by_report_no[report_no])
+            reranked_item["rank"] = idx
+            reason = str(item.get("reason", "") or "").strip()
+            if reason:
+                reranked_item["reason"] = reason
+                explanation = dict(reranked_item.get("explanation", {}) or {})
+                explanation["reason"] = reason
+                reranked_item["explanation"] = explanation
+            reranked.append(reranked_item)
+        return reranked
+
+    def _maybe_rerank_with_llm(self, base_profile: dict, recommendations: List[dict], llm_rerank: bool) -> tuple[List[dict], bool, str]:
+        if not llm_rerank or len(recommendations) <= 1:
+            return recommendations, False, ""
+        prompt = self._build_llm_rerank_prompt(base_profile, recommendations)
+        content = call_local_llm(prompt)
+        parsed = extract_json_from_llm_content(content)
+        if not parsed:
+            raise ValueError("local LLM returned non-JSON rerank output")
+        reranked = self._validate_llm_rerank_output(recommendations, parsed)
+        return reranked, True, ""
+
+    def get_similar_products(
+        self,
+        report_no: str,
+        top_k: int,
+        candidate_limit: int,
+        force_refresh: bool,
+        llm_rerank: bool = False,
+    ) -> dict:
         self.ensure_loaded()
         base_product_id = self.resolve_product_id_by_report_no(report_no)
         base_profile = self.profiles[base_product_id]
         start_time = time.perf_counter()
+        llm_rerank_applied = False
+        llm_rerank_error = ""
 
         with sqlite_connection(self.runtime["sqlite_path"]) as conn:
             ensure_cache_table(conn)
@@ -966,6 +1107,16 @@ class RecommendationService:
             if not force_refresh:
                 cached_rows = load_cached_rows(conn, base_product_id, top_k)
             if len(cached_rows) >= top_k:
+                recommendations = [self._convert_cache_row(row, idx) for idx, row in enumerate(cached_rows, start=1)]
+                if llm_rerank:
+                    try:
+                        recommendations, llm_rerank_applied, _ = self._maybe_rerank_with_llm(
+                            base_profile,
+                            recommendations,
+                            llm_rerank,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        llm_rerank_error = str(exc)
                 execution_seconds = round(time.perf_counter() - start_time, 6)
                 return {
                     "base_product": {
@@ -974,8 +1125,10 @@ class RecommendationService:
                         "product_main_category": str(base_profile.get("product_main_category", "") or ""),
                         "primary_ingredients": list(base_profile.get("primary_ingredients", [])),
                     },
-                    "recommendations": [self._convert_cache_row(row, idx) for idx, row in enumerate(cached_rows, start=1)],
+                    "recommendations": recommendations,
                     "cache_used": True,
+                    "llm_rerank_applied": llm_rerank_applied,
+                    "llm_rerank_error": llm_rerank_error,
                     "execution_seconds": execution_seconds,
                 }
 
@@ -993,6 +1146,16 @@ class RecommendationService:
             if failed_rows:
                 pass
             refresh_cache_rows(conn, base_product_id, rows)
+            recommendations = [self._convert_cache_row(row, idx) for idx, row in enumerate(rows, start=1)]
+            if llm_rerank:
+                try:
+                    recommendations, llm_rerank_applied, _ = self._maybe_rerank_with_llm(
+                        base_profile,
+                        recommendations,
+                        llm_rerank,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    llm_rerank_error = str(exc)
             execution_seconds = round(time.perf_counter() - start_time, 6)
             return {
                 "base_product": {
@@ -1001,8 +1164,10 @@ class RecommendationService:
                     "product_main_category": str(base_profile.get("product_main_category", "") or ""),
                     "primary_ingredients": list(base_profile.get("primary_ingredients", [])),
                 },
-                "recommendations": [self._convert_cache_row(row, idx) for idx, row in enumerate(rows, start=1)],
+                "recommendations": recommendations,
                 "cache_used": False,
+                "llm_rerank_applied": llm_rerank_applied,
+                "llm_rerank_error": llm_rerank_error,
                 "execution_seconds": execution_seconds,
             }
 

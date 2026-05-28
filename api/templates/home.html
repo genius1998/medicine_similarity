@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>성분콕</title>
+  <style>
+    :root {
+      --bg: #f5f5f5;
+      --panel: #ffffff;
+      --ink: #222222;
+      --muted: #666666;
+      --line: #cfcfcf;
+      --line-strong: #b8b8b8;
+      --accent: #1f5b43;
+      --accent-soft: #edf4f0;
+      --header-bg: #e7efe9;
+      --warn-bg: #f6f1e4;
+      --warn-line: #d8c9a3;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .app-header {
+      border-bottom: 1px solid var(--line-strong);
+      background: #f0f2f1;
+    }
+    .header-inner {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 12px 18px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    h1 {
+      margin: 0;
+      font-size: 22px;
+      line-height: 1.3;
+      font-weight: 700;
+      color: #173d2d;
+    }
+    .header-desc {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .nav-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .wrap {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 14px 18px 32px;
+    }
+    .alert-box {
+      padding: 10px 12px;
+      border: 1px solid var(--warn-line);
+      border-radius: 4px;
+      background: var(--warn-bg);
+      color: #5f5644;
+      font-size: 13px;
+      line-height: 1.6;
+      margin-bottom: 12px;
+    }
+    .section-box {
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: var(--panel);
+      padding: 12px;
+      margin-bottom: 12px;
+    }
+    .section-caption {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #dddddd;
+    }
+    .section-caption h2 {
+      margin: 0;
+      font-size: 17px;
+      font-weight: 700;
+    }
+    .hint-text {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1.05fr) minmax(320px, 0.95fr);
+      gap: 12px;
+      align-items: start;
+    }
+    .stack {
+      display: grid;
+      gap: 12px;
+    }
+    .summary-table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+    .summary-table th,
+    .summary-table td {
+      border: 1px solid #d7d7d7;
+      padding: 8px;
+      vertical-align: top;
+      text-align: left;
+      font-size: 13px;
+      word-break: break-word;
+    }
+    .summary-table th {
+      width: 150px;
+      background: #f0f0f0;
+      font-weight: 700;
+      color: #333;
+    }
+    .menu-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .menu-card {
+      border: 1px solid #d7d7d7;
+      border-radius: 4px;
+      background: #fcfcfc;
+      padding: 12px;
+    }
+    .menu-card h3 {
+      margin: 0 0 8px;
+      font-size: 16px;
+    }
+    .menu-card p {
+      margin: 0 0 10px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .button-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .button,
+    .button-secondary {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid #aab7b0;
+      border-radius: 4px;
+      padding: 7px 12px;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      text-decoration: none;
+    }
+    .button {
+      background: var(--accent);
+      border-color: #1b503b;
+      color: #fff;
+    }
+    .button-secondary {
+      background: #f8f8f8;
+      color: #222;
+    }
+    ul {
+      margin: 0;
+      padding-left: 18px;
+      font-size: 13px;
+      line-height: 1.7;
+      color: #333;
+    }
+    @media (max-width: 920px) {
+      .layout { grid-template-columns: 1fr; }
+      .menu-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header class="app-header">
+    <div class="header-inner">
+      <div>
+        <h1>성분콕</h1>
+        <div class="header-desc">건강기능식품 추천 서비스</div>
+      </div>
+      <div class="nav-actions">
+        {% if current_user %}
+        <span class="hint-text">{{ current_user.email }}{% if current_user.role == 'admin' %} / 관리자{% endif %}</span>
+        {% if current_user.role == 'admin' %}<a class="button-secondary" href="/admin">관리자 화면</a>{% endif %}
+        <form method="post" action="/logout" style="margin:0;">
+          <button class="button-secondary" type="submit">로그아웃</button>
+        </form>
+        {% else %}
+        <a class="button-secondary" href="/login">로그인</a>
+        <a class="button" href="/signup">회원가입</a>
+        {% endif %}
+      </div>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <div class="alert-box">
+      공공데이터 기반 건강기능식품 분석 화면입니다. OCR 이미지 분석과 기존 제품 DB 조회를 각각 별도 화면으로 이동해서 사용할 수 있습니다.
+    </div>
+
+    <section class="layout">
+      <div class="stack">
+        <section class="section-box">
+          <div class="section-caption">
+            <div>
+              <h2>서비스 개요</h2>
+              <div class="hint-text">주요 기능과 사용 흐름을 한 화면에서 확인할 수 있습니다.</div>
+            </div>
+          </div>
+          <table class="summary-table">
+            <tbody>
+              <tr><th>서비스명</th><td>성분콕</td></tr>
+              <tr><th>서비스 유형</th><td>건강기능식품 추천 서비스 / 공공데이터 기반 분석 도구</td></tr>
+              <tr><th>주요 기능</th><td>OCR 원재료 파싱, 원료 수정 후 재추천, 기존 제품 DB 유사도 조회</td></tr>
+              <tr><th>추천 기준</th><td>기능성 원료, 제품 카테고리, 제품 프로필 기반 유사도 계산</td></tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section class="section-box">
+          <div class="section-caption">
+            <div>
+              <h2>화면 이동</h2>
+              <div class="hint-text">사용 목적에 따라 화면을 선택해서 이동합니다.</div>
+            </div>
+          </div>
+          <div class="menu-grid">
+            <div class="menu-card">
+              <h3>OCR 이미지 분석</h3>
+              <p>원재료명 또는 성분표 이미지를 업로드하고 OCR 결과를 검토한 뒤 원료를 수정하고 유사 제품을 추천받습니다.</p>
+              <div class="button-row">
+                <a class="button" href="/recommend/image">OCR 기능 화면 이동</a>
+              </div>
+            </div>
+            <div class="menu-card">
+              <h3>기존 제품 목록 조회</h3>
+              <p>공식 제품 DB에서 품목을 검색하고 상세 화면에서 제품 프로필과 유사 제품 TOP10을 조회합니다.</p>
+              <div class="button-row">
+                <a class="button" href="/products">기존 제품 목록 화면 이동</a>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div class="stack">
+        <section class="section-box">
+          <div class="section-caption">
+            <div>
+              <h2>사용 흐름</h2>
+              <div class="hint-text">업무형 검토 순서 기준</div>
+            </div>
+          </div>
+          <ul>
+            <li>OCR 기능 화면: 이미지 업로드 → OCR 결과 확인 → 원료 수정 → 추천 결과 검토</li>
+            <li>기존 제품 목록 화면: 품목 검색 → 제품 상세 조회 → 유사 제품 추천 검토</li>
+            <li>로그인 후 OCR 기능 화면, 제품 목록 화면, 관리자 화면 접근 권한이 구분됩니다.</li>
+          </ul>
+        </section>
+
+        <section class="section-box">
+          <div class="section-caption">
+            <div>
+              <h2>계정 화면</h2>
+              <div class="hint-text">서비스 접근용 기본 화면</div>
+            </div>
+          </div>
+          <div class="button-row">
+            <a class="button-secondary" href="/login">로그인 화면</a>
+            <a class="button" href="/signup">회원가입 화면</a>
+            {% if current_user and current_user.role == 'admin' %}<a class="button-secondary" href="/admin">관리자 화면</a>{% endif %}
+          </div>
+        </section>
+      </div>
+    </section>
+  </div>
+</body>
+</html>

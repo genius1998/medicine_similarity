@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>성분콕 관리자</title>
+  <style>
+    :root {
+      --bg: #f5f5f5;
+      --panel: #ffffff;
+      --ink: #222222;
+      --muted: #666666;
+      --line: #cfcfcf;
+      --line-strong: #b8b8b8;
+      --accent: #1f5b43;
+      --accent-soft: #edf4f0;
+      --warn-bg: #f6f1e4;
+      --warn-line: #d8c9a3;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: "Malgun Gothic","Apple SD Gothic Neo",sans-serif; background: var(--bg); color: var(--ink); font-size: 14px; line-height: 1.5; }
+    .app-header { border-bottom: 1px solid var(--line-strong); background: #f0f2f1; }
+    .header-inner { max-width: 1500px; margin: 0 auto; padding: 12px 18px; display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; }
+    h1 { margin: 0; font-size: 22px; color: #173d2d; }
+    .header-desc, .hint-text, .muted { color: var(--muted); font-size: 12px; line-height: 1.5; }
+    .wrap { max-width: 1500px; margin: 0 auto; padding: 12px 18px 32px; }
+    .top-actions { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    .section-box { border: 1px solid var(--line); border-radius: 4px; background: var(--panel); padding: 12px; margin-bottom:12px; }
+    .section-caption { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:10px; padding-bottom:8px; border-bottom:1px solid #dddddd; }
+    .section-caption h2 { margin:0; font-size:17px; }
+    .layout { display:grid; grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr); gap:12px; align-items:start; }
+    .stack { display:grid; gap:12px; }
+    .summary-grid { display:grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap:8px; }
+    .summary-card { border:1px solid #d7d7d7; background:#fcfcfc; padding:10px; }
+    .summary-card .label { font-size:12px; color:var(--muted); margin-bottom:4px; }
+    .summary-card .value { font-size:20px; font-weight:700; color:#173d2d; }
+    .table-wrap { overflow-x:auto; border:1px solid var(--line); border-radius:4px; background:#fff; }
+    table { width:100%; border-collapse:collapse; table-layout:fixed; }
+    th, td { border:1px solid #d7d7d7; padding:8px; vertical-align:top; text-align:left; font-size:13px; word-break:break-word; }
+    th { background:#f0f0f0; font-weight:700; color:#333; }
+    .chip { display:inline-flex; align-items:center; padding:2px 7px; border:1px solid #c9d8cf; border-radius:12px; background:var(--accent-soft); color:var(--accent); font-size:11px; }
+    .chip.warn { background:#f6efdb; border-color:#dccb9b; color:#7b6122; }
+    .button, .button-secondary { display:inline-flex; align-items:center; justify-content:center; border:1px solid #aab7b0; border-radius:4px; padding:7px 12px; font-size:13px; font-weight:700; text-decoration:none; cursor:pointer; }
+    .button { background:var(--accent); border-color:#1b503b; color:#fff; }
+    .button-secondary { background:#f8f8f8; color:#222; }
+    .inline-form { display:grid; gap:6px; }
+    .inline-form input { width:100%; border:1px solid #bfc5c2; border-radius:4px; padding:6px 7px; font-size:12px; background:#fff; }
+    .button-row { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+    pre { white-space:pre-wrap; word-break:break-word; margin:0; font-size:12px; }
+    @media (max-width: 1080px) {
+      .layout { grid-template-columns:1fr; }
+      .summary-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
+    }
+    @media (max-width: 700px) {
+      .summary-grid { grid-template-columns:1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header class="app-header">
+    <div class="header-inner">
+      <div>
+        <h1>성분콕 관리자</h1>
+        <div class="header-desc">운영 모니터링, OCR 검수 이력, 신규 원료 승인, 결과 export 관리 화면</div>
+      </div>
+      <div class="top-actions">
+        <a class="button-secondary" href="/home">메인 화면</a>
+        <a class="button-secondary" href="/products">제품 목록</a>
+        <a class="button-secondary" href="/recommend/image">OCR 화면</a>
+        <form method="post" action="/logout" style="margin:0;">
+          <button class="button-secondary" type="submit">로그아웃</button>
+        </form>
+      </div>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <section class="section-box">
+      <div class="section-caption">
+        <div>
+          <h2>모니터링 요약</h2>
+          <div class="hint-text">최근 운영 상태와 주요 누적 지표</div>
+        </div>
+        <div class="button-row">
+          <a class="button-secondary" href="/admin/export/ocr-reviews.xlsx">OCR 이력 Export</a>
+          <a class="button-secondary" href="/admin/export/pending-ingredients.xlsx">신규 원료 Export</a>
+          <a class="button-secondary" href="/admin/export/app-logs.xlsx">로그 Export</a>
+        </div>
+      </div>
+      <div class="summary-grid">
+        <div class="summary-card"><div class="label">전체 사용자</div><div class="value">{{ monitoring.total_users }}</div></div>
+        <div class="summary-card"><div class="label">OCR 검수 이력</div><div class="value">{{ monitoring.total_reviews }}</div></div>
+        <div class="summary-card"><div class="label">승인 대기 원료</div><div class="value">{{ monitoring.pending_approvals }}</div></div>
+        <div class="summary-card"><div class="label">누적 로그</div><div class="value">{{ monitoring.total_logs }}</div></div>
+        <div class="summary-card"><div class="label">최근 1일 요청 수</div><div class="value">{{ monitoring.requests_last_day }}</div></div>
+        <div class="summary-card"><div class="label">최근 1일 평균 응답 ms</div><div class="value">{{ monitoring.avg_request_ms_last_day }}</div></div>
+      </div>
+    </section>
+
+    <section class="layout">
+      <div class="stack">
+        <section class="section-box">
+          <div class="section-caption">
+            <div>
+              <h2>신규 원료 승인 관리</h2>
+              <div class="hint-text">runtime RAG+LLM으로 생성된 provisional 원료를 승인 또는 반려합니다.</div>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>원료명</th>
+                  <th>카테고리</th>
+                  <th>신뢰도</th>
+                  <th>메모</th>
+                  <th>승인 처리</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for item in pending_ingredients %}
+                <tr>
+                  <td><strong>{{ item.functional_ingredient_name }}</strong><div class="muted">{{ item.created_at }}</div></td>
+                  <td>{{ item.category_main }} / {{ item.category_sub }}</td>
+                  <td>{{ '%.3f'|format(item.confidence or 0) }}</td>
+                  <td>{{ item.notes }}</td>
+                  <td>
+                    <form class="inline-form" method="post" action="/admin/ingredients/review">
+                      <input type="hidden" name="functional_ingredient_name" value="{{ item.functional_ingredient_name }}">
+                      <input type="text" name="category_main" value="{{ item.category_main }}" placeholder="메인 카테고리">
+                      <input type="text" name="category_sub" value="{{ item.category_sub }}" placeholder="서브 카테고리">
+                      <input type="text" name="claim_text" value="{{ item.claim_text }}" placeholder="기능/설명">
+                      <input type="text" name="notes" value="{{ item.notes }}" placeholder="검토 메모">
+                      <div class="button-row">
+                        <button class="button" type="submit" name="decision" value="approve">승인</button>
+                        <button class="button-secondary" type="submit" name="decision" value="reject">반려</button>
+                      </div>
+                    </form>
+                  </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="5">승인 대기 중인 신규 원료가 없습니다.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="section-box">
+          <div class="section-caption">
+            <div>
+              <h2>최근 앱 로그</h2>
+              <div class="hint-text">최근 요청, 오류, 인증 이벤트</div>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>시각</th>
+                  <th>유형</th>
+                  <th>레벨</th>
+                  <th>경로</th>
+                  <th>상태</th>
+                  <th>메시지</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for item in app_logs %}
+                <tr>
+                  <td>{{ item.created_at }}</td>
+                  <td>{{ item.event_type }}</td>
+                  <td><span class="chip {% if item.level != 'info' %}warn{% endif %}">{{ item.level }}</span></td>
+                  <td>{{ item.request_method }} {{ item.request_path }}</td>
+                  <td>{{ item.status_code }} / {{ '%.2f'|format(item.duration_ms or 0) }}ms</td>
+                  <td>{{ item.message }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="6">로그가 없습니다.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
+      <div class="stack">
+        <section class="section-box">
+          <div class="section-caption">
+            <div>
+              <h2>OCR 검수 이력</h2>
+              <div class="hint-text">업로드 OCR 결과와 수정 후 재추천 이력을 최근순으로 표시합니다.</div>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>trace_id</th>
+                  <th>제품명 후보</th>
+                  <th>사용자</th>
+                  <th>상태</th>
+                  <th>원료</th>
+                  <th>추천 결과</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for item in ocr_reviews %}
+                <tr>
+                  <td>{{ item.latest_trace_id or item.base_trace_id }}</td>
+                  <td>{{ item.product_name_candidate }}</td>
+                  <td>{{ item.user_email or '-' }}</td>
+                  <td>{{ item.review_status }}</td>
+                  <td>
+                    <div><strong>정규화:</strong> {{ item.normalized_ingredients|join(', ') }}</div>
+                    {% if item.edited_ingredients %}
+                    <div><strong>수정:</strong> {{ item.edited_ingredients|join(', ') }}</div>
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if item.recommendations %}
+                    <pre>{% for rec in item.recommendations[:3] %}{{ loop.index }}. {{ rec.target_product_name or rec.product_name }} / {{ '%.3f'|format(rec.similarity_score or 0) }}
+{% endfor %}</pre>
+                    {% else %}
+                    -
+                    {% endif %}
+                  </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="6">OCR 검수 이력이 없습니다.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </section>
+  </div>
+</body>
+</html>

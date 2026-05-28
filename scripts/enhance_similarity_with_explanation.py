@@ -18,6 +18,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
+from api.ingredient_family import collect_joint_ingredient_families, infer_joint_ingredient_family
 from config_loader import get_config_value, load_config
 
 
@@ -331,9 +332,27 @@ def calculate_core_match_score(base_profile: dict, target_profile: dict) -> floa
     base_primary = set(base_profile.get("primary_ingredients", []))
     target_primary = set(target_profile.get("primary_ingredients", []))
     union = base_primary | target_primary
-    if not union:
-        return 0.0
-    return round(float(len(base_primary & target_primary) / len(union)), 6)
+    exact_score = 0.0 if not union else float(len(base_primary & target_primary) / len(union))
+    base_primary_families = collect_joint_ingredient_families(base_primary)
+    target_primary_families = collect_joint_ingredient_families(target_primary)
+    family_union = base_primary_families | target_primary_families
+    family_score = 0.0 if not family_union else float(len(base_primary_families & target_primary_families) / len(family_union))
+    return round(max(exact_score, family_score), 6)
+
+
+def focus_ingredients(profile: dict) -> list[str]:
+    primary = [str(value or "") for value in profile.get("primary_ingredients", []) if str(value or "")]
+    if primary:
+        return primary
+    return [str(value or "") for value in profile.get("secondary_ingredients", []) if str(value or "")][:3]
+
+
+def focus_joint_families(profile: dict) -> set[str]:
+    return collect_joint_ingredient_families(focus_ingredients(profile))
+
+
+def shared_joint_families(base_profile: dict, target_profile: dict) -> set[str]:
+    return focus_joint_families(base_profile) & focus_joint_families(target_profile)
 
 
 def compare_product_profiles(base_profile: dict, target_profile: dict, base_vector: dict[str, float], target_vector: dict[str, float]) -> dict:
@@ -367,9 +386,16 @@ def compare_product_profiles(base_profile: dict, target_profile: dict, base_vect
 def classify_substitutability(similarity_score: float, base_profile: dict, target_profile: dict) -> str:
     same_main = base_profile.get("product_main_category") == target_profile.get("product_main_category")
     shared_primary = set(base_profile.get("primary_ingredients", [])) & set(target_profile.get("primary_ingredients", []))
-    if similarity_score >= 0.75 and same_main and shared_primary:
+    shared_primary_families = collect_joint_ingredient_families(base_profile.get("primary_ingredients", [])) & collect_joint_ingredient_families(
+        target_profile.get("primary_ingredients", [])
+    )
+    shared_focus_family_values = shared_joint_families(base_profile, target_profile)
+    has_core_overlap = bool(shared_primary or shared_primary_families or shared_focus_family_values)
+    if similarity_score >= 0.75 and same_main and has_core_overlap:
         return "높음"
-    if similarity_score >= 0.45 or same_main:
+    if similarity_score >= 0.45 and has_core_overlap:
+        return "보통"
+    if similarity_score >= 0.35 and same_main and has_core_overlap:
         return "보통"
     return "낮음"
 
@@ -427,6 +453,7 @@ def choose_reason_ingredients(base_profile: dict, target_profile: dict, comparis
     memory_related = product_is_memory_related(base_profile) or product_is_memory_related(target_profile)
     skin_related = product_is_skin_related(base_profile) or product_is_skin_related(target_profile)
     male_related = product_is_male_related(base_profile) or product_is_male_related(target_profile)
+    joint_family_overlap = shared_joint_families(base_profile, target_profile)
 
     if category == "관절/연골":
         category_patterns = JOINT_KEYWORDS
@@ -471,7 +498,12 @@ def choose_reason_ingredients(base_profile: dict, target_profile: dict, comparis
     ranked = sorted(shared, key=ingredient_priority, reverse=True)
     top = ranked[:3]
 
-    joint_ingredients = [name for name in ranked if ingredient_matches_patterns(name, JOINT_KEYWORDS)]
+    joint_ingredients = [
+        name
+        for name in ranked
+        if ingredient_matches_patterns(name, JOINT_KEYWORDS)
+        and infer_joint_ingredient_family(name) in joint_family_overlap
+    ]
     bone_ingredients = [name for name in ranked if ingredient_matches_patterns(name, BONE_KEYWORDS) and not is_excipient(name)]
     memory_ingredients = [name for name in ranked if ingredient_matches_patterns(name, MEMORY_KEYWORDS)]
     skin_ingredients = [name for name in ranked if ingredient_matches_patterns(name, SKIN_KEYWORDS)]
@@ -573,18 +605,25 @@ def build_candidate_pool(
     candidate_stats: dict[str, dict] = {}
     base_categories = {str(base_profile.get("product_main_category", "기타"))}
     base_categories.update([str(item) for item in base_profile.get("product_sub_categories", []) if str(item).strip()])
+    base_focus_families = focus_joint_families(base_profile)
+    base_joint_related = product_is_joint_related(base_profile)
 
     def ensure_candidate(candidate_id: str) -> dict:
         if candidate_id not in candidate_stats:
             candidate_profile = profiles[candidate_id]
             candidate_categories = {str(candidate_profile.get("product_main_category", "기타"))}
             candidate_categories.update([str(item) for item in candidate_profile.get("product_sub_categories", []) if str(item).strip()])
+            candidate_focus_families = focus_joint_families(candidate_profile)
+            shared_focus_family_count = len(base_focus_families & candidate_focus_families)
+            candidate_joint_related = product_is_joint_related(candidate_profile)
             candidate_stats[candidate_id] = {
                 "target_product_id": candidate_id,
                 "same_main_category": int(candidate_profile.get("product_main_category") == base_profile.get("product_main_category")),
                 "shared_primary_count": 0,
                 "shared_secondary_count": 0,
                 "shared_support_count": 0,
+                "shared_focus_family_count": shared_focus_family_count,
+                "joint_family_conflict": int(base_joint_related and candidate_joint_related and shared_focus_family_count == 0),
                 "shared_category_count": len(base_categories & candidate_categories),
                 "preliminary_score": 0.0,
             }
@@ -622,11 +661,15 @@ def build_candidate_pool(
     for row in rows:
         if row["shared_support_count"] > 0 and row["shared_primary_count"] == 0 and row["shared_secondary_count"] == 0:
             row["preliminary_score"] -= 2.0
+        if row["joint_family_conflict"]:
+            row["preliminary_score"] -= 1.5
     rows = sorted(
         rows,
         key=lambda item: (
             -item["same_main_category"],
             -item["shared_primary_count"],
+            -item["shared_focus_family_count"],
+            item["joint_family_conflict"],
             -item["shared_category_count"],
             -item["preliminary_score"],
             item["target_product_id"],

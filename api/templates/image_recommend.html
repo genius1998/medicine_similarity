@@ -3,549 +3,585 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>건강기능식품 성분 기반 유사 제품 추천</title>
+  <title>성분콕</title>
   <style>
     :root {
-      --bg: #f5f3ee;
-      --card: #fffdf8;
-      --ink: #1f2a1f;
-      --muted: #667066;
-      --line: #d8d2c3;
-      --accent: #215c46;
-      --accent-soft: #e8f2ed;
-      --warn: #8f6a14;
-      --warn-soft: #fff4cf;
-      --critical: #a63f2e;
-      --critical-soft: #fde8e4;
-      --info: #315d89;
-      --info-soft: #eaf3fb;
-      --shadow: 0 18px 40px rgba(38, 42, 39, 0.08);
+      --bg: #f5f5f5;
+      --panel: #ffffff;
+      --ink: #222222;
+      --muted: #666666;
+      --line: #cfcfcf;
+      --line-strong: #b8b8b8;
+      --accent: #1f5b43;
+      --accent-soft: #edf4f0;
+      --header-bg: #e7efe9;
+      --warn-bg: #f6f1e4;
+      --warn-line: #d8c9a3;
+      --critical-bg: #f8ece9;
+      --critical-line: #d8b2aa;
+      --info-bg: #eef3f6;
+      --info-line: #c6d2dc;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       font-family: "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
-      background:
-        radial-gradient(circle at top left, rgba(71, 123, 95, 0.10), transparent 24%),
-        linear-gradient(180deg, #f7f4ee 0%, #eef3ef 100%);
+      background: var(--bg);
       color: var(--ink);
-    }
-    .wrap { max-width: 1360px; margin: 0 auto; padding: 28px 20px 64px; }
-    .hero {
-      display: grid;
-      gap: 12px;
-      padding: 28px;
-      border: 1px solid var(--line);
-      border-radius: 24px;
-      background: rgba(255, 253, 248, 0.84);
-      box-shadow: var(--shadow);
-      backdrop-filter: blur(8px);
-    }
-    h1 { margin: 0; font-size: 34px; }
-    .hero p { margin: 0; color: var(--muted); line-height: 1.7; }
-    .caution-banner {
-      padding: 14px 16px;
-      border-radius: 16px;
-      background: #f5efe3;
-      border: 1px solid #e2d8c2;
-      color: #5f594f;
       font-size: 14px;
-      line-height: 1.7;
+      line-height: 1.5;
     }
-    .flow-steps {
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 12px;
-      margin-top: 8px;
+    .app-header {
+      border-bottom: 1px solid var(--line-strong);
+      background: #f0f2f1;
     }
-    .flow-step {
-      border: 1px solid #dcd4c4;
-      border-radius: 18px;
-      background: linear-gradient(180deg, rgba(255,255,255,0.92) 0%, rgba(246,242,233,0.96) 100%);
-      padding: 14px;
-      display: grid;
-      gap: 8px;
+    .header-inner {
+      max-width: 1500px;
+      margin: 0 auto;
+      padding: 12px 18px;
     }
-    .flow-step .step-no {
-      width: 34px;
-      height: 34px;
-      border-radius: 999px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      background: var(--accent);
-      color: #fff;
+    h1 {
+      margin: 0;
+      font-size: 22px;
+      line-height: 1.3;
       font-weight: 700;
+      color: #173d2d;
+    }
+    .header-desc {
+      margin-top: 4px;
+      color: var(--muted);
       font-size: 13px;
     }
-    .flow-step strong { font-size: 15px; }
-    .flow-step p {
-      margin: 0;
-      color: var(--muted);
+    .wrap {
+      max-width: 1500px;
+      margin: 0 auto;
+      padding: 12px 18px 32px;
+    }
+    .helper-note,
+    .caution-banner {
+      padding: 10px 12px;
+      border: 1px solid var(--warn-line);
+      border-radius: 4px;
+      background: var(--warn-bg);
+      color: #5f5644;
       font-size: 13px;
       line-height: 1.6;
     }
+    .progress-strip {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 6px;
+      margin: 10px 0 12px;
+    }
+    .progress-step {
+      border: 1px solid var(--line);
+      background: #fafafa;
+      padding: 8px 10px;
+      border-radius: 4px;
+      font-size: 13px;
+      color: #404040;
+      text-align: center;
+      white-space: nowrap;
+    }
+    .progress-step.active {
+      background: var(--header-bg);
+      border-color: #9fb8a9;
+      color: var(--accent);
+      font-weight: 700;
+    }
     .layout {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(360px, 520px);
-      gap: 20px;
-      margin-top: 22px;
+      grid-template-columns: minmax(0, 1.08fr) minmax(420px, 0.92fr);
+      gap: 12px;
       align-items: start;
     }
-    .stack { display: grid; gap: 18px; }
-    .card {
-      background: var(--card);
-      border: 1px solid var(--line);
-      border-radius: 22px;
-      padding: 20px;
-      box-shadow: var(--shadow);
-    }
-    .card h2, .card h3 { margin: 0 0 14px; }
-    .subtext { color: var(--muted); font-size: 14px; line-height: 1.6; }
-    .upload-box {
-      border: 1px dashed #adc0b3;
-      border-radius: 18px;
-      background: linear-gradient(180deg, #f7fbf8 0%, #eef6f0 100%);
-      padding: 18px;
+    .stack {
       display: grid;
-      gap: 14px;
+      gap: 12px;
+    }
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: var(--panel);
+      padding: 12px;
+      box-shadow: none;
+    }
+    .section-caption {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #dddddd;
+    }
+    .section-caption h2 {
+      margin: 0;
+      font-size: 17px;
+      font-weight: 700;
+    }
+    .section-step {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 72px;
+      height: 24px;
+      padding: 0 8px;
+      border: 1px solid #9fb8a9;
+      border-radius: 4px;
+      background: #f6faf7;
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .hint-text,
+    .subtext,
+    .inline-note {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .upload-box {
+      display: grid;
+      gap: 10px;
     }
     .dropzone {
-      border: 2px dashed #b7cbbf;
-      border-radius: 16px;
-      padding: 28px 18px;
-      text-align: center;
-      background: rgba(255, 255, 255, 0.7);
-      transition: border-color 0.2s ease, background 0.2s ease;
+      border: 1px dashed #b9c4bd;
+      border-radius: 4px;
+      padding: 14px 12px;
+      background: #fcfcfc;
+      text-align: left;
       cursor: pointer;
     }
     .dropzone.dragover {
       border-color: var(--accent);
-      background: #eef7f2;
+      background: #f3f8f5;
     }
-    .dropzone strong { display: block; margin-bottom: 6px; }
-    .upload-controls {
-      display: flex;
-      gap: 10px;
-      flex-wrap: wrap;
-      align-items: center;
+    .dropzone strong {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 14px;
     }
-    .upload-controls button,
-    .ingredient-add button,
-    .rerun-button {
-      border: 0;
-      border-radius: 12px;
-      padding: 13px 16px;
-      font-weight: 700;
-      cursor: pointer;
-      background: var(--accent);
-      color: #fff;
-    }
-    .upload-controls button[disabled],
-    .ingredient-add button[disabled],
-    .rerun-button[disabled] {
-      background: #b8c4bc;
-      cursor: not-allowed;
-    }
-    .ghost-button {
-      background: #fff;
-      color: var(--accent);
-      border: 1px solid #bfd1c5;
-    }
-    input[type="file"] { display: none; }
-    .preview-wrap {
-      display: grid;
-      gap: 10px;
-    }
-    .preview-image {
-      width: 100%;
-      max-height: 320px;
-      object-fit: contain;
-      border-radius: 16px;
-      border: 1px solid #dcd7ca;
-      background: #fbfaf7;
-    }
-    .meta-grid {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 12px;
-    }
-    .meta-item {
-      border: 1px solid #ebe4d7;
-      border-radius: 14px;
-      padding: 12px;
-      background: #fff;
-    }
-    .meta-item .label {
-      font-size: 12px;
-      color: var(--muted);
-      margin-bottom: 6px;
-    }
-    .meta-item .value {
-      line-height: 1.6;
-      word-break: break-word;
-    }
-    .chip-row {
+    .file-picker-row,
+    .upload-controls,
+    .editor-status,
+    .tab-strip {
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
+      align-items: center;
+    }
+    .file-picker-row .file-name {
+      color: var(--muted);
+      font-size: 12px;
+    }
+    button,
+    .button-link {
+      border: 1px solid #aab7b0;
+      border-radius: 4px;
+      padding: 7px 12px;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      background: #f8f8f8;
+      color: #222;
+    }
+    button.primary,
+    .upload-controls button:first-child,
+    .ingredient-add button,
+    .rerun-button {
+      background: var(--accent);
+      border-color: #1b503b;
+      color: #fff;
+    }
+    button[disabled] {
+      background: #e3e3e3;
+      color: #7a7a7a;
+      border-color: #cccccc;
+      cursor: not-allowed;
+    }
+    .ghost-button {
+      background: #ffffff;
+      color: var(--accent);
+    }
+    input[type="file"] { display: none; }
+    .preview-wrap {
+      border: 1px solid var(--line);
+      background: #fafafa;
+      padding: 8px;
+    }
+    .preview-image {
+      width: 100%;
+      max-height: 220px;
+      object-fit: contain;
+      border: 1px solid #d8d8d8;
+      background: #fff;
+    }
+    .api-base-row label {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 12px;
+      color: #555;
+    }
+    .api-base-row input,
+    .ingredient-row input,
+    .ingredient-add input {
+      width: 100%;
+      border: 1px solid #bfc5c2;
+      border-radius: 4px;
+      padding: 7px 8px;
+      font-size: 13px;
+      background: #fff;
+    }
+    .status-message {
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      font-size: 12px;
+    }
+    .status-message.error {
+      background: var(--critical-bg);
+      border-color: var(--critical-line);
+      color: #8b3d31;
+    }
+    .status-message.success {
+      background: #eef6f1;
+      border-color: #b9cfc3;
+      color: #285a44;
+    }
+    .summary-table,
+    .data-table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+    .summary-table th,
+    .summary-table td,
+    .data-table th,
+    .data-table td {
+      border: 1px solid #d7d7d7;
+      padding: 7px 8px;
+      vertical-align: top;
+      text-align: left;
+      font-size: 13px;
+      word-break: break-word;
+    }
+    .summary-table th,
+    .data-table th {
+      background: #f0f0f0;
+      font-weight: 700;
+      color: #333;
+    }
+    .summary-table th { width: 170px; }
+    .chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
     }
     .chip {
       display: inline-flex;
       align-items: center;
-      gap: 6px;
-      padding: 8px 12px;
-      border-radius: 999px;
+      padding: 2px 7px;
+      border: 1px solid #c9d8cf;
+      border-radius: 12px;
       background: var(--accent-soft);
       color: var(--accent);
-      font-size: 13px;
-      font-weight: 700;
+      font-size: 11px;
+      line-height: 1.4;
       white-space: nowrap;
     }
-    .chip.small { font-size: 12px; padding: 6px 10px; }
-    .chip.warning { background: var(--warn-soft); color: var(--warn); }
-    .chip.gray { background: #f2f1ed; color: #596058; }
-    .review-box,
-    .warning-box {
-      border-radius: 16px;
-      padding: 14px 16px;
+    .chip.small { font-size: 11px; padding: 2px 6px; }
+    .chip.gray { background: #f0f0f0; border-color: #d0d0d0; color: #555; }
+    .chip.warning { background: #f6efdb; border-color: #dccb9b; color: #7b6122; }
+    .sub-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 44px;
+      padding: 2px 6px;
+      border-radius: 10px;
+      font-size: 11px;
       border: 1px solid transparent;
-      line-height: 1.7;
-      font-size: 14px;
     }
-    .review-box { background: var(--warn-soft); border-color: #edd78d; color: #6d5314; }
-    .warning-box.critical { background: var(--critical-soft); border-color: #efb7ac; color: var(--critical); }
-    .warning-box.notice { background: var(--warn-soft); border-color: #edd78d; color: #6d5314; }
-    .warning-box.info { background: var(--info-soft); border-color: #b8d4ee; color: var(--info); }
-    .warning-box ul { margin: 8px 0 0; padding-left: 18px; }
+    .sub-badge.high { background: #edf6f0; color: #1e6b46; border-color: #b8d2c1; }
+    .sub-badge.medium { background: #faf1dd; color: #8a6512; border-color: #ddc58a; }
+    .sub-badge.low { background: #f8e8e5; color: #9a4232; border-color: #d6b3ac; }
+    .review-box,
+    .warning-box,
+    .placeholder-panel {
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      padding: 8px 10px;
+      font-size: 12px;
+      line-height: 1.6;
+    }
+    .review-box { background: var(--warn-bg); border-color: var(--warn-line); }
+    .warning-box.critical { background: var(--critical-bg); border-color: var(--critical-line); }
+    .warning-box.notice { background: var(--warn-bg); border-color: var(--warn-line); }
+    .warning-box.info { background: var(--info-bg); border-color: var(--info-line); }
+    .warning-box ul { margin: 6px 0 0; padding-left: 18px; }
+    .empty-panel {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+      padding: 14px;
+      border: 1px dashed #c9c9c9;
+      border-radius: 4px;
+      background: #fafafa;
+    }
     .debug-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 10px;
+      gap: 8px;
     }
     .debug-item {
-      border: 1px solid #ebe4d7;
-      border-radius: 14px;
-      padding: 12px;
-      background: #fff;
+      border: 1px solid #dddddd;
+      border-radius: 4px;
+      padding: 8px;
+      background: #fcfcfc;
     }
     .debug-item code,
     pre {
       font-family: Consolas, "SFMono-Regular", monospace;
       white-space: pre-wrap;
       word-break: break-word;
-    }
-    .placeholder-panel {
-      border: 1px dashed #d3cbbb;
-      border-radius: 14px;
-      padding: 14px;
-      background: #faf8f3;
-      color: var(--muted);
-      font-size: 14px;
-      line-height: 1.7;
-    }
-    .ingredient-editor {
-      display: grid;
-      gap: 12px;
-    }
-    .ingredient-list {
-      display: grid;
-      gap: 10px;
-    }
-    .ingredient-row {
-      display: grid;
-      grid-template-columns: 1fr auto;
-      gap: 10px;
-      align-items: center;
-    }
-    .ingredient-row input,
-    .ingredient-add input,
-    .api-base-row input {
-      width: 100%;
-      border: 1px solid #d7d2c6;
-      border-radius: 12px;
-      padding: 12px 14px;
-      font-size: 14px;
-      background: #fff;
-    }
-    .ingredient-row button {
-      border: 1px solid #e2cbc6;
-      background: #fff4f1;
-      color: #9a4131;
-      border-radius: 12px;
-      padding: 11px 14px;
-      cursor: pointer;
-      font-weight: 700;
-    }
-    .ingredient-add {
-      display: grid;
-      grid-template-columns: 1fr auto;
-      gap: 10px;
-    }
-    .editor-status {
-      display: flex;
-      gap: 10px;
-      align-items: center;
-      flex-wrap: wrap;
-      font-size: 13px;
-      color: var(--muted);
-    }
-    .editor-status strong { color: var(--accent); }
-    .recommendation-list {
-      display: grid;
-      gap: 14px;
-    }
-    .recommendation-card {
-      border: 1px solid #e7e0d3;
-      border-radius: 18px;
-      padding: 16px;
-      background: #fff;
-      display: grid;
-      gap: 10px;
-    }
-    .recommendation-head {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      gap: 14px;
-    }
-    .recommendation-title {
-      display: grid;
-      gap: 4px;
-    }
-    .recommendation-title strong { font-size: 18px; }
-    .recommendation-title span { color: var(--muted); font-size: 13px; }
-    .score-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 10px 12px;
-      border-radius: 14px;
-      background: #eef6f1;
-      color: var(--accent);
-      font-weight: 800;
-      font-size: 13px;
-    }
-    .sub-badge {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      padding: 6px 10px;
-      border-radius: 999px;
       font-size: 12px;
-      font-weight: 700;
-    }
-    .sub-badge.high { background: #e7f6ee; color: #1f7f52; }
-    .sub-badge.medium { background: #fff3db; color: #9a6c12; }
-    .sub-badge.low { background: #fde9e5; color: #ad4332; }
-    .recommendation-section { display: grid; gap: 6px; }
-    .recommendation-section .label {
-      font-size: 12px;
-      color: var(--muted);
-    }
-    .recommendation-section .value {
-      line-height: 1.6;
-      font-size: 14px;
     }
     details {
-      border: 1px solid #e5ded1;
-      border-radius: 16px;
-      padding: 12px 14px;
-      background: #fff;
+      border: 1px solid #d7d7d7;
+      border-radius: 4px;
+      background: #fcfcfc;
+      padding: 8px 10px;
     }
     summary {
       cursor: pointer;
       font-weight: 700;
-      color: #284e3e;
-    }
-    pre {
-      margin: 12px 0 0;
-      white-space: pre-wrap;
-      word-break: break-word;
-      font-family: Consolas, monospace;
+      color: #2d4d3e;
       font-size: 13px;
-      line-height: 1.6;
-      color: #384438;
     }
-    .status-message {
-      padding: 14px 16px;
-      border-radius: 16px;
-      font-size: 14px;
-      line-height: 1.7;
+    .ingredient-editor,
+    .ingredient-list {
+      display: grid;
+      gap: 8px;
     }
-    .status-message.error {
-      background: var(--critical-soft);
-      color: var(--critical);
-      border: 1px solid #efb7ac;
+    .ingredient-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      align-items: center;
     }
-    .status-message.success {
-      background: #edf8f2;
-      color: #1f7a52;
-      border: 1px solid #c2e7d2;
+    .ingredient-row button {
+      background: #fff7f5;
+      border-color: #d4b7b0;
+      color: #934131;
+      padding: 7px 10px;
+    }
+    .ingredient-add {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+    }
+    .recommendation-toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .tab-strip button {
+      background: #f5f5f5;
+      color: #444;
+    }
+    .tab-strip button.active {
+      background: var(--accent);
+      border-color: #1b503b;
+      color: #fff;
+    }
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: #fff;
+    }
+    .data-table tbody tr {
+      cursor: pointer;
+    }
+    .data-table tbody tr:hover {
+      background: #f7faf8;
+    }
+    .row-detail {
+      margin-top: 8px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: #fafafa;
+      padding: 10px;
+    }
+    .detail-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .detail-box,
+    .detail-block {
+      border: 1px solid #dcdcdc;
+      background: #fff;
+      padding: 8px;
+    }
+    .detail-box .label,
+    .detail-block .label {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+    .detail-box .value,
+    .detail-block .value {
+      font-size: 13px;
+      line-height: 1.5;
     }
     .loading-overlay {
       position: fixed;
       inset: 0;
       display: none;
       place-items: center;
-      background: rgba(19, 25, 21, 0.28);
-      backdrop-filter: blur(3px);
-      z-index: 10;
+      background: rgba(0, 0, 0, 0.22);
+      z-index: 20;
     }
     .loading-overlay.active { display: grid; }
     .loading-card {
-      padding: 22px 24px;
-      border-radius: 18px;
-      background: rgba(255, 253, 248, 0.96);
-      border: 1px solid var(--line);
-      box-shadow: var(--shadow);
-      font-weight: 700;
+      width: min(440px, calc(100vw - 24px));
+      padding: 14px;
+      border-radius: 4px;
+      background: #fff;
+      border: 1px solid var(--line-strong);
       color: #234d3c;
     }
-    .section-caption {
-      display: flex;
-      justify-content: space-between;
-      gap: 12px;
-      align-items: center;
-      margin-bottom: 12px;
-    }
-    .section-step {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      min-width: 30px;
-      height: 30px;
-      padding: 0 10px;
-      border-radius: 999px;
-      background: #e4efe8;
-      color: var(--accent);
+    .loading-title {
       font-weight: 700;
+      font-size: 16px;
+      margin-bottom: 8px;
+    }
+    .loading-stage,
+    .loading-subtext {
       font-size: 12px;
+      line-height: 1.5;
+      color: #4a6054;
     }
-    .helper-note {
-      padding: 12px 14px;
-      border-radius: 14px;
-      background: #f7f5ee;
-      border: 1px solid #e8e0d0;
-      color: #5f625a;
-      font-size: 13px;
-      line-height: 1.65;
+    .loading-progress-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin: 10px 0 6px;
     }
-    .recommendation-meta-grid {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 10px;
+    .loading-percent {
+      font-weight: 700;
+      font-size: 20px;
+      color: #1f5a42;
     }
-    .recommendation-mini {
-      border: 1px solid #eee6da;
-      border-radius: 14px;
-      padding: 10px 12px;
-      background: #fcfbf8;
+    .loading-step-label {
+      font-size: 11px;
+      color: #67756d;
+      text-transform: uppercase;
+      font-weight: 700;
     }
-    .recommendation-mini .label {
-      font-size: 12px;
-      color: var(--muted);
-      margin-bottom: 4px;
+    .loading-bar {
+      width: 100%;
+      height: 8px;
+      border-radius: 2px;
+      background: #e5e5e5;
+      overflow: hidden;
+      margin-bottom: 8px;
     }
-    .recommendation-mini .value {
-      font-size: 14px;
-      line-height: 1.55;
-      word-break: break-word;
+    .loading-bar-fill {
+      height: 100%;
+      width: 0%;
+      background: #2e7d5d;
+      transition: width 220ms ease;
     }
-    .inline-note {
-      margin-top: 6px;
-      color: #786f61;
-      font-size: 12px;
-      line-height: 1.6;
-    }
-    .hint-text {
-      font-size: 13px;
-      color: var(--muted);
-    }
-    .empty-panel {
-      color: var(--muted);
-      font-size: 14px;
-      line-height: 1.7;
-      padding: 22px;
-      border: 1px dashed #d9d3c4;
-      border-radius: 16px;
-      background: #fbfaf6;
-    }
-    @media (max-width: 1080px) {
+    @media (max-width: 1100px) {
       .layout { grid-template-columns: 1fr; }
-      .flow-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
-    @media (max-width: 720px) {
-      .wrap { padding: 16px 14px 40px; }
-      h1 { font-size: 28px; }
-      .hero, .card { padding: 16px; }
-      .flow-steps, .recommendation-meta-grid { grid-template-columns: 1fr; }
-      .meta-grid { grid-template-columns: 1fr; }
-      .ingredient-add, .ingredient-row, .upload-controls { grid-template-columns: 1fr; }
-      .recommendation-head { flex-direction: column; }
+    @media (max-width: 760px) {
+      .wrap { padding: 10px 10px 24px; }
+      .progress-strip { grid-template-columns: 1fr; }
+      .debug-grid,
+      .detail-grid {
+        grid-template-columns: 1fr;
+      }
+      .ingredient-row,
+      .ingredient-add {
+        grid-template-columns: 1fr;
+      }
+      .summary-table colgroup,
+      .data-table colgroup {
+        display: none;
+      }
     }
   </style>
 </head>
 <body>
   <div class="loading-overlay" id="loadingOverlay">
-    <div class="loading-card" id="loadingMessage">OCR 분석 및 추천 생성 중...</div>
+    <div class="loading-card">
+      <div class="loading-title" id="loadingTitle">OCR 분석 진행 중</div>
+      <div class="loading-stage" id="loadingMessage">이미지를 업로드하고 OCR 분석을 준비하는 중입니다.</div>
+      <div class="loading-progress-head">
+        <div class="loading-step-label" id="loadingStepLabel">STEP 1 / 5</div>
+        <div class="loading-percent" id="loadingPercent">0%</div>
+      </div>
+      <div class="loading-bar" aria-hidden="true">
+        <div class="loading-bar-fill" id="loadingBarFill"></div>
+      </div>
+      <div class="loading-subtext" id="loadingSubtext">분석 시간은 이미지 품질과 OCR 텍스트 양에 따라 달라질 수 있습니다.</div>
+    </div>
   </div>
+  <header class="app-header">
+    <div class="header-inner">
+      <h1>성분콕</h1>
+      <p>건강기능식품 추천 서비스. OCR 결과를 검토하고 원료를 수정한 뒤 기존 제품 DB 기준 추천 결과를 비교하는 조회 화면입니다.</p>
+    </div>
+  </header>
+
   <div class="wrap">
-    <section class="hero">
-      <h1>건강기능식품 성분 기반 유사 제품 추천</h1>
-      <p>성분표 이미지를 업로드하면 기능성원료 기준으로 유사 제품을 추천합니다. OCR 결과를 확인한 뒤 원료를 수정하고 다시 추천받을 수 있습니다.</p>
-      <div class="caution-banner">
-        본 결과는 건강기능식품의 기능성원료/원재료 기준 비교이며, 질병 예방·치료 효과를 의미하지 않습니다.
-      </div>
-      <div class="flow-steps" aria-label="사용 흐름 안내">
-        <div class="flow-step">
-          <span class="step-no">1</span>
-          <strong>이미지 업로드</strong>
-          <p>성분표 또는 원재료 표시 이미지를 업로드합니다.</p>
-        </div>
-        <div class="flow-step">
-          <span class="step-no">2</span>
-          <strong>OCR 결과 확인</strong>
-          <p>추출된 제품명, 카테고리, 원료와 검토 필요 안내를 확인합니다.</p>
-        </div>
-        <div class="flow-step">
-          <span class="step-no">3</span>
-          <strong>원료 수정</strong>
-          <p>잘못 추출된 원료를 삭제하거나 필요한 원료를 직접 추가합니다.</p>
-        </div>
-        <div class="flow-step">
-          <span class="step-no">4</span>
-          <strong>재추천 확인</strong>
-          <p>수정된 원료 기준으로 유사 제품 TOP10을 다시 받아 비교합니다.</p>
-        </div>
-      </div>
-    </section>
+    <div class="caution-banner">
+      이미지는 원재료명 또는 성분표 위주로 업로드해야 합니다. 광고 문구가 많은 이미지에서는 OCR 파싱 품질이 낮아질 수 있습니다.
+    </div>
+
+    <nav class="progress-strip" aria-label="분석 단계">
+      <div class="progress-step is-active"><span class="step-index">1</span><span>이미지 업로드</span></div>
+      <div class="progress-step"><span class="step-index">2</span><span>OCR 확인</span></div>
+      <div class="progress-step"><span class="step-index">3</span><span>원료 수정</span></div>
+      <div class="progress-step"><span class="step-index">4</span><span>추천 결과</span></div>
+    </nav>
 
     <section class="layout">
       <div class="stack">
         <section class="card">
           <div class="section-caption">
             <div>
-              <h2>1. 이미지 업로드</h2>
-              <div class="hint-text">jpg, jpeg, png, webp 파일을 업로드할 수 있습니다.</div>
+              <h2>이미지 업로드</h2>
+              <div class="hint-text">지원 형식: jpg, jpeg, png, webp</div>
             </div>
             <span class="section-step">STEP 1</span>
           </div>
           <div class="upload-box">
+            <div class="upload-controls">
+              <label for="fileInput" class="ghost-button">파일 선택</label>
+              <span class="hint-text" id="fileMeta">선택된 파일이 없습니다.</span>
+            </div>
             <label class="dropzone" id="dropzone" for="fileInput">
-              <strong>이미지를 드래그하거나 클릭해서 선택하세요</strong>
-              <span class="subtext">건강기능식품 라벨, 원재료명, 성분표 이미지를 올리면 OCR 분석을 시작합니다.</span>
+              <strong>이미지 파일을 드래그하거나 붙여넣기(Ctrl+V) 하세요.</strong>
+              <span class="subtext">원재료명 영역이 선명한 이미지를 권장합니다.</span>
             </label>
             <input id="fileInput" type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp">
             <div class="api-base-row">
               <label class="subtext" for="apiBaseInput">API Base URL</label>
               <input id="apiBaseInput" type="text" value="" placeholder="http://localhost:8000">
             </div>
-            <div class="helper-note">이미지 업로드 후 바로 OCR 분석과 첫 추천이 실행됩니다. 결과가 불안정하면 아래 원료 편집 영역에서 직접 수정한 뒤 다시 추천받을 수 있습니다.</div>
+            <div class="helper-note">이미지 업로드 후 OCR 분석이 실행됩니다. 결과가 부정확하면 아래 원료 수정 영역에서 직접 정정한 뒤 재추천할 수 있습니다.</div>
             <div class="upload-controls">
-              <button id="analyzeButton" disabled>이미지 분석하기</button>
+              <button id="analyzeButton" disabled>분석 실행</button>
               <button class="ghost-button" id="resetButton" type="button">초기화</button>
-              <span class="hint-text" id="fileMeta">선택된 파일이 없습니다.</span>
             </div>
             <div class="preview-wrap" id="previewWrap" hidden>
               <img id="previewImage" class="preview-image" alt="업로드 미리보기">
@@ -558,8 +594,8 @@
         <section class="card">
           <div class="section-caption">
             <div>
-              <h2>2. OCR 결과 확인</h2>
-              <div class="hint-text">추출된 제품명, 카테고리, 주요 원료, warning을 먼저 확인하세요.</div>
+              <h2>OCR 결과 확인</h2>
+              <div class="hint-text">제품명, 카테고리, 주요 원료와 검토 필요 항목을 먼저 확인합니다.</div>
             </div>
             <span class="section-step">STEP 2</span>
           </div>
@@ -569,8 +605,8 @@
         <section class="card">
           <div class="section-caption">
             <div>
-              <h2>3. 원료 수정 후 재추천</h2>
-              <div class="hint-text">OCR이 추출한 원료를 삭제/수정/추가한 뒤 직접 입력 기준으로 다시 추천받을 수 있습니다.</div>
+              <h2>원료 수정</h2>
+              <div class="hint-text">OCR 결과를 기준으로 원료를 삭제, 수정, 추가한 뒤 다시 추천받습니다.</div>
             </div>
             <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
               <span class="section-step">STEP 3</span>
@@ -629,7 +665,12 @@
     const ingredientEditor = document.getElementById("ingredientEditor");
     const recommendationList = document.getElementById("recommendationList");
     const loadingOverlay = document.getElementById("loadingOverlay");
+    const loadingTitle = document.getElementById("loadingTitle");
     const loadingMessage = document.getElementById("loadingMessage");
+    const loadingStepLabel = document.getElementById("loadingStepLabel");
+    const loadingPercent = document.getElementById("loadingPercent");
+    const loadingBarFill = document.getElementById("loadingBarFill");
+    const loadingSubtext = document.getElementById("loadingSubtext");
     const errorBox = document.getElementById("errorBox");
     const successBox = document.getElementById("successBox");
     const recommendationModeText = document.getElementById("recommendationModeText");
@@ -645,6 +686,197 @@
     function setLoading(active, message = "처리 중...") {
       loadingOverlay.classList.toggle("active", active);
       loadingMessage.textContent = message;
+    }
+
+    /*
+    const loadingPresets = {
+      image: {
+        title: "OCR 분석 진행 중",
+        subtext: "이미지 크기와 텍스트 양에 따라 처리 시간이 달라질 수 있습니다.",
+        steps: [
+          { label: "STEP 1 / 5", message: "업로드 이미지를 확인하고 분석 요청을 준비하는 중입니다.", percent: 8, delay: 250 },
+          { label: "STEP 2 / 5", message: "OCR 엔진이 이미지에서 텍스트를 추출하는 중입니다.", percent: 24, delay: 900 },
+          { label: "STEP 3 / 5", message: "원재료명 후보를 정리하고 원료 파싱을 수행하는 중입니다.", percent: 48, delay: 1800 },
+          { label: "STEP 4 / 5", message: "기존 원료 DB 비교와 RAG 보완 매칭을 진행하는 중입니다.", percent: 72, delay: 3000 },
+          { label: "STEP 5 / 5", message: "유사 제품 후보를 계산하고 추천 결과를 정리하는 중입니다.", percent: 92, delay: 4300 },
+        ],
+      },
+      ingredients: {
+        title: "원료 기준 재추천 진행 중",
+        subtext: "수정한 원료를 기준으로 임시 제품 프로필과 추천 순위를 다시 계산합니다.",
+        steps: [
+          { label: "STEP 1 / 4", message: "입력한 원료 목록을 검증하는 중입니다.", percent: 12, delay: 200 },
+          { label: "STEP 2 / 4", message: "원료 매칭과 임시 벡터를 재생성하는 중입니다.", percent: 38, delay: 700 },
+          { label: "STEP 3 / 4", message: "후보 제품과 유사도를 다시 계산하는 중입니다.", percent: 70, delay: 1600 },
+          { label: "STEP 4 / 4", message: "추천 결과와 설명을 정리하는 중입니다.", percent: 92, delay: 2600 },
+        ],
+      },
+    };
+
+    let loadingTimers = [];
+
+    function clearLoadingTimers() {
+      loadingTimers.forEach((timerId) => window.clearTimeout(timerId));
+      loadingTimers = [];
+    }
+
+    function updateLoadingState({ title = "", label = "", message = "", percent = 0, subtext = "" } = {}) {
+      if (title) loadingTitle.textContent = title;
+      if (label) loadingStepLabel.textContent = label;
+      if (message) loadingMessage.textContent = message;
+      if (subtext) loadingSubtext.textContent = subtext;
+      const safePercent = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
+      loadingPercent.textContent = `${safePercent}%`;
+      loadingBarFill.style.width = `${safePercent}%`;
+    }
+
+    function startLoadingProgress(mode, fallbackMessage = "처리 중...") {
+      const preset = loadingPresets[mode];
+      clearLoadingTimers();
+      loadingOverlay.classList.add("active");
+      if (!preset) {
+        updateLoadingState({
+          title: "분석 진행 중",
+          label: "STEP",
+          message: fallbackMessage,
+          percent: 15,
+          subtext: "잠시만 기다려주세요.",
+        });
+        return;
+      }
+      updateLoadingState({
+        title: preset.title,
+        label: preset.steps[0].label,
+        message: preset.steps[0].message,
+        percent: 0,
+        subtext: preset.subtext,
+      });
+      preset.steps.forEach((step) => {
+        const timerId = window.setTimeout(() => {
+          updateLoadingState({
+            title: preset.title,
+            label: step.label,
+            message: step.message,
+            percent: step.percent,
+            subtext: preset.subtext,
+          });
+        }, step.delay);
+        loadingTimers.push(timerId);
+      });
+    }
+
+    function finishLoading(message = "처리가 완료되었습니다.") {
+      clearLoadingTimers();
+      updateLoadingState({
+        label: "DONE",
+        message,
+        percent: 100,
+      });
+      const hideTimerId = window.setTimeout(() => {
+        loadingOverlay.classList.remove("active");
+      }, 220);
+      loadingTimers.push(hideTimerId);
+    }
+
+    function cancelLoading() {
+      clearLoadingTimers();
+      loadingOverlay.classList.remove("active");
+    }
+
+    */
+
+    const loadingPresets = {
+      image: {
+        title: "OCR Analysis Running",
+        subtext: "Timing varies with image size and text density.",
+        steps: [
+          { label: "STEP 1 / 5", message: "Checking the uploaded image and preparing the request.", percent: 8, delay: 250 },
+          { label: "STEP 2 / 5", message: "Extracting text from the image with OCR.", percent: 24, delay: 900 },
+          { label: "STEP 3 / 5", message: "Parsing ingredient candidates from the OCR text.", percent: 48, delay: 1800 },
+          { label: "STEP 4 / 5", message: "Matching against the ingredient DB and running RAG fallback.", percent: 72, delay: 3000 },
+          { label: "STEP 5 / 5", message: "Building the profile and ranking similar products.", percent: 92, delay: 4300 },
+        ],
+      },
+      ingredients: {
+        title: "Ingredient Re-ranking Running",
+        subtext: "Rebuilding the temporary profile and recommendation list from the edited ingredients.",
+        steps: [
+          { label: "STEP 1 / 4", message: "Validating the edited ingredient list.", percent: 12, delay: 200 },
+          { label: "STEP 2 / 4", message: "Rebuilding ingredient matches and the temporary vector.", percent: 38, delay: 700 },
+          { label: "STEP 3 / 4", message: "Recomputing candidate products and similarity scores.", percent: 70, delay: 1600 },
+          { label: "STEP 4 / 4", message: "Formatting the recommendation results.", percent: 92, delay: 2600 },
+        ],
+      },
+    };
+
+    let loadingTimers = [];
+
+    function clearLoadingTimers() {
+      loadingTimers.forEach((timerId) => window.clearTimeout(timerId));
+      loadingTimers = [];
+    }
+
+    function updateLoadingState({ title = "", label = "", message = "", percent = 0, subtext = "" } = {}) {
+      if (title) loadingTitle.textContent = title;
+      if (label) loadingStepLabel.textContent = label;
+      if (message) loadingMessage.textContent = message;
+      if (subtext) loadingSubtext.textContent = subtext;
+      const safePercent = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
+      loadingPercent.textContent = `${safePercent}%`;
+      loadingBarFill.style.width = `${safePercent}%`;
+    }
+
+    function startLoadingProgress(mode, fallbackMessage = "Processing...") {
+      const preset = loadingPresets[mode];
+      clearLoadingTimers();
+      loadingOverlay.classList.add("active");
+      if (!preset) {
+        updateLoadingState({
+          title: "Analysis Running",
+          label: "STEP",
+          message: fallbackMessage,
+          percent: 15,
+          subtext: "Please wait a moment.",
+        });
+        return;
+      }
+      updateLoadingState({
+        title: preset.title,
+        label: preset.steps[0].label,
+        message: preset.steps[0].message,
+        percent: 0,
+        subtext: preset.subtext,
+      });
+      preset.steps.forEach((step) => {
+        const timerId = window.setTimeout(() => {
+          updateLoadingState({
+            title: preset.title,
+            label: step.label,
+            message: step.message,
+            percent: step.percent,
+            subtext: preset.subtext,
+          });
+        }, step.delay);
+        loadingTimers.push(timerId);
+      });
+    }
+
+    function finishLoading(message = "Done.") {
+      clearLoadingTimers();
+      updateLoadingState({
+        label: "DONE",
+        message,
+        percent: 100,
+      });
+      const hideTimerId = window.setTimeout(() => {
+        loadingOverlay.classList.remove("active");
+      }, 220);
+      loadingTimers.push(hideTimerId);
+    }
+
+    function cancelLoading() {
+      clearLoadingTimers();
+      loadingOverlay.classList.remove("active");
     }
 
     function setError(message) {
@@ -666,6 +898,18 @@
     function formatScore(score) {
       if (score === null || score === undefined || Number.isNaN(Number(score))) return "-";
       return Number(score).toFixed(3);
+    }
+
+    function yesNo(value) {
+      if (value === null || value === undefined || value === "-") return "-";
+      return value ? "예" : "아니오";
+    }
+
+    function makeDomId(value) {
+      return String(value || "")
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]+/g, "-")
+        .replace(/^-+|-+$/g, "") || "item";
     }
 
     function renderChips(items, className = "") {
@@ -726,52 +970,52 @@
         html.push(`<div class="review-box"><strong>검토 필요</strong><br>${escapeHtml(response.review_message || "추출된 원료를 확인해주세요.")}</div>`);
       }
 
-      html.push('<div class="meta-grid">');
-      html.push(`<div class="meta-item"><div class="label">제품명 후보</div><div class="value">${escapeHtml(parsed.product_name_candidate || "-")}</div></div>`);
-      html.push(`<div class="meta-item"><div class="label">추정 메인 카테고리</div><div class="value">${escapeHtml(estimated.product_main_category || "-")}</div></div>`);
-      html.push(`<div class="meta-item"><div class="label">주요 원료</div><div class="value">${renderChips(safeArray(estimated.primary_ingredients), "small")}</div></div>`);
-      html.push(`<div class="meta-item"><div class="label">정규화 주요 원료</div><div class="value">${renderChips(safeArray(parsed.primary_ingredients_normalized), "small")}</div></div>`);
-      html.push(`<div class="meta-item"><div class="label">품질 등급</div><div class="value">${escapeHtml(quality.quality_grade || estimated.quality_grade || "-")}</div></div>`);
-      html.push(`<div class="meta-item"><div class="label">프로필 신뢰도</div><div class="value">${formatScore(quality.profile_confidence ?? estimated.confidence)}</div></div>`);
+      html.push('<table class="summary-table"><tbody>');
+      html.push(`<tr><th>제품명 후보</th><td>${escapeHtml(parsed.product_name_candidate || "-")}</td></tr>`);
+      html.push(`<tr><th>추정 메인 카테고리</th><td>${escapeHtml(estimated.product_main_category || "-")}</td></tr>`);
+      html.push(`<tr><th>품질 등급</th><td>${escapeHtml(quality.quality_grade || estimated.quality_grade || "-")}</td></tr>`);
+      html.push(`<tr><th>프로필 신뢰도</th><td>${formatScore(quality.profile_confidence ?? estimated.confidence)}</td></tr>`);
+      html.push(`<tr><th>후보 상태</th><td>${escapeHtml(quality.status || estimated.status || "-")} / candidate ${yesNo(quality.candidate_enabled ?? estimated.is_candidate_enabled ?? "-")}</td></tr>`);
+      html.push(`<tr><th>검토 필요 여부</th><td>${yesNo(response.needs_user_review)}</td></tr>`);
+      html.push('</tbody></table>');
+
+      html.push('<div class="detail-grid">');
+      html.push(`<div class="detail-block"><div class="label">주요 원료</div><div class="value chip-row">${renderChips(safeArray(estimated.primary_ingredients), "small")}</div></div>`);
+      html.push(`<div class="detail-block"><div class="label">정규화 주요 원료</div><div class="value chip-row">${renderChips(safeArray(parsed.primary_ingredients_normalized), "small")}</div></div>`);
+      html.push(`<div class="detail-block"><div class="label">추출 원료 목록</div><div class="value chip-row">${renderChips(safeArray(parsed.normalized_ingredients), "small")}</div></div>`);
       html.push('</div>');
 
       if (criticalWarnings.length) {
-        html.push(`<div class="warning-box critical"><strong>검토가 필요한 항목</strong><ul>${criticalWarnings.map((item) => `<li>${escapeHtml(item.message || item.code)}</li>`).join("")}</ul></div>`);
+        html.push(`<details class="row-detail" open><summary>검토가 필요한 항목 (${criticalWarnings.length})</summary><div class="detail-block"><ul>${criticalWarnings.map((item) => `<li>${escapeHtml(item.message || item.code)}</li>`).join("")}</ul></div></details>`);
       }
       if (notices.length) {
-        html.push(`<div class="warning-box notice"><strong>참고 안내</strong><ul>${notices.map((item) => `<li>${escapeHtml(item.message || item.code)}</li>`).join("")}</ul></div>`);
+        html.push(`<details class="row-detail"><summary>참고 안내 (${notices.length})</summary><div class="detail-block"><ul>${notices.map((item) => `<li>${escapeHtml(item.message || item.code)}</li>`).join("")}</ul></div></details>`);
       }
       if (infoWarnings.length) {
-        html.push(`<div class="warning-box info"><strong>추가 정보</strong><ul>${infoWarnings.map((item) => `<li>${escapeHtml(item.message || item.code)}</li>`).join("")}</ul></div>`);
+        html.push(`<details class="row-detail"><summary>추가 정보 (${infoWarnings.length})</summary><div class="detail-block"><ul>${infoWarnings.map((item) => `<li>${escapeHtml(item.message || item.code)}</li>`).join("")}</ul></div></details>`);
       }
 
       if (safeArray(quality.warnings).length) {
-        html.push(`<div class="warning-box notice"><strong>품질 warning</strong><ul>${safeArray(quality.warnings).map((item) => `<li>${escapeHtml(item.message || item.code)}</li>`).join("")}</ul></div>`);
+        html.push(`<details class="row-detail"><summary>품질 warning (${safeArray(quality.warnings).length})</summary><div class="detail-block"><ul>${safeArray(quality.warnings).map((item) => `<li>${escapeHtml(item.message || item.code)}</li>`).join("")}</ul></div></details>`);
       }
-
-      html.push('<div class="meta-grid">');
-      html.push(`<div class="meta-item"><div class="label">추출 원료 목록</div><div class="value chip-row">${renderChips(safeArray(parsed.normalized_ingredients), "small")}</div></div>`);
-      html.push(`<div class="meta-item"><div class="label">후보 상태</div><div class="value">${escapeHtml(quality.status || estimated.status || "-")} / candidate ${escapeHtml(String(quality.candidate_enabled ?? estimated.is_candidate_enabled ?? "-"))}</div></div>`);
-      html.push('</div>');
 
       if (debugResponseEnabled && response.trace_id) {
-        html.push('<div class="debug-grid">');
-        html.push(`<div class="debug-item"><div class="label">trace_id</div><div class="value"><code>${escapeHtml(response.trace_id)}</code></div></div>`);
-        html.push(`<div class="debug-item"><div class="label">parse_cache_hit / exact_match</div><div class="value"><code>${escapeHtml(String(debug.parse_cache_hit ?? false))} / ${escapeHtml(String(debug.exact_match_detected ?? false))}</code></div></div>`);
-        html.push('</div>');
-      }
-
-      html.push(`<details><summary>OCR 원문 보기</summary><pre>${escapeHtml(ocr.raw_text || "OCR 원문이 없습니다.")}</pre></details>`);
-      if (debugResponseEnabled && response.debug) {
-        html.push('<details><summary>디버그 시그니처 보기</summary>');
-        html.push('<div class="debug-grid">');
-        html.push(`<div class="debug-item"><div class="label">image_hash</div><div class="value"><code>${escapeHtml(debug.image_hash || "-")}</code></div></div>`);
-        html.push(`<div class="debug-item"><div class="label">ocr_text_hash</div><div class="value"><code>${escapeHtml(debug.ocr_text_hash || "-")}</code></div></div>`);
-        html.push(`<div class="debug-item"><div class="label">parsed_signature</div><div class="value"><code>${escapeHtml(debug.parsed_signature || "-")}</code></div></div>`);
-        html.push(`<div class="debug-item"><div class="label">profile_signature</div><div class="value"><code>${escapeHtml(debug.profile_signature || "-")}</code></div></div>`);
+        html.push('<details class="row-detail"><summary>디버그 요약</summary><div class="detail-grid">');
+        html.push(`<div class="detail-block"><div class="label">trace_id</div><div class="value"><code>${escapeHtml(response.trace_id)}</code></div></div>`);
+        html.push(`<div class="detail-block"><div class="label">parse_cache_hit / exact_match</div><div class="value"><code>${escapeHtml(String(debug.parse_cache_hit ?? false))} / ${escapeHtml(String(debug.exact_match_detected ?? false))}</code></div></div>`);
         html.push('</div></details>');
       }
-      html.push('<div class="placeholder-panel"><strong>추후 수정/재추천 확장 영역</strong><br>사용자 수정 이력, 수정 전/후 비교, 관리자 검수 로그를 이 영역에 연결할 수 있도록 비워두었습니다.</div>');
+
+      html.push(`<details class="row-detail"><summary>OCR 원문 보기</summary><pre>${escapeHtml(ocr.raw_text || "OCR 원문이 없습니다.")}</pre></details>`);
+      if (debugResponseEnabled && response.debug) {
+        html.push('<details class="row-detail"><summary>디버그 시그니처 보기</summary>');
+        html.push('<div class="detail-grid">');
+        html.push(`<div class="detail-block"><div class="label">image_hash</div><div class="value"><code>${escapeHtml(debug.image_hash || "-")}</code></div></div>`);
+        html.push(`<div class="detail-block"><div class="label">ocr_text_hash</div><div class="value"><code>${escapeHtml(debug.ocr_text_hash || "-")}</code></div></div>`);
+        html.push(`<div class="detail-block"><div class="label">parsed_signature</div><div class="value"><code>${escapeHtml(debug.parsed_signature || "-")}</code></div></div>`);
+        html.push(`<div class="detail-block"><div class="label">profile_signature</div><div class="value"><code>${escapeHtml(debug.profile_signature || "-")}</code></div></div>`);
+        html.push('</div></details>');
+      }
       html.push('</div>');
 
       resultPanel.className = "";
@@ -850,159 +1094,112 @@
       dirtyChip.hidden = !state.dirty;
     }
 
-    function renderRecommendations(response) {
-      const recommendations = safeArray(response && response.recommendations);
-      const modeLabel = state.latestMode === "ingredients" ? "수정된 원료 기준 추천 결과입니다." : "OCR 추출 결과 기준 추천 결과입니다.";
-      recommendationModeText.textContent = response ? modeLabel : "이미지를 분석하면 추천 결과가 표시됩니다.";
-
-      if (!recommendations.length) {
-        recommendationList.className = "empty-panel";
-        recommendationList.innerHTML = "추천 결과가 아직 없습니다.";
-        return;
-      }
-
-      const html = ['<div class="recommendation-list">'];
-      recommendations.forEach((item) => {
-        const productName = item.target_product_name || item.product_name || item.name || "-";
-        const reportNo = item.target_report_no || item.report_no || "-";
-        const rank = item.rank || item.order || "-";
-        const similarityScore = item.similarity_score;
-        const substitutability = item.substitutability || "-";
-        const sharedIngredients = safeArray(item.shared_ingredients && item.shared_ingredients.length ? item.shared_ingredients : item.matched_ingredients);
-        const sharedCategories = safeArray(item.shared_categories && item.shared_categories.length ? item.shared_categories : item.categories);
-        const categoryValue = item.target_product_main_category || item.product_main_category || item.estimated_category || (sharedCategories[0] || "-");
-        const reason = item.reason || item.recommendation_reason || (item.explanation && item.explanation.reason) || "정보 없음";
-        const itemNotices = safeArray(item.notices || item.warning_notices);
-        const uploadedLabels = safeArray(item.uploaded_match_labels);
-        html.push(`
-          <article class="recommendation-card">
-            <div class="recommendation-head">
-              <div class="recommendation-title">
-                <strong>${escapeHtml(productName)}</strong>
-                <span>report_no ${escapeHtml(reportNo)} · 순번 ${escapeHtml(rank)}</span>
-              </div>
-              <div class="score-badge">
-                <span class="sub-badge ${badgeClass(substitutability)}">${escapeHtml(substitutability)}</span>
-                <span>${formatScore(similarityScore)}</span>
-              </div>
-            </div>
-            ${showUploadedBadges ? `
-              <div class="chip-row">
-                ${renderChips(uploadedLabels, "small")}
-                ${item.uploaded_quality_grade ? `<span class="chip gray small">grade ${escapeHtml(item.uploaded_quality_grade)}</span>` : ""}
-                ${item.uploaded_status ? `<span class="chip gray small">${escapeHtml(item.uploaded_status)}</span>` : ""}
-              </div>
-            ` : ""}
-            <div class="recommendation-meta-grid">
-              <div class="recommendation-mini">
-                <div class="label">카테고리</div>
-                <div class="value">${escapeHtml(categoryValue || "-")}</div>
-              </div>
-              <div class="recommendation-mini">
-                <div class="label">유사도</div>
-                <div class="value">${formatScore(similarityScore)}</div>
-              </div>
-            </div>
-            <div class="recommendation-section">
-              <div class="label">일치 원료</div>
-              <div class="value chip-row">${renderChips(sharedIngredients, "small")}</div>
-            </div>
-            <div class="recommendation-section">
-              <div class="label">공통 카테고리</div>
-              <div class="value chip-row">${renderChips(sharedCategories, "small")}</div>
-            </div>
-            <div class="recommendation-section">
-              <div class="label">추천 이유</div>
-              <div class="value">${escapeHtml(reason)}</div>
-            </div>
-            ${itemNotices.length ? `<div class="inline-note">참고: ${escapeHtml(itemNotices.map((notice) => notice.message || notice.code || notice).join(" / "))}</div>` : ""}
-            <div class="recommendation-section">
-              <div class="label">주의 문구</div>
-              <div class="value">${escapeHtml(item.caution || cautionText)}</div>
-            </div>
-          </article>
-        `);
-      });
-      html.push(`<div class="caution-banner">${escapeHtml(cautionText)}</div>`);
-      html.push("</div>");
-      recommendationList.className = "";
-      recommendationList.innerHTML = html.join("");
-    }
-
     function buildRecommendationSection(recommendations, sectionTitle, sectionNote, options = {}) {
-      const collapsible = Boolean(options.collapsible);
-      const opened = Boolean(options.opened);
-      const showUploadedBadges = Boolean(options.showUploadedBadges || collapsible);
       if (!recommendations.length) {
         return `
           <div class="recommendation-section">
-            <div class="label">${escapeHtml(sectionTitle)}</div>
+            <div class="section-caption"><h3>${escapeHtml(sectionTitle)}</h3></div>
             <div class="empty-panel">${escapeHtml(sectionNote)}</div>
           </div>
         `;
       }
 
-      const headerHtml = collapsible
-        ? `<details ${opened ? "open" : ""}><summary>${escapeHtml(sectionTitle)} <span class="inline-note">(${recommendations.length}건)</span></summary>`
-        : `<div class="label">${escapeHtml(sectionTitle)}</div>`;
-      const html = ['<div class="recommendation-section">', headerHtml, '<div class="recommendation-list">'];
+      const html = ['<div class="recommendation-section">'];
+      html.push(`<div class="section-caption"><div><h3>${escapeHtml(sectionTitle)}</h3><div class="hint-text">총 ${recommendations.length}건</div></div></div>`);
+      html.push('<div class="table-wrap"><table class="data-table"><thead><tr><th>순위</th><th>제품명</th><th>report_no</th><th>카테고리</th><th>유사도</th><th>등급</th><th>일치 원료</th><th>상세</th></tr></thead><tbody>');
       recommendations.forEach((item) => {
         const productName = item.target_product_name || item.product_name || item.name || "-";
         const reportNo = item.target_report_no || item.report_no || "-";
         const rank = item.rank || item.order || "-";
         const similarityScore = item.similarity_score;
         const substitutability = item.substitutability || "-";
+        const gradeValue = item.uploaded_quality_grade || substitutability || "-";
         const sharedIngredients = safeArray(item.shared_ingredients && item.shared_ingredients.length ? item.shared_ingredients : item.matched_ingredients);
+        const targetAllIngredients = safeArray(
+          item.target_all_ingredients && item.target_all_ingredients.length
+            ? item.target_all_ingredients
+            : [
+                ...safeArray(item.target_primary_ingredients),
+                ...safeArray(item.target_secondary_ingredients),
+                ...safeArray(item.target_support_ingredients),
+              ]
+        );
+        const targetOtherIngredients = safeArray(
+          item.target_other_ingredients && item.target_other_ingredients.length
+            ? item.target_other_ingredients
+            : targetAllIngredients.filter((ingredient) => !sharedIngredients.includes(ingredient))
+        );
         const sharedCategories = safeArray(item.shared_categories && item.shared_categories.length ? item.shared_categories : item.categories);
         const categoryValue = item.target_product_main_category || item.product_main_category || item.estimated_category || (sharedCategories[0] || "-");
-        const reason = item.reason || item.recommendation_reason || (item.explanation && item.explanation.reason) || "?뺣낫 ?놁쓬";
+        const reason = item.reason || item.recommendation_reason || (item.explanation && item.explanation.reason) || "정보 없음";
         const itemNotices = safeArray(item.notices || item.warning_notices);
+        const uploadedLabels = safeArray(item.uploaded_match_labels);
+        const detailId = `rec-detail-${makeDomId(sectionTitle)}-${makeDomId(rank)}`;
         html.push(`
-          <article class="recommendation-card">
-            <div class="recommendation-head">
-              <div class="recommendation-title">
-                <strong>${escapeHtml(productName)}</strong>
-                <span>report_no ${escapeHtml(reportNo)} 쨌 ?쒕쾲 ${escapeHtml(rank)}</span>
-              </div>
-              <div class="score-badge">
-                <span class="sub-badge ${badgeClass(substitutability)}">${escapeHtml(substitutability)}</span>
-                <span>${formatScore(similarityScore)}</span>
-              </div>
-            </div>
-            <div class="recommendation-meta-grid">
-              <div class="recommendation-mini">
-                <div class="label">移댄뀒怨좊━</div>
-                <div class="value">${escapeHtml(categoryValue || "-")}</div>
-              </div>
-              <div class="recommendation-mini">
-                <div class="label">?좎궗??/div>
-                <div class="value">${formatScore(similarityScore)}</div>
-              </div>
-            </div>
-            <div class="recommendation-section">
-              <div class="label">?쇱튂 ?먮즺</div>
-              <div class="value chip-row">${renderChips(sharedIngredients, "small")}</div>
-            </div>
-            <div class="recommendation-section">
-              <div class="label">怨듯넻 移댄뀒怨좊━</div>
-              <div class="value chip-row">${renderChips(sharedCategories, "small")}</div>
-            </div>
-            <div class="recommendation-section">
-              <div class="label">異붿쿇 ?댁쑀</div>
-              <div class="value">${escapeHtml(reason)}</div>
-            </div>
-            ${itemNotices.length ? `<div class="inline-note">李멸퀬: ${escapeHtml(itemNotices.map((notice) => notice.message || notice.code || notice).join(" / "))}</div>` : ""}
-            <div class="recommendation-section">
-              <div class="label">二쇱쓽 臾멸뎄</div>
-              <div class="value">${escapeHtml(item.caution || cautionText)}</div>
-            </div>
-          </article>
+          <tr>
+            <td>${escapeHtml(rank)}</td>
+            <td><strong>${escapeHtml(productName)}</strong></td>
+            <td>${escapeHtml(reportNo)}</td>
+            <td>${escapeHtml(categoryValue || "-")}</td>
+            <td>${formatScore(similarityScore)}</td>
+            <td><span class="sub-badge ${badgeClass(substitutability)}">${escapeHtml(gradeValue)}</span></td>
+            <td>${sharedIngredients.length ? renderChips(sharedIngredients.slice(0, 4), "small") : '<span class="chip gray small">없음</span>'}</td>
+            <td><a href="#${detailId}">보기</a></td>
+          </tr>
+        `);
+        html.push(`
+          <tr>
+            <td colspan="8" style="padding:0; border-bottom:1px solid #d9d9d9;">
+              <details class="row-detail" id="${detailId}" ${Number(rank) === 1 ? "open" : ""}>
+                <summary>${escapeHtml(productName)} 상세 정보</summary>
+                <div class="detail-grid">
+                  <div class="detail-block">
+                    <div class="label">일치 원료</div>
+                    <div class="value chip-row">${renderChips(sharedIngredients, "small")}</div>
+                  </div>
+                  <div class="detail-block">
+                    <div class="label">추가 원료</div>
+                    <div class="value chip-row">${renderChips(targetOtherIngredients, "small")}</div>
+                  </div>
+                  <div class="detail-block">
+                    <div class="label">추천 제품 전체 원료</div>
+                    <div class="value chip-row">${renderChips(targetAllIngredients, "small")}</div>
+                  </div>
+                  <div class="detail-block">
+                    <div class="label">공통 카테고리</div>
+                    <div class="value chip-row">${renderChips(sharedCategories, "small")}</div>
+                  </div>
+                  <div class="detail-block">
+                    <div class="label">추천 이유</div>
+                    <div class="value">${escapeHtml(reason)}</div>
+                  </div>
+                  <div class="detail-block">
+                    <div class="label">주의 문구</div>
+                    <div class="value">${escapeHtml(item.caution || cautionText)}</div>
+                  </div>
+                  ${uploadedLabels.length || item.uploaded_status ? `
+                    <div class="detail-block">
+                      <div class="label">업로드 참조 정보</div>
+                      <div class="value chip-row">
+                        ${renderChips(uploadedLabels, "small")}
+                        ${item.uploaded_quality_grade ? `<span class="chip gray small">grade ${escapeHtml(item.uploaded_quality_grade)}</span>` : ""}
+                        ${item.uploaded_status ? `<span class="chip gray small">${escapeHtml(item.uploaded_status)}</span>` : ""}
+                      </div>
+                    </div>
+                  ` : ""}
+                  ${itemNotices.length ? `
+                    <div class="detail-block">
+                      <div class="label">참고</div>
+                      <div class="value">${escapeHtml(itemNotices.map((notice) => notice.message || notice.code || notice).join(" / "))}</div>
+                    </div>
+                  ` : ""}
+                </div>
+              </details>
+            </td>
+          </tr>
         `);
       });
-      html.push("</div>");
-      if (collapsible) {
-        html.push("</details>");
-      }
+      html.push("</tbody></table></div>");
       html.push("</div>");
       return html.join("");
     }
@@ -1011,20 +1208,31 @@
       const recommendations = safeArray(response && response.recommendations);
       const officialRecommendations = safeArray(response && response.official_recommendations);
       const uploadedSimilarCases = safeArray(response && response.uploaded_similar_cases);
-      const modeLabel = state.latestMode === "ingredients" ? "?섏젙???먮즺 湲곗? 異붿쿇 寃곌낵?낅땲??" : "OCR 異붿텧 寃곌낵 湲곗? 異붿쿇 寃곌낵?낅땲??";
-      recommendationModeText.textContent = response ? modeLabel : "?대?吏瑜?遺꾩꽍?섎㈃ 異붿쿇 寃곌낵媛 ?쒖떆?⑸땲??";
+      const quality = (response && response.quality) || {};
+      const llmRerankApplied = Boolean(response && response.llm_rerank_applied);
+      const llmRerankError = String((response && response.llm_rerank_error) || "");
+      const modeLabel = state.latestMode === "ingredients" ? "수정된 원료 기준 추천 결과입니다." : "OCR 추출 결과 기준 추천 결과입니다.";
+      recommendationModeText.textContent = response ? modeLabel : "이미지를 분석하면 추천 결과가 표시됩니다.";
 
-      if (!recommendations.length) {
+      if (!recommendations.length && !officialRecommendations.length && !uploadedSimilarCases.length) {
         recommendationList.className = "empty-panel";
-        recommendationList.innerHTML = "異붿쿇 寃곌낵媛 ?꾩쭅 ?놁뒿?덈떎.";
+        const reason = String(quality.candidate_disabled_reason || (response && response.review_message) || "").trim();
+        recommendationList.innerHTML = reason
+          ? `추천 결과가 아직 없습니다.<br><span class="inline-note">사유: ${escapeHtml(reason)}</span>`
+          : "추천 결과가 아직 없습니다.";
         return;
       }
 
       const html = ['<div class="stack">'];
-      html.push('<div class="helper-note"><strong>공식 제품 추천 우선</strong><br>공식 카탈로그 추천을 먼저 보여주고, 업로드 기반 유사 사례는 아래 참고 영역으로 분리했습니다.</div>');
-      html.push(buildRecommendationSection(officialRecommendations, "공식 카탈로그 추천", "공식 카탈로그 추천 결과가 없습니다.", { collapsible: false }));
+      if (llmRerankApplied) {
+        html.push('<div class="helper-note"><strong>LLM 2차 재정렬 적용됨</strong><br>공식 후보군을 먼저 계산한 뒤 GPT OSS가 최종 순서를 다시 검토했습니다. 순서가 그대로일 수도 있습니다.</div>');
+      } else if (llmRerankError) {
+        html.push(`<div class="helper-note"><strong>LLM 재정렬 미적용</strong><br>${escapeHtml(llmRerankError)}</div>`);
+      }
+      html.push('<div class="helper-note"><strong>조회 기준</strong><br>공식 카탈로그 추천을 우선 표시하며, 업로드 기반 유사 사례는 별도 구역으로 분리해 참고용으로 제공합니다.</div>');
+      html.push(buildRecommendationSection(officialRecommendations, "공식 카탈로그 추천", "공식 카탈로그 추천 결과가 없습니다."));
       if (uploadedSimilarCases.length) {
-        html.push(buildRecommendationSection(uploadedSimilarCases, "업로드 유사 사례", "업로드 유사 사례가 없습니다.", { collapsible: true, opened: false }));
+        html.push(buildRecommendationSection(uploadedSimilarCases, "업로드 기반 유사 사례", "업로드 유사 사례가 없습니다."));
       }
       html.push(`<div class="caution-banner">${escapeHtml(cautionText)}</div>`);
       html.push("</div>");
@@ -1036,7 +1244,9 @@
       const allowed = [".jpg", ".jpeg", ".png", ".webp"];
       const name = (file && file.name) || "";
       const lower = name.toLowerCase();
-      if (!file || !allowed.some((ext) => lower.endsWith(ext))) {
+      const mimeType = String((file && file.type) || "").toLowerCase();
+      const isImageMime = ["image/jpeg", "image/png", "image/webp"].includes(mimeType);
+      if (!file || (!allowed.some((ext) => lower.endsWith(ext)) && !isImageMime)) {
         state.file = null;
         analyzeButton.disabled = true;
         fileMeta.textContent = "이미지 파일만 업로드할 수 있습니다.";
@@ -1053,16 +1263,41 @@
       previewWrap.hidden = false;
     }
 
+    function inferClipboardFileName(blob) {
+      const mimeType = String((blob && blob.type) || "").toLowerCase();
+      if (mimeType === "image/png") return "clipboard-image.png";
+      if (mimeType === "image/webp") return "clipboard-image.webp";
+      return "clipboard-image.jpg";
+    }
+
+    function trySetClipboardImage(event) {
+      const clipboardData = event && event.clipboardData;
+      if (!clipboardData || !clipboardData.items) return false;
+      for (const item of clipboardData.items) {
+        if (!item || item.kind !== "file" || !String(item.type || "").startsWith("image/")) {
+          continue;
+        }
+        const blob = item.getAsFile();
+        if (!blob) continue;
+        const file = new File([blob], inferClipboardFileName(blob), { type: blob.type || "image/png" });
+        setFile(file);
+        setSuccess("클립보드 이미지를 불러왔습니다. OCR 분석을 실행할 수 있습니다.");
+        return true;
+      }
+      return false;
+    }
+
     async function recommendByImage() {
       if (!state.file) return;
       setError("");
       setSuccess("");
-      setLoading(true, "OCR 분석 및 추천 생성 중...");
+      startLoadingProgress("image", "OCR 분석 및 추천 생성 중...");
       try {
         const formData = new FormData();
         formData.append("file", state.file);
         formData.append("top_k", String(defaultTopK));
         formData.append("candidate_limit", String(defaultCandidateLimit));
+        formData.append("llm_rerank", "true");
 
         const response = await fetch(`${getApiBase()}/api/recommend/by-image`, {
           method: "POST",
@@ -1082,9 +1317,10 @@
         showResponsePanels(data);
         setSuccess("이미지 분석이 완료되었습니다. 추출된 원료를 확인한 뒤 필요하면 수정해서 다시 추천받으세요.");
       } catch (error) {
+        cancelLoading();
         setError(buildErrorMessage(error));
       } finally {
-        setLoading(false);
+        finishLoading("이미지 분석이 완료되었습니다.");
       }
     }
 
@@ -1097,15 +1333,18 @@
       }
       setError("");
       setSuccess("");
-      setLoading(true, "수정한 원료 기준으로 추천 재생성 중...");
+      startLoadingProgress("ingredients", "수정한 원료 기준으로 추천 재생성 중...");
       try {
         const response = await fetch(`${getApiBase()}/api/recommend/by-ingredients`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             ingredients: state.editableIngredients,
+            product_name_candidate: (((state.imageResponse || {}).parsed || {}).product_name_candidate || ((state.ingredientResponse || {}).parsed || {}).product_name_candidate || ""),
+            base_trace_id: (((state.imageResponse || {}).trace_id) || ((state.ingredientResponse || {}).trace_id) || ""),
             top_k: defaultTopK,
             candidate_limit: defaultCandidateLimit,
+            llm_rerank: true,
           }),
         });
         if (!response.ok) {
@@ -1118,9 +1357,85 @@
         renderRecommendations(data);
         setSuccess("수정된 원료 기준 추천 결과입니다.");
       } catch (error) {
+        cancelLoading();
         setError(buildErrorMessage(error));
       } finally {
-        setLoading(false);
+        finishLoading("원료 기준 재추천이 완료되었습니다.");
+      }
+    }
+
+    async function recommendByImage() {
+      if (!state.file) return;
+      setError("");
+      setSuccess("");
+      startLoadingProgress("image", "OCR 분석 및 추천 생성 중...");
+      try {
+        const formData = new FormData();
+        formData.append("file", state.file);
+        formData.append("top_k", String(defaultTopK));
+        formData.append("candidate_limit", String(defaultCandidateLimit));
+        formData.append("llm_rerank", "true");
+
+        const response = await fetch(`${getApiBase()}/api/recommend/by-image`, {
+          method: "POST",
+          body: formData,
+        });
+        if (!response.ok) {
+          throw new Error(`이미지 분석 실패 (${response.status})`);
+        }
+        const data = await response.json();
+        state.imageResponse = data;
+        state.ingredientResponse = null;
+        state.originalIngredients = buildEditorIngredientSource(data);
+        state.editableIngredients = [...state.originalIngredients];
+        cleanIngredients();
+        syncDirtyState();
+        state.latestMode = "image";
+        showResponsePanels(data);
+        finishLoading("이미지 분석이 완료되었습니다.");
+        setSuccess("이미지 분석이 완료되었습니다. 추출된 원료를 확인한 뒤 필요하면 수정해서 다시 추천받으세요.");
+      } catch (error) {
+        cancelLoading();
+        setError(buildErrorMessage(error));
+      }
+    }
+
+    async function rerunWithEditedIngredients() {
+      cleanIngredients();
+      syncDirtyState();
+      if (!state.editableIngredients.length) {
+        setError("최소 1개 이상의 원료가 필요합니다.");
+        return;
+      }
+      setError("");
+      setSuccess("");
+      startLoadingProgress("ingredients", "수정한 원료 기준으로 추천 재생성 중...");
+      try {
+        const response = await fetch(`${getApiBase()}/api/recommend/by-ingredients`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ingredients: state.editableIngredients,
+            product_name_candidate: (((state.imageResponse || {}).parsed || {}).product_name_candidate || ((state.ingredientResponse || {}).parsed || {}).product_name_candidate || ""),
+            base_trace_id: (((state.imageResponse || {}).trace_id) || ((state.ingredientResponse || {}).trace_id) || ""),
+            top_k: defaultTopK,
+            candidate_limit: defaultCandidateLimit,
+            llm_rerank: true,
+          }),
+        });
+        if (!response.ok) {
+          throw new Error(`추론 실패 (${response.status})`);
+        }
+        const data = await response.json();
+        state.ingredientResponse = data;
+        state.latestMode = "ingredients";
+        renderResultPanel(data);
+        renderRecommendations(data);
+        finishLoading("원료 기준 재추천이 완료되었습니다.");
+        setSuccess("수정한 원료 기준 추천 결과입니다.");
+      } catch (error) {
+        cancelLoading();
+        setError(buildErrorMessage(error));
       }
     }
 
@@ -1168,6 +1483,15 @@
     fileInput.addEventListener("change", (event) => {
       const file = event.target.files && event.target.files[0];
       if (file) setFile(file);
+    });
+    document.addEventListener("paste", (event) => {
+      const activeTag = document.activeElement && document.activeElement.tagName;
+      if (activeTag === "INPUT" || activeTag === "TEXTAREA") {
+        return;
+      }
+      if (trySetClipboardImage(event)) {
+        event.preventDefault();
+      }
     });
     analyzeButton.addEventListener("click", recommendByImage);
     resetButton.addEventListener("click", resetAll);

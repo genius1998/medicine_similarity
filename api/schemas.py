@@ -45,11 +45,17 @@ class RecommendationItem(BaseModel):
     target_report_no: str
     product_name: str = ""
     target_product_name: str
+    target_product_main_category: str = ""
     similarity_score: float
     function_similarity_score: float
     core_match_score: float
     substitutability: str
     shared_ingredients: List[str]
+    target_primary_ingredients: List[str] = Field(default_factory=list)
+    target_secondary_ingredients: List[str] = Field(default_factory=list)
+    target_support_ingredients: List[str] = Field(default_factory=list)
+    target_all_ingredients: List[str] = Field(default_factory=list)
+    target_other_ingredients: List[str] = Field(default_factory=list)
     shared_categories: List[str]
     reason: str
     caution: str
@@ -72,20 +78,27 @@ class RecommendationResponse(BaseModel):
     base_product: RecommendationBaseProduct
     recommendations: List[RecommendationItem]
     cache_used: bool
+    llm_rerank_applied: bool = False
+    llm_rerank_error: str = ""
     execution_seconds: float
 
 
 class IngredientRecommendationRequest(BaseModel):
     ingredients: List[str] = Field(default_factory=list)
     raw_ingredients: str = ""
+    product_name_candidate: str = ""
+    base_trace_id: str = ""
+    review_notes: str = ""
     top_k: int = 10
     candidate_limit: int = 1000
+    llm_rerank: bool = False
 
 
 class OCRTextRecommendationRequest(BaseModel):
     ocr_text: str = Field(..., min_length=1)
     top_k: int = 10
     candidate_limit: int = 1000
+    llm_rerank: bool = False
 
 
 class ParsedOCRPayload(BaseModel):
@@ -176,7 +189,10 @@ class UploadRecommendationResponse(BaseModel):
     estimated_profile: EstimatedProfilePayload
     recommendations: List[RecommendationItem] = Field(default_factory=list)
     official_recommendations: List[RecommendationItem] = Field(default_factory=list)
+    uploaded_self_matches: List[RecommendationItem] = Field(default_factory=list)
     uploaded_similar_cases: List[RecommendationItem] = Field(default_factory=list)
+    llm_rerank_applied: bool = False
+    llm_rerank_error: str = ""
     execution_seconds: float = 0.0
     needs_user_review: bool = False
     review_message: str = ""

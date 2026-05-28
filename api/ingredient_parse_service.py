@@ -13,8 +13,8 @@ from api.ocr_text_sectionizer import sectionize_ocr_text
 
 PARSE_PROMPT_VERSION = "ingredient_parse_v2_sectionized"
 PARSE_SCHEMA_VERSION = "ingredient_parse_schema_v1"
-PARSE_NORMALIZER_VERSION = "ingredient_normalizer_v2"
-PARSE_SECTIONIZER_VERSION = "ocr_text_sectionizer_v1"
+PARSE_NORMALIZER_VERSION = "ingredient_normalizer_v5"
+PARSE_SECTIONIZER_VERSION = "ocr_text_sectionizer_v4"
 LLM_PARSE_CACHE_TABLE_NAME = "llm_parse_cache"
 
 
@@ -62,6 +62,14 @@ FUNCTIONAL_EXCEPTIONS = [
     "프락토올리고당",
     "이눌린",
     "치커리추출물",
+]
+
+EXPLICIT_EXCIPIENT_NORMALIZATION_RULES = [
+    ("\ud788\ub4dc\ub85d\uc2dc\ud504\ub85c\ud544\uba54\ud2f8\uc140\ub8f0\ub85c\uc2a4", "\ud788\ub4dc\ub85d\uc2dc\ud504\ub85c\ud544\uba54\ud2f8\uc140\ub8f0\ub85c\uc2a4"),
+    ("\uce74\ubcf5\uc2dc\uba54\ud2f8\uc140\ub8f0\ub85c\uc2a4\uce7c\uc298", "\uce74\ubcf5\uc2dc\uba54\ud2f8\uc140\ub8f0\ub85c\uc2a4\uce7c\uc298"),
+    ("\uce74\ubcf5\uc2dc\uba54\ud2f8\uc140\ub8f0\ub85c\uc2a4 \uce7c\uc298", "\uce74\ubcf5\uc2dc\uba54\ud2f8\uc140\ub8f0\ub85c\uc2a4\uce7c\uc298"),
+    ("\uc2a4\ud14c\uc544\ub9b0\uc0b0\uce7c\uc298", "\uc2a4\ud14c\uc544\ub9b0\uc0b0\uce7c\uc298"),
+    ("\uc2a4\ud14c\uc544\ub9b0\uc0b0 \uce7c\uc298", "\uc2a4\ud14c\uc544\ub9b0\uc0b0\uce7c\uc298"),
 ]
 
 PROBIOTIC_CANONICAL_KEYWORDS = [
@@ -117,6 +125,114 @@ SECTION_STOP_KEYWORDS = [
     "주의사항",
     "보관방법",
     "기준 및 규격",
+]
+
+INGREDIENT_HEADER_PREFIXES = [
+    "원재료명 및 함량",
+    "원료명 및 함량",
+    "원재료명",
+    "원료명",
+    "기능성원료",
+    "주원료",
+]
+
+INGREDIENT_CONTEXT_SKIP_LINES = {
+    "원재료명 및 함량",
+    "원료명 및 함량",
+    "원재료명",
+    "원료명",
+    "기능성원료",
+    "주원료",
+    "판매원",
+    "제조원",
+    "유통전문판매원",
+    "소재지",
+    "제품 상세 정보",
+}
+
+STRICT_INGREDIENT_START_KEYWORDS = [
+    "\uc6d0\ub8cc\uba85 \ubc0f \ud568\ub7c9",
+    "\uc6d0\uc7ac\ub8cc\uba85 \ubc0f \ud568\ub7c9",
+    "\uc6d0\ub8cc\uba85",
+    "\uc6d0\uc7ac\ub8cc\uba85",
+    "\uc6d0\uc7ac\ub8cc",
+    "\uc6d0\ub8cc",
+]
+
+STRICT_INGREDIENT_STOP_KEYWORDS = [
+    "\uc12d\ucde8\ub7c9",
+    "\uc12d\ucde8\ubc29\ubc95",
+    "\uc12d\ucde8 \uc2dc \uc8fc\uc758\uc0ac\ud56d",
+    "\uc12d\ucde8\uc2dc \uc8fc\uc758\uc0ac\ud56d",
+    "\ubcf4\uad00\ubc29\ubc95",
+    "\uc601\uc591\uc815\ubcf4",
+    "\uc601\uc591\u00b7\uae30\ub2a5\uc815\ubcf4",
+    "\uae30\ub2a5\uc815\ubcf4",
+    "\uac74\uac15\uc815\ubcf4",
+    "\uc81c\ud488 \uc0c1\uc138 \uc815\ubcf4",
+    "\uc18c\ube44\uc790\uc0c1\ub2f4",
+    "\uc81c\uc870\uc6d0",
+    "\ubc18\ud488",
+    "\ubcf8 \uc81c\ud488\uc740",
+    "\uc774\uc0c1\uc0ac\ub840",
+    "\uc54c\ub808\ub974\uae30",
+    "\uc8fc\uc758\uc0ac\ud56d",
+]
+
+NON_INGREDIENT_EXACT_TOKENS = {
+    "5040",
+    "3020",
+    "100",
+    "200mg",
+    "500mg",
+    "1g",
+    "0%",
+    "kcal",
+    "cfu",
+    "concentration",
+    "mm",
+    "\ubd84\uc11d",
+    "\ub370\uc774\ud130\ubca0\uc774\uc2a4 \uad6c\ucd95",
+    "\ud3ec\ubbac\ub7ec \uad6c\ucd95",
+    "\uc0ac\uc6a9\ud558\uc600\uc2b5\ub2c8\ub2e4",
+    "\uc5ed\ud560",
+    "\uac74\uac15\uc815\ubcf4",
+    "\ucd9c\ucc98",
+    "\ucd94\ucc9c\ud569\ub2c8\ub2e4",
+    "\uc774\ub7f0 \ubd84",
+    "\uc12d\ucde8\ud558\uc2ed\uc2dc\uc624",
+    "\uc8fc\uc758\ud558\uc2ed\uc2dc\uc624",
+}
+
+NON_INGREDIENT_SUBSTRINGS = [
+    "\uc720\uc0b0\uade0 \uc885\ub958 \ubd84\uc11d",
+    "\ub370\uc774\ud130\ubca0\uc774\uc2a4 \uad6c\ucd95",
+    "concentration",
+    "\ucd1d \ub2e8\uc1c4\uc9c0\ubc29\uc0b0",
+    "scfa",
+    "\uadf8\ub798\ud504",
+    "\ud45c",
+    "\uac74\uac15\uc815\ubcf4",
+    "\uc81c\ud488 \uc0c1\uc138 \uc815\ubcf4",
+    "\uc18c\ube44\uc790\uc0c1\ub2f4",
+    "\uc12d\ucde8 \uc2dc \uc8fc\uc758\uc0ac\ud56d",
+]
+
+INGREDIENT_SECTION_STOP_TOKENS = [
+    "1일 ",
+    "섭취방법",
+    "섭취 시",
+    "섭취시",
+    "주의사항",
+    "보관방법",
+    "반품 및 교환처",
+    "소비자상담실",
+    "이상사례",
+    "질병의 예방",
+    "영·유아",
+    "어린이",
+    "임산부",
+    "수유부",
 ]
 
 ALLERGEN_NOTICE_PATTERNS = [
@@ -278,6 +394,16 @@ def _contains_keyword(text: str, keyword: str) -> bool:
     return target in normalized
 
 
+def _match_explicit_excipient_normalization(name: str) -> str:
+    collapsed = normalize_lookup_key(name)
+    if not collapsed:
+        return ""
+    for token, normalized_name in EXPLICIT_EXCIPIENT_NORMALIZATION_RULES:
+        if normalize_lookup_key(token) in collapsed:
+            return normalized_name
+    return ""
+
+
 def _looks_like_functional_premix(name: str) -> bool:
     normalized = normalize_lookup_key(name)
     if "혼합제제" not in normalized:
@@ -308,6 +434,8 @@ def is_excipient(name: str) -> bool:
         return False
     if _looks_like_functional_premix(name):
         return False
+    if _match_explicit_excipient_normalization(name):
+        return True
     if any(normalize_lookup_key(item) in normalized for item in FUNCTIONAL_EXCEPTIONS):
         return False
     return any(normalize_lookup_key(item) in normalized for item in EXCIPIENT_KEYWORDS)
@@ -384,6 +512,10 @@ def canonicalize_ingredient_for_matching(name: str) -> str:
 
     if _is_probiotic_strain_text(stripped):
         return "프로바이오틱스"
+
+    explicit_excipient_name = _match_explicit_excipient_normalization(stripped)
+    if explicit_excipient_name:
+        return explicit_excipient_name
 
     ordered_rules = [
         ("진세노사이드", "진세노사이드"),
@@ -554,6 +686,8 @@ def _build_display_name(raw: str, normalized: str) -> str:
 def classify_ingredient_role(name: str) -> str:
     if is_excipient(name):
         return "excipient"
+    if _looks_like_functional_premix(name):
+        return "primary"
 
     normalized = canonicalize_ingredient_for_matching(name)
     collapsed = normalize_lookup_key(normalized)
@@ -606,24 +740,305 @@ def classify_ingredient_role(name: str) -> str:
     return "secondary"
 
 
+def _strip_ingredient_header_prefix(text: str) -> str:
+    value = str(text or "")
+    if not value:
+        return ""
+    pattern = r"^(?:%s)\s*[:：]?\s*" % "|".join(re.escape(item) for item in INGREDIENT_HEADER_PREFIXES)
+    return re.sub(pattern, "", value, flags=re.IGNORECASE).strip()
+
+
+def _trim_inline_ingredient_noise(text: str) -> str:
+    value = normalize_spacing(text)
+    if not value:
+        return ""
+
+    value = re.sub(
+        r"^(?:\d+\s*정\s*)?[\d,]+(?:\.\d+)?\s*(?:mg|g|kg|ml|mcg|μg|ug)\s*중\s*",
+        "",
+        value,
+        flags=re.IGNORECASE,
+    )
+    value = re.sub(r"^\d+\s*정\s+", "", value, flags=re.IGNORECASE)
+    value = normalize_spacing(value)
+
+    allergen_match = re.search(r"\s+[가-힣A-Za-z]{1,12}\s+함유$", value)
+    if allergen_match:
+        value = normalize_spacing(value[: allergen_match.start()])
+
+    for token in INGREDIENT_SECTION_STOP_TOKENS:
+        marker = value.find(token)
+        if marker == 0:
+            return ""
+        if marker > 0:
+            value = normalize_spacing(value[:marker])
+            break
+    return value
+
+
+def _trim_by_strict_stop_keywords(text: str) -> str:
+    value = normalize_spacing(text)
+    if not value:
+        return ""
+    for token in STRICT_INGREDIENT_STOP_KEYWORDS:
+        marker = value.find(token)
+        if marker == 0:
+            return ""
+        if marker > 0:
+            value = normalize_spacing(value[:marker])
+            break
+    return value
+
+
+def _is_numeric_or_unit_only_token(text: str) -> bool:
+    normalized = normalize_lookup_key(text)
+    if not normalized:
+        return True
+    if normalized in {normalize_lookup_key(item) for item in NON_INGREDIENT_EXACT_TOKENS}:
+        return True
+    if re.fullmatch(r"\d+(?:\.\d+)?(?:mg|g|kg|ml|l|kcal|cfu|mm|%)?", normalized):
+        return True
+    if re.fullmatch(r"(?:mg|g|kg|ml|l|kcal|cfu|mm|%)", normalized):
+        return True
+    return False
+
+
+def _looks_like_sentence_style_token(text: str) -> bool:
+    value = normalize_spacing(text)
+    if not value:
+        return False
+    prefix_window = normalize_lookup_key(value[:24])
+    ingredient_like_prefixes = [
+        "\ud64d\uc0bc",
+        "\ubc00\ud06c\uc528\uc2ac",
+        "\uc2dd\ubb3c\ud63c\ud569",
+        "\ucd94\ucd9c\ubb3c",
+        "\ub18d\ucd95\uc561",
+        "\ubd84\ub9d0",
+        "\ube44\ud0c0\ubbfc",
+        "\uc720\uc0b0\uade0",
+        "\ud504\ub85c\ubc14\uc774\uc624\ud2f1\uc2a4",
+        "\uc624\uba54\uac00",
+        "\ub8e8\ud14c\uc778",
+        "\ucf58\ub4dc\ub85c\uc774\uce5c",
+        "\uc140\ub808\ub284",
+        "\uc544\uc5f0",
+        "\uce7c\uc298",
+        "\uac15\ud669",
+        "\ubc14\ub098\ubc14",
+    ]
+    if "(" in value and ")" in value and "," in value and any(normalize_lookup_key(token) in prefix_window for token in ingredient_like_prefixes):
+        return False
+    if len(value) < 40:
+        return False
+    punctuation_count = sum(value.count(char) for char in [",", ".", ":", ";"])
+    sentence_marker_count = sum(value.count(token) for token in ["입니다", "합니다", "있음", "도움", "필요", "유지", "주의", "섭취", "구성"])
+    return punctuation_count >= 2 or sentence_marker_count >= 2
+
+
+def _is_obvious_non_ingredient_token(text: str) -> bool:
+    value = normalize_spacing(text)
+    if not value:
+        return True
+    normalized = normalize_lookup_key(value)
+    exact_tokens = {normalize_lookup_key(item) for item in NON_INGREDIENT_EXACT_TOKENS}
+    if normalized in exact_tokens:
+        return True
+    if _is_numeric_or_unit_only_token(value):
+        return True
+    if any(normalize_lookup_key(token) in normalized for token in NON_INGREDIENT_SUBSTRINGS):
+        return True
+    if _looks_like_sentence_style_token(value):
+        return True
+    return False
+
+
+def _strip_known_ingredient_start_prefix(text: str) -> str:
+    pattern = r"^(?:%s)\s*[:：]?\s*" % "|".join(re.escape(item) for item in STRICT_INGREDIENT_START_KEYWORDS)
+    return re.sub(pattern, "", str(text or ""), flags=re.IGNORECASE).strip()
+
+
+def _extract_explicit_ingredient_window(text: str) -> str:
+    source = str(text or "").replace("\r", "\n")
+    if not source.strip():
+        return ""
+
+    lines = _join_fragmented_ingredient_lines([normalize_spacing(line) for line in source.splitlines() if normalize_spacing(line)])
+    collecting = False
+    collected: List[str] = []
+
+    for line in lines:
+        if not line or re.fullmatch(r"[-=+•·●○]+", line):
+            continue
+        normalized_line = normalize_lookup_key(line)
+        has_start = any(normalize_lookup_key(keyword) in normalized_line for keyword in STRICT_INGREDIENT_START_KEYWORDS)
+        if not collecting:
+            if not has_start:
+                continue
+            collecting = True
+            line = _strip_known_ingredient_start_prefix(line)
+
+        line = _trim_by_strict_stop_keywords(line)
+        line = _trim_inline_ingredient_noise(line)
+        line = _strip_known_ingredient_start_prefix(line)
+        line = line.strip(" -:;")
+
+        if has_start and not line:
+            continue
+        if not line:
+            break
+        if _is_obvious_non_ingredient_token(line):
+            continue
+
+        collected.append(line)
+
+        normalized_line = normalize_lookup_key(line)
+        if any(normalize_lookup_key(keyword) in normalized_line for keyword in STRICT_INGREDIENT_STOP_KEYWORDS):
+            break
+
+    candidate = "\n".join(collected).strip()
+    if not candidate:
+        return ""
+    rough_parts = [
+        normalize_spacing(part).strip(" -:;")
+        for part in re.split(r"[,\n;]+", candidate)
+        if normalize_spacing(part).strip(" -:;")
+    ]
+    useful_parts = [part for part in rough_parts if not _is_obvious_non_ingredient_token(part)]
+    return candidate if len(useful_parts) >= 2 else ""
+
+
+def _join_fragmented_ingredient_lines(lines: List[str]) -> List[str]:
+    joined: List[str] = []
+    pending_prefix = ""
+    for raw_line in lines:
+        line = normalize_spacing(raw_line)
+        if not line:
+            continue
+        if pending_prefix:
+            line = pending_prefix + line
+            pending_prefix = ""
+        if re.fullmatch(r"[A-Za-z가-힣0-9]{1,2}", line):
+            pending_prefix = line
+            continue
+        joined.append(line)
+    if pending_prefix:
+        if joined:
+            joined[-1] = normalize_spacing(joined[-1] + pending_prefix)
+        else:
+            joined.append(pending_prefix)
+    return joined
+
+
+def _extract_ingredient_section_candidate(text: str) -> str:
+    source = str(text or "").replace("\r", "\n")
+    if not source.strip():
+        return ""
+
+    strict_candidate = _extract_explicit_ingredient_window(source)
+    if strict_candidate:
+        return strict_candidate
+
+    collected: List[str] = []
+    collecting = False
+    for raw_line in source.splitlines():
+        line = normalize_spacing(raw_line)
+        if not line:
+            continue
+        if line in INGREDIENT_CONTEXT_SKIP_LINES or re.fullmatch(r"[-•·ㆍ]+", line):
+            continue
+        line = _strip_ingredient_header_prefix(line)
+        line = _trim_by_strict_stop_keywords(line)
+        if not line:
+            continue
+
+        stop_in_line = any(token in line for token in INGREDIENT_SECTION_STOP_TOKENS)
+        line = _trim_inline_ingredient_noise(line)
+        if stop_in_line and collecting and not line:
+            break
+        if not line:
+            continue
+
+        if not collecting:
+            if "," in line or ";" in line:
+                collecting = True
+            else:
+                continue
+
+        if _is_obvious_non_ingredient_token(line):
+            continue
+        collected.append(line)
+        if stop_in_line:
+            break
+
+    if not collected:
+        return ""
+    return "\n".join(_join_fragmented_ingredient_lines(collected)).strip()
+
+
 def split_ingredients(ingredient_text: str) -> List[str]:
-    text = normalize_spacing(ingredient_text)
-    if not text:
+    text = str(ingredient_text or "").replace("\r", "\n")
+    if not text.strip():
         return []
 
-    text = re.sub(r"^(원재료명|원료명|기능성원료)\s*[:：]\s*", "", text)
-    separators = ["\n", ";", "·", "ㆍ"]
-    for sep in separators:
-        text = text.replace(sep, ",")
+    candidate = _extract_ingredient_section_candidate(text) or text
+    candidate = candidate.replace(";", "\n").replace("·", "\n").replace("ㆍ", "\n")
+    candidate_lines = _join_fragmented_ingredient_lines(candidate.splitlines())
+    candidate = "\n".join(candidate_lines).strip()
 
-    parts = []
+    parts: List[str] = []
     seen = set()
-    for token in text.split(","):
-        cleaned = normalize_spacing(token)
-        if cleaned and cleaned not in seen:
-            seen.add(cleaned)
-            parts.append(cleaned)
+    current: List[str] = []
+    depth = 0
+
+    for index, char in enumerate(candidate):
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth = max(0, depth - 1)
+
+        if depth == 0 and char == ",":
+            prev_char = candidate[index - 1] if index > 0 else ""
+            next_char = candidate[index + 1] if index + 1 < len(candidate) else ""
+            if prev_char.isdigit() and next_char.isdigit():
+                current.append(char)
+                continue
+
+        if depth == 0 and char in {",", "\n"}:
+            token = normalize_spacing("".join(current))
+            current = []
+            token = _trim_inline_ingredient_noise(_strip_ingredient_header_prefix(token))
+            token = token.strip(" -:;")
+            if token and not _is_obvious_non_ingredient_token(token) and token not in INGREDIENT_CONTEXT_SKIP_LINES and token not in seen:
+                seen.add(token)
+                parts.append(token)
+            continue
+        current.append(char)
+
+    token = normalize_spacing("".join(current))
+    token = _trim_inline_ingredient_noise(_strip_ingredient_header_prefix(token))
+    token = token.strip(" -:;")
+    if token and not _is_obvious_non_ingredient_token(token) and token not in INGREDIENT_CONTEXT_SKIP_LINES and token not in seen:
+        seen.add(token)
+        parts.append(token)
     return parts
+
+
+def _looks_like_ingredient_section_text(text: str) -> bool:
+    candidate = normalize_spacing(text)
+    if len(re.sub(r"\s+", "", candidate)) < 20:
+        return False
+    parts = split_ingredients(candidate)
+    return len(parts) >= 2
+
+
+def _ingredient_payload_score(payload: Dict[str, Any]) -> int:
+    if not isinstance(payload, dict):
+        return 0
+    raw_count = len([item for item in payload.get("raw_ingredients", []) or [] if normalize_spacing(str(item or ""))])
+    object_count = len([item for item in payload.get("ingredient_objects", []) or [] if normalize_spacing(str((item or {}).get("raw", "")))])
+    section_count = len(split_ingredients(str(payload.get("ingredient_section_text", "") or "")))
+    return max(raw_count, object_count, section_count)
 
 
 def _extract_first_match(text: str, patterns: List[str]) -> str:
@@ -682,12 +1097,19 @@ def _build_sectionized_context(raw_text: str) -> Dict[str, Any]:
 
 
 def _derive_ingredient_section_text(source_text: str, sections: Dict[str, Any]) -> str:
-    ingredient_area = normalize_spacing(str(sections.get("ingredient_area", "") or ""))
+    ingredient_area = str(sections.get("ingredient_area", "") or "")
     functional_area = str(sections.get("functional_info_area", "") or "")
+    company_area = str(sections.get("company_area", "") or "")
     source_text = str(source_text or "")
 
-    if ingredient_area and len(re.sub(r"\s+", "", ingredient_area)) >= 20 and "," in ingredient_area:
-        return ingredient_area
+    for candidate_source in [ingredient_area, source_text, functional_area, company_area]:
+        strict_candidate = _extract_explicit_ingredient_window(candidate_source)
+        if _looks_like_ingredient_section_text(strict_candidate):
+            return strict_candidate
+
+    ingredient_candidate = _extract_ingredient_section_candidate(ingredient_area)
+    if _looks_like_ingredient_section_text(ingredient_candidate):
+        return ingredient_candidate
 
     if functional_area:
         lines = [line.strip() for line in functional_area.splitlines() if line.strip()]
@@ -705,15 +1127,20 @@ def _derive_ingredient_section_text(source_text: str, sections: Dict[str, Any]) 
                 if any(token in normalized_line for token in ["제품명", "제품의유형", "내용량", "눈 건강&영양소", "건강기능식품 /"]):
                     continue
                 collected.append(normalized_line)
-        candidate = normalize_spacing(" ".join(collected))
-        if len(re.sub(r"\s+", "", candidate)) >= 20 and "," in candidate:
+        candidate = _extract_ingredient_section_candidate("\n".join(collected))
+        if _looks_like_ingredient_section_text(candidate):
             return candidate
 
-    extracted = _extract_first_match(source_text, INGREDIENT_SECTION_PATTERNS)
-    if extracted:
-        return extracted
+    company_candidate = _extract_ingredient_section_candidate(company_area)
+    if _looks_like_ingredient_section_text(company_candidate):
+        return company_candidate
 
-    return ingredient_area
+    extracted = _extract_first_match(source_text, INGREDIENT_SECTION_PATTERNS)
+    extracted_candidate = _extract_ingredient_section_candidate(extracted)
+    if _looks_like_ingredient_section_text(extracted_candidate):
+        return extracted_candidate
+
+    return ingredient_candidate or extracted_candidate or normalize_spacing(ingredient_area)
 
 
 def _validate_and_repair_parsed_result(parsed: Dict[str, Any]) -> Dict[str, Any]:
@@ -738,6 +1165,16 @@ def _validate_and_repair_parsed_result(parsed: Dict[str, Any]) -> Dict[str, Any]
             rebuilt = dict(item or {})
             raw = normalize_spacing(rebuilt.get("raw", ""))
             display_name = normalize_spacing(rebuilt.get("display_name", raw))
+            if _is_obvious_non_ingredient_token(raw or display_name):
+                quality_warnings.append(
+                    {
+                        "code": "ingredient_section_unclear",
+                        "message": f"원재료 외 문구로 보이는 토큰을 제외했습니다: {display_name or raw}",
+                        "severity": "warning",
+                    }
+                )
+                corrected_fields.append("ingredient_objects.filtered_non_ingredient")
+                continue
             normalized = canonicalize_ingredient_for_matching(rebuilt.get("normalized_for_matching") or raw or display_name)
             standard_name = normalize_spacing(rebuilt.get("standard_name", normalized))
             evidence_text = normalize_spacing(rebuilt.get("evidence_text", ""))
@@ -852,7 +1289,7 @@ def _validate_and_repair_parsed_result(parsed: Dict[str, Any]) -> Dict[str, Any]
                 [
                     normalize_spacing(item.get("raw", ""))
                     for item in rebuilt_objects
-                    if str(item.get("role", "")) != "excipient" and normalize_spacing(item.get("raw", ""))
+                    if normalize_spacing(item.get("raw", ""))
                 ]
             )
         )
@@ -1143,6 +1580,7 @@ def _build_parse_cache_key(raw_text: str) -> str:
         "prompt_version": PARSE_PROMPT_VERSION,
         "schema_version": PARSE_SCHEMA_VERSION,
         "normalizer_version": PARSE_NORMALIZER_VERSION,
+        "sectionizer_version": PARSE_SECTIONIZER_VERSION,
     }
     return hashlib.sha1(json.dumps(source, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
@@ -1388,22 +1826,25 @@ def parse_ingredients_from_ocr_text(raw_text: str, sqlite_path: Path | None = No
         ]
         llm_result = {}
 
+    ingredient_source = llm_result if _ingredient_payload_score(llm_result) >= _ingredient_payload_score(fallback) else fallback
     merged = {
         "product_name_candidate": str(llm_result.get("product_name_candidate") or fallback.get("product_name_candidate") or ""),
         "raw_text": str(raw_text or ""),
         "source_text": str(raw_text or ""),
-        "ingredient_section_text": str(llm_result.get("ingredient_section_text") or fallback.get("ingredient_section_text") or ""),
-        "functional_ingredient_candidates": list(llm_result.get("functional_ingredient_candidates") or fallback.get("functional_ingredient_candidates") or []),
-        "raw_ingredients": list(llm_result.get("raw_ingredients") or fallback.get("raw_ingredients") or []),
-        "normalized_ingredients": list(llm_result.get("normalized_ingredients") or fallback.get("normalized_ingredients") or []),
-        "ingredient_objects": list(llm_result.get("ingredient_objects") or fallback.get("ingredient_objects") or []),
-        "primary_ingredients": list(llm_result.get("primary_ingredients") or fallback.get("primary_ingredients") or []),
-        "primary_ingredients_normalized": list(
-            llm_result.get("primary_ingredients_normalized") or fallback.get("primary_ingredients_normalized") or []
+        "ingredient_section_text": str(ingredient_source.get("ingredient_section_text") or fallback.get("ingredient_section_text") or ""),
+        "functional_ingredient_candidates": list(
+            ingredient_source.get("functional_ingredient_candidates") or fallback.get("functional_ingredient_candidates") or []
         ),
-        "excluded_ingredients": list(llm_result.get("excluded_ingredients") or fallback.get("excluded_ingredients") or []),
+        "raw_ingredients": list(ingredient_source.get("raw_ingredients") or fallback.get("raw_ingredients") or []),
+        "normalized_ingredients": list(ingredient_source.get("normalized_ingredients") or fallback.get("normalized_ingredients") or []),
+        "ingredient_objects": list(ingredient_source.get("ingredient_objects") or fallback.get("ingredient_objects") or []),
+        "primary_ingredients": list(ingredient_source.get("primary_ingredients") or fallback.get("primary_ingredients") or []),
+        "primary_ingredients_normalized": list(
+            ingredient_source.get("primary_ingredients_normalized") or fallback.get("primary_ingredients_normalized") or []
+        ),
+        "excluded_ingredients": list(ingredient_source.get("excluded_ingredients") or fallback.get("excluded_ingredients") or []),
         "excluded_ingredient_objects": list(
-            llm_result.get("excluded_ingredient_objects") or fallback.get("excluded_ingredient_objects") or []
+            ingredient_source.get("excluded_ingredient_objects") or fallback.get("excluded_ingredient_objects") or []
         ),
         "quality_warnings": _normalize_quality_warnings(llm_result.get("quality_warnings") or fallback.get("quality_warnings") or []),
         "nutrition_or_active_components": list(llm_result.get("nutrition_or_active_components") or []),
@@ -1415,7 +1856,15 @@ def parse_ingredients_from_ocr_text(raw_text: str, sqlite_path: Path | None = No
         "sectionized_text_for_llm": str(llm_result.get("sectionized_text_for_llm") or fallback.get("sectionized_text_for_llm") or section_context.get("llm_text") or ""),
     }
 
-    if not merged["ingredient_objects"]:
+    if not merged["raw_ingredients"] and merged["ingredient_section_text"]:
+        merged["raw_ingredients"] = split_ingredients(merged["ingredient_section_text"])
+
+    object_raws = [
+        normalize_spacing(str((item or {}).get("raw", "")))
+        for item in merged.get("ingredient_objects", []) or []
+        if normalize_spacing(str((item or {}).get("raw", "")))
+    ]
+    if not merged["ingredient_objects"] or len(set(object_raws)) < len(set(merged["raw_ingredients"])):
         merged["ingredient_objects"] = _build_ingredient_objects(merged["raw_ingredients"])
 
     normalized_ingredients: List[str] = []
