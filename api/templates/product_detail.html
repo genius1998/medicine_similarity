@@ -350,6 +350,39 @@
       return items.map((item) => `<span class="chip">${escapeHtml(item)}</span>`).join("");
     }
 
+    function renderIngredientDbMatchStatusTable(items) {
+      const rows = Array.isArray(items) ? items : [];
+      if (!rows.length) {
+        return '<div class="empty-panel">기준 원료별 DB 매칭 상태 정보가 없습니다.</div>';
+      }
+      return `
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>원료</th>
+                <th>역할</th>
+                <th>DB 기능성원료 여부</th>
+                <th>매칭 원료</th>
+                <th>relation</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.map((item) => `
+                <tr>
+                  <td>${escapeHtml(item.display_name || item.raw_ingredient || "-")}</td>
+                  <td>${escapeHtml(item.input_role || "-")}</td>
+                  <td>${item.is_functional_match ? '<span class="sub-badge high">매칭됨</span>' : '<span class="sub-badge low">비매칭</span>'}</td>
+                  <td>${escapeHtml(item.functional_ingredient_name || "-")}</td>
+                  <td>${escapeHtml(item.relation_type || "-")}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
     function makeDomId(value) {
       return String(value || "")
         .toLowerCase()
@@ -448,6 +481,10 @@
       html.push(`<div class="detail-block"><div class="label">보조 기능성 원료</div><div class="value chip-row">${profile ? renderChips(profile.secondary_ingredients) : '<span class="chip gray">없음</span>'}</div></div>`);
       html.push(`<div class="detail-block"><div class="label">지원 성분</div><div class="value chip-row">${profile ? renderChips(profile.support_ingredients) : '<span class="chip gray">없음</span>'}</div></div>`);
       html.push(`<div class="detail-block"><div class="label">원재료</div><div class="value">${escapeHtml(detail.raw_ingredients || "-")}</div></div>`);
+      html.push('</div>');
+      html.push('<div class="detail-block" style="margin-top:8px;">');
+      html.push('<div class="label">유사도 계산 기준 원료별 DB 매칭 상태</div>');
+      html.push(`<div class="value">${renderIngredientDbMatchStatusTable(profile ? profile.ingredient_db_match_statuses : [])}</div>`);
       html.push('</div>');
       html.push('</section>');
       html.push('</div>');

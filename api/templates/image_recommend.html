@@ -919,6 +919,41 @@
       return items.map((item) => `<span class="chip ${className}">${escapeHtml(item)}</span>`).join("");
     }
 
+    function renderIngredientDbMatchStatusTable(items) {
+      const rows = safeArray(items);
+      if (!rows.length) {
+        return '<div class="empty-panel">원료별 기능성원료 DB 매칭 상태가 없습니다.</div>';
+      }
+      return `
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>원료</th>
+                <th>정규화</th>
+                <th>역할</th>
+                <th>DB 기능성원료 여부</th>
+                <th>매칭 원료</th>
+                <th>relation</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.map((item) => `
+                <tr>
+                  <td>${escapeHtml(item.display_name || item.raw_ingredient || "-")}</td>
+                  <td>${escapeHtml(item.normalized_for_matching || "-")}</td>
+                  <td>${escapeHtml(item.input_role || "-")}</td>
+                  <td>${item.is_functional_match ? '<span class="sub-badge high">매칭됨</span>' : '<span class="sub-badge low">비매칭</span>'}</td>
+                  <td>${escapeHtml(item.functional_ingredient_name || "-")}</td>
+                  <td>${escapeHtml(item.relation_type || "-")}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
     function badgeClass(value) {
       const label = String(value || "");
       if (label.includes("높")) return "high";
@@ -983,6 +1018,10 @@
       html.push(`<div class="detail-block"><div class="label">주요 원료</div><div class="value chip-row">${renderChips(safeArray(estimated.primary_ingredients), "small")}</div></div>`);
       html.push(`<div class="detail-block"><div class="label">정규화 주요 원료</div><div class="value chip-row">${renderChips(safeArray(parsed.primary_ingredients_normalized), "small")}</div></div>`);
       html.push(`<div class="detail-block"><div class="label">추출 원료 목록</div><div class="value chip-row">${renderChips(safeArray(parsed.normalized_ingredients), "small")}</div></div>`);
+      html.push('</div>');
+      html.push('<div class="detail-block" style="margin-top:8px;">');
+      html.push('<div class="label">원료별 기능성원료 DB 매칭 상태</div>');
+      html.push(`<div class="value">${renderIngredientDbMatchStatusTable(response.ingredient_db_match_statuses)}</div>`);
       html.push('</div>');
 
       if (criticalWarnings.length) {

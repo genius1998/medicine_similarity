@@ -35,6 +35,7 @@ class ProductProfileResponse(BaseModel):
     primary_ingredients: List[str]
     secondary_ingredients: List[str]
     support_ingredients: List[str]
+    ingredient_db_match_statuses: List[Dict[str, Any]] = Field(default_factory=list)
     confidence: Optional[float] = None
     notes: Optional[str] = None
 
@@ -186,6 +187,7 @@ class UploadRecommendationResponse(BaseModel):
     ocr: Optional[OCRPayload] = None
     parsed: ParsedOCRPayload
     detected_functional_ingredients: List[DetectedFunctionalIngredient] = Field(default_factory=list)
+    ingredient_db_match_statuses: List[Dict[str, Any]] = Field(default_factory=list)
     estimated_profile: EstimatedProfilePayload
     recommendations: List[RecommendationItem] = Field(default_factory=list)
     official_recommendations: List[RecommendationItem] = Field(default_factory=list)

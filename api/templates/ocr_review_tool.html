@@ -413,6 +413,38 @@
       `;
     }
 
+    function renderIngredientDbMatchStatuses(items) {
+      if (!items.length) {
+        return `<div class="empty">원료별 DB 매칭 상태가 없습니다.</div>`;
+      }
+      return `
+        <table class="summary-table">
+          <thead>
+            <tr>
+              <th>원료</th>
+              <th>정규화</th>
+              <th>역할</th>
+              <th>기능성원료 여부</th>
+              <th>매칭 원료</th>
+              <th>relation</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${items.map((item) => `
+              <tr>
+                <td>${escapeHtml(item.display_name || item.raw_ingredient || "-")}</td>
+                <td>${escapeHtml(item.normalized_for_matching || "-")}</td>
+                <td>${escapeHtml(item.input_role || "-")}</td>
+                <td>${item.is_functional_match ? "매칭됨" : "비매칭"}</td>
+                <td>${escapeHtml(item.functional_ingredient_name || "-")}</td>
+                <td>${escapeHtml(item.relation_type || "-")}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      `;
+    }
+
     function setFile(file) {
       const allowed = [".jpg", ".jpeg", ".png", ".webp"];
       const name = (file && file.name) || "";
@@ -578,7 +610,18 @@
         ]);
         ocrRawTextEl.textContent = ocr.raw_text || "";
         parsedBoxEl.innerHTML = renderParsedIngredients(parsed);
-        matchedBoxEl.innerHTML = renderMatchedIngredients(safeArray(data.detected_functional_ingredients));
+        matchedBoxEl.innerHTML = `
+          <div class="stack">
+            <div>
+              <div class="hint-text" style="margin-bottom:6px;">원료별 DB 기능성원료 매칭 상태</div>
+              ${renderIngredientDbMatchStatuses(safeArray(data.ingredient_db_match_statuses))}
+            </div>
+            <div>
+              <div class="hint-text" style="margin-bottom:6px;">최종 매칭 원료</div>
+              ${renderMatchedIngredients(safeArray(data.detected_functional_ingredients))}
+            </div>
+          </div>
+        `;
         finishLoading("OCR 검수 결과 정리가 완료되었습니다.");
       } catch (error) {
         const message = String(error.message || error);

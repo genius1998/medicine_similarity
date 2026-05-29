@@ -2744,6 +2744,60 @@ class UploadRecommendationService:
             results.append(match)
         return results
 
+    def build_ingredient_db_match_statuses(
+        self,
+        ingredient_objects: List[dict],
+        matched_ingredients: Optional[List[dict]] = None,
+    ) -> List[dict]:
+        matches = matched_ingredients if matched_ingredients is not None else self.match_raw_ingredients_to_functional_ingredients(ingredient_objects)
+        best_match_by_key: Dict[str, dict] = {}
+        for match in matches:
+            candidate_keys = {
+                normalize_lookup_key(match.get("normalized_for_matching", "")),
+                normalize_lookup_key(match.get("display_name", "")),
+                normalize_lookup_key(match.get("raw_input", "")),
+                normalize_lookup_key(match.get("raw_ingredient", "")),
+            }
+            candidate_keys.discard("")
+            for key in candidate_keys:
+                existing = best_match_by_key.get(key)
+                if existing is None or float(match.get("confidence", 0.0) or 0.0) > float(existing.get("confidence", 0.0) or 0.0):
+                    best_match_by_key[key] = match
+
+        statuses: List[dict] = []
+        for item in ingredient_objects:
+            raw_value = str(item.get("raw", "") or "").strip()
+            display_value = str(item.get("display_name", raw_value) or raw_value).strip()
+            normalized_value = str(item.get("normalized_for_matching", "") or "").strip()
+            input_role = str(item.get("role", "") or "").strip()
+            category_hint = str(item.get("category_hint", "") or "").strip()
+            keys = [
+                normalize_lookup_key(normalized_value),
+                normalize_lookup_key(display_value),
+                normalize_lookup_key(raw_value),
+            ]
+            match = next((best_match_by_key[key] for key in keys if key and key in best_match_by_key), None)
+            category_row = dict(match.get("category_row", {}) or {}) if match else {}
+            statuses.append(
+                {
+                    "display_name": display_value or raw_value or normalized_value,
+                    "raw_ingredient": raw_value or display_value or normalized_value,
+                    "normalized_for_matching": normalized_value,
+                    "input_role": input_role,
+                    "category_hint": category_hint,
+                    "is_functional_match": bool(match),
+                    "functional_ingredient_name": str(match.get("functional_ingredient_name", "") or "") if match else "",
+                    "relation_type": str(match.get("relation_type", "") or "") if match else "",
+                    "confidence": float(match.get("confidence", 0.0) or 0.0) if match else 0.0,
+                    "category_main": str(category_row.get("category_main", "") or ""),
+                    "category_sub": str(category_row.get("category_sub", "") or ""),
+                    "function_text": str(category_row.get("function_text", "") or ""),
+                    "claim_text": str(category_row.get("claim_text", "") or ""),
+                    "match_source": str(match.get("match_source", "") or "") if match else "",
+                }
+            )
+        return statuses
+
     def build_temp_product_vector_from_ingredients(
         self,
         ingredient_objects: List[dict],
@@ -3443,6 +3497,10 @@ class UploadRecommendationService:
                 }
                 for item in matched_ingredients
             ],
+            "ingredient_db_match_statuses": self.build_ingredient_db_match_statuses(
+                corrected["parsed_result"].get("ingredient_objects", []),
+                matched_ingredients,
+            ),
             "estimated_profile": {
                 "product_main_category": corrected["estimated_profile"].get("product_main_category", ""),
                 "primary_ingredients": corrected["estimated_profile"].get("primary_ingredients", []),

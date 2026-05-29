@@ -468,6 +468,31 @@ def get_product_profile(request: Request, report_no: str) -> ProductProfileRespo
     profile = service.get_profile_by_report_no(report_no)
     if not profile:
         raise HTTPException(status_code=404, detail=f"report_no not found: {report_no}")
+    ingredient_objects = []
+    seen_profile_ingredients = set()
+    for role_name, ingredient_names in (
+        ("primary", profile.get("primary_ingredients", [])),
+        ("secondary", profile.get("secondary_ingredients", [])),
+        ("support", profile.get("support_ingredients", [])),
+    ):
+        for ingredient_name in ingredient_names:
+            display_name = str(ingredient_name or "").strip()
+            if not display_name:
+                continue
+            dedupe_key = display_name.lower()
+            if dedupe_key in seen_profile_ingredients:
+                continue
+            seen_profile_ingredients.add(dedupe_key)
+            ingredient_objects.append(
+                {
+                    "raw": display_name,
+                    "display_name": display_name,
+                    "normalized_for_matching": display_name,
+                    "role": role_name,
+                    "category_hint": str(profile.get("product_main_category", "") or ""),
+                }
+            )
+    ingredient_db_match_statuses = upload_service.build_ingredient_db_match_statuses(ingredient_objects)
     return ProductProfileResponse(
         report_no=str(profile.get("report_no", "")),
         product_name=str(profile.get("product_name", "")),
@@ -476,6 +501,7 @@ def get_product_profile(request: Request, report_no: str) -> ProductProfileRespo
         primary_ingredients=list(profile.get("primary_ingredients", [])),
         secondary_ingredients=list(profile.get("secondary_ingredients", [])),
         support_ingredients=list(profile.get("support_ingredients", [])),
+        ingredient_db_match_statuses=ingredient_db_match_statuses,
         confidence=float(profile.get("confidence", 0.0) or 0.0),
         notes=str(profile.get("notes", "") or ""),
     )
