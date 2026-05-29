@@ -32,6 +32,11 @@ class ApiSettings:
     auth_session_cookie_name: str
     auth_session_hours: int
     auth_cookie_secure: bool
+    ingredient_embedding_enabled: bool
+    ingredient_embedding_model_name: str
+    ingredient_embedding_metadata_path: Path
+    ingredient_embedding_documents_path: Path
+    ingredient_embedding_cache_path: Path
 
 
 def _nested_value(config: dict, section: str, key: str, default):
@@ -73,10 +78,38 @@ def get_settings() -> ApiSettings:
     auth_session_hours = int(os.getenv("APP_SESSION_HOURS", _nested_value(config, "auth", "session_hours", 12)))
     auth_cookie_secure_value = os.getenv("APP_COOKIE_SECURE", _nested_value(config, "auth", "cookie_secure", False))
     auth_cookie_secure = str(auth_cookie_secure_value).strip().lower() in {"1", "true", "on", "yes"}
+    ingredient_embedding_enabled_value = os.getenv("INGREDIENT_EMBEDDING_ENABLED", _nested_value(config, "ingredient_embedding", "enabled", True))
+    ingredient_embedding_enabled = str(ingredient_embedding_enabled_value).strip().lower() not in {"0", "false", "off", "no", ""}
+    ingredient_embedding_model_name = str(
+        os.getenv(
+            "INGREDIENT_EMBEDDING_MODEL_NAME",
+            _nested_value(config, "ingredient_embedding", "model_name", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"),
+        )
+    )
+    ingredient_embedding_metadata_path = Path(
+        str(
+            os.getenv(
+                "INGREDIENT_EMBEDDING_METADATA_PATH",
+                _nested_value(config, "ingredient_embedding", "metadata_path", r"D:\db\deploy_ec2\data\functional_ingredient_metadata_item_class_final_boosted.pkl"),
+            )
+        )
+    )
+    ingredient_embedding_documents_path = Path(
+        str(
+            os.getenv(
+                "INGREDIENT_EMBEDDING_DOCUMENTS_PATH",
+                _nested_value(config, "ingredient_embedding", "documents_path", r"D:\db\deploy_ec2\data\functional_ingredient_rag_documents_merged_item_class_boosted.csv"),
+            )
+        )
+    )
+    ingredient_embedding_cache_path = root_dir / str(
+        _nested_value(config, "ingredient_embedding", "cache_path", "tmp/ingredient_embedding_cache")
+    )
 
     templates_dir = root_dir / "api" / "templates"
     upload_temp_dir.mkdir(parents=True, exist_ok=True)
     (root_dir / "logs").mkdir(parents=True, exist_ok=True)
+    ingredient_embedding_cache_path.mkdir(parents=True, exist_ok=True)
     return ApiSettings(
         service_name=service_name,
         root_dir=root_dir,
@@ -100,4 +133,9 @@ def get_settings() -> ApiSettings:
         auth_session_cookie_name=auth_session_cookie_name,
         auth_session_hours=auth_session_hours,
         auth_cookie_secure=auth_cookie_secure,
+        ingredient_embedding_enabled=ingredient_embedding_enabled,
+        ingredient_embedding_model_name=ingredient_embedding_model_name,
+        ingredient_embedding_metadata_path=ingredient_embedding_metadata_path,
+        ingredient_embedding_documents_path=ingredient_embedding_documents_path,
+        ingredient_embedding_cache_path=ingredient_embedding_cache_path,
     )

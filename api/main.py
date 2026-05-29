@@ -4,6 +4,7 @@ import sqlite3
 import time
 from io import BytesIO
 from typing import Optional
+from urllib.parse import quote_plus
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
@@ -246,8 +247,64 @@ def ocr_recommend_page(request: Request) -> HTMLResponse:
     return image_recommend_page(request)
 
 
+@app.get("/tools/ingredient-rag", response_class=HTMLResponse)
+def ingredient_rag_tool_page(request: Request) -> HTMLResponse:
+    user = require_page_user(request)
+    if not user:
+        return login_redirect()
+    return templates.TemplateResponse(request, "ingredient_rag_tool.html", template_context(request))
+
+
+@app.get("/tools/ocr-review", response_class=HTMLResponse)
+def ocr_review_tool_page(request: Request) -> HTMLResponse:
+    user = require_page_user(request)
+    if not user:
+        return login_redirect()
+    return templates.TemplateResponse(request, "ocr_review_tool.html", template_context(request))
+
+
 @app.get("/admin", response_class=HTMLResponse)
-def admin_page(request: Request) -> HTMLResponse:
+def admin_page(
+    request: Request,
+    log_page: int = Query(1, ge=1),
+    log_page_size: int = Query(30, ge=10, le=200),
+) -> HTMLResponse:
+    user = get_current_user(request)
+    if not user:
+        return login_redirect()
+    if user.role != "admin":
+        return RedirectResponse(url="/home", status_code=303)
+    total_logs = ops_service.count_app_logs()
+    log_offset = (int(log_page) - 1) * int(log_page_size)
+    log_total_pages = max(1, (total_logs + int(log_page_size) - 1) // int(log_page_size))
+    current_log_page = min(int(log_page), log_total_pages)
+    if current_log_page != int(log_page):
+        log_offset = (current_log_page - 1) * int(log_page_size)
+    context = template_context(
+        request,
+        monitoring=ops_service.get_monitoring_snapshot(),
+        pending_ingredients=ops_service.list_pending_ingredient_approvals(limit=200, status="pending"),
+        ocr_reviews=ops_service.list_ocr_reviews(limit=200),
+        app_logs=ops_service.list_app_logs(limit=log_page_size, offset=log_offset),
+        log_page=current_log_page,
+        log_page_size=log_page_size,
+        log_total_pages=log_total_pages,
+        log_total_count=total_logs,
+        log_has_prev=current_log_page > 1,
+        log_has_next=current_log_page < log_total_pages,
+        log_prev_page=max(1, current_log_page - 1),
+        log_next_page=min(log_total_pages, current_log_page + 1),
+    )
+    return templates.TemplateResponse(request, "admin.html", context)
+
+
+@app.get("/admin/ingredients", response_class=HTMLResponse)
+def admin_ingredient_catalog_page(
+    request: Request,
+    q: str = Query(""),
+    origin: str = Query("all"),
+    limit: int = Query(300, ge=1, le=1000),
+) -> HTMLResponse:
     user = get_current_user(request)
     if not user:
         return login_redirect()
@@ -255,12 +312,12 @@ def admin_page(request: Request) -> HTMLResponse:
         return RedirectResponse(url="/home", status_code=303)
     context = template_context(
         request,
-        monitoring=ops_service.get_monitoring_snapshot(),
-        pending_ingredients=ops_service.list_pending_ingredient_approvals(limit=200, status="pending"),
-        ocr_reviews=ops_service.list_ocr_reviews(limit=200),
-        app_logs=ops_service.list_app_logs(limit=200),
+        ingredient_catalog=ops_service.list_ingredient_catalog(q=q, origin=origin, limit=limit),
+        ingredient_query=q,
+        ingredient_origin=origin,
+        ingredient_limit=limit,
     )
-    return templates.TemplateResponse(request, "admin.html", context)
+    return templates.TemplateResponse(request, "admin_ingredient_catalog.html", context)
 
 
 @app.post("/admin/ingredients/review")
@@ -270,6 +327,7 @@ def review_pending_ingredient(
     decision: str = Form(...),
     category_main: str = Form(""),
     category_sub: str = Form(""),
+    function_text: str = Form(""),
     claim_text: str = Form(""),
     notes: str = Form(""),
 ):
@@ -280,6 +338,7 @@ def review_pending_ingredient(
         reviewer_user_id=user.user_id,
         category_main=category_main,
         category_sub=category_sub,
+        function_text=function_text,
         claim_text=claim_text,
         notes=notes,
     )
@@ -292,6 +351,42 @@ def review_pending_ingredient(
         message=f"{decision}:{functional_ingredient_name}",
     )
     return RedirectResponse(url="/admin", status_code=303)
+
+
+@app.post("/admin/ingredients/update")
+def update_ingredient_catalog_item(
+    request: Request,
+    functional_ingredient_name: str = Form(...),
+    source_table: str = Form(...),
+    category_main: str = Form(""),
+    category_sub: str = Form(""),
+    function_text: str = Form(""),
+    claim_text: str = Form(""),
+    notes: str = Form(""),
+    return_q: str = Form(""),
+    return_origin: str = Form("all"),
+    return_limit: int = Form(300),
+):
+    user = require_admin_user(request)
+    ops_service.update_ingredient_catalog_item(
+        functional_ingredient_name=functional_ingredient_name,
+        source_table=source_table,
+        category_main=category_main,
+        category_sub=category_sub,
+        function_text=function_text,
+        claim_text=claim_text,
+        notes=notes,
+    )
+    ops_service.log_event(
+        event_type="ingredient_catalog_update",
+        level="info",
+        user_id=user.user_id,
+        request_path="/admin/ingredients/update",
+        request_method="POST",
+        message=f"{source_table}:{functional_ingredient_name}",
+    )
+    redirect_url = f"/admin/ingredients?q={quote_plus(str(return_q or ''))}&origin={quote_plus(str(return_origin or 'all'))}&limit={int(return_limit or 300)}"
+    return RedirectResponse(url=redirect_url, status_code=303)
 
 
 @app.get("/admin/export/ocr-reviews.xlsx")
@@ -489,3 +584,12 @@ async def recommend_by_image(
         payload={"trace_id": payload.get("trace_id", ""), "filename": filename},
     )
     return UploadRecommendationResponse(**payload)
+
+
+@app.get("/api/tools/ingredient-rag")
+def ingredient_rag_debug_api(
+    request: Request,
+    ingredient: str = Query(..., min_length=1),
+) -> dict:
+    require_api_user(request)
+    return upload_service.debug_ingredient_match(ingredient)

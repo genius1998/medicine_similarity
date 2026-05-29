@@ -13,7 +13,7 @@ from api.ocr_text_sectionizer import sectionize_ocr_text
 
 PARSE_PROMPT_VERSION = "ingredient_parse_v2_sectionized"
 PARSE_SCHEMA_VERSION = "ingredient_parse_schema_v1"
-PARSE_NORMALIZER_VERSION = "ingredient_normalizer_v5"
+PARSE_NORMALIZER_VERSION = "ingredient_normalizer_v6"
 PARSE_SECTIONIZER_VERSION = "ocr_text_sectionizer_v4"
 LLM_PARSE_CACHE_TABLE_NAME = "llm_parse_cache"
 
@@ -401,7 +401,100 @@ def _match_explicit_excipient_normalization(name: str) -> str:
     for token, normalized_name in EXPLICIT_EXCIPIENT_NORMALIZATION_RULES:
         if normalize_lookup_key(token) in collapsed:
             return normalized_name
+    # OCR often breaks common excipients across lines. Repair those fragments
+    # before role classification so they do not survive as pseudo-ingredients.
+    fragmented_rules = [
+        ("\uacb0\uc815\uc140\ub8f0\ub85c\uc2a4", "\uacb0\uc815\uc140\ub8f0\ub85c\uc2a4"),
+        ("\uc774\uc0b0\ud654\uaddc\uc18c", "\uc774\uc0b0\ud654\uaddc\uc18c"),
+        ("\uc2a4\ud14c\uc544\ub9b0\uc0b0\ub9c8\uadf8", "\uc2a4\ud14c\uc544\ub9b0\uc0b0\ub9c8\uadf8\ub124\uc298"),
+        ("\ub9c8\uadf8\ub124\uc298", "\uc2a4\ud14c\uc544\ub9b0\uc0b0\ub9c8\uadf8\ub124\uc298"),
+        ("\ud788\ub4dc\ub85d\uc2dc\ud504\ub85c", "\ud788\ub4dc\ub85d\uc2dc\ud504\ub85c\ud544\uba54\ud2f8\uc140\ub8f0\ub85c\uc2a4"),
+        ("\ud544\uba54\ud2f8\uc140\ub8f0\ub85c\uc2a4", "\ud788\ub4dc\ub85d\uc2dc\ud504\ub85c\ud544\uba54\ud2f8\uc140\ub8f0\ub85c\uc2a4"),
+        ("\uba54\ud2f8\uc140\ub8f0\ub85c\uc2a4", "\ud788\ub4dc\ub85d\uc2dc\ud504\ub85c\ud544\uba54\ud2f8\uc140\ub8f0\ub85c\uc2a4"),
+        ("hpmc", "\ud788\ub4dc\ub85d\uc2dc\ud504\ub85c\ud544\uba54\ud2f8\uc140\ub8f0\ub85c\uc2a4"),
+    ]
+    for token, normalized_name in fragmented_rules:
+        if normalize_lookup_key(token) in collapsed:
+            return normalized_name
     return ""
+
+
+def _looks_like_probiotic_fragment(raw: str, normalized_for_matching: str = "") -> bool:
+    normalized = normalize_lookup_key(normalized_for_matching)
+    raw_key = normalize_lookup_key(raw)
+    if not raw_key and not normalized:
+        return False
+    if normalized == normalize_lookup_key("\ud504\ub85c\ubc14\uc774\uc624\ud2f1\uc2a4"):
+        return True
+    if _is_probiotic_strain_text(raw):
+        return True
+    fragment_tokens = [
+        "bifidoba",
+        "bifidobac",
+        "lactobac",
+        "lacticaseiba",
+        "lactiplantiba",
+        "acidoph",
+        "rhamnos",
+        "lactis",
+        "animali",
+        "animalis",
+        "ssp",
+        "sssp",
+        "cfu",
+    ]
+    return any(token in raw_key for token in fragment_tokens)
+
+
+def _collapse_probiotic_group_objects(items: List[dict]) -> List[dict]:
+    probiotic_label = "\ud504\ub85c\ubc14\uc774\uc624\ud2f1\uc2a4"
+    probiotic_indexes = [
+        index
+        for index, item in enumerate(items)
+        if _looks_like_probiotic_fragment(str(item.get("raw", "")), str(item.get("normalized_for_matching", "")))
+    ]
+    if not probiotic_indexes:
+        return items
+
+    representative_index = next(
+        (
+            index
+            for index in probiotic_indexes
+            if probiotic_label in str(items[index].get("raw", ""))
+            or probiotic_label in str(items[index].get("display_name", ""))
+        ),
+        probiotic_indexes[0],
+    )
+
+    collapsed: List[dict] = []
+    probiotic_emitted = False
+    for index, item in enumerate(items):
+        if index not in probiotic_indexes:
+            collapsed.append(item)
+            continue
+        if probiotic_emitted:
+            continue
+        repaired = dict(items[representative_index])
+        repaired["raw"] = probiotic_label
+        repaired["display_name"] = probiotic_label
+        repaired["normalized_for_matching"] = probiotic_label
+        if str(repaired.get("role") or "") in {"secondary", "support", "unknown", "excipient"}:
+            repaired["role"] = "primary"
+        repaired["category_hint"] = str(repaired.get("category_hint") or "\uc7a5 \uac74\uac15")
+        collapsed.append(repaired)
+        probiotic_emitted = True
+    return collapsed
+
+
+def _looks_like_ocr_fragment_noise(value: str) -> bool:
+    text = normalize_spacing(value)
+    if not text:
+        return True
+    if re.fullmatch(r"[\?\[\]\(\)\*\.:;,/\-\s]+", text):
+        return True
+    if text.count("?") >= 3 and not re.search(r"[A-Za-z\u3131-\u318E\uAC00-\uD7A3]", text):
+        return True
+    return False
 
 
 def _looks_like_functional_premix(name: str) -> bool:
@@ -1165,6 +1258,9 @@ def _validate_and_repair_parsed_result(parsed: Dict[str, Any]) -> Dict[str, Any]
             rebuilt = dict(item or {})
             raw = normalize_spacing(rebuilt.get("raw", ""))
             display_name = normalize_spacing(rebuilt.get("display_name", raw))
+            if _looks_like_ocr_fragment_noise(raw or display_name):
+                corrected_fields.append("ingredient_objects.filtered_noise")
+                continue
             if _is_obvious_non_ingredient_token(raw or display_name):
                 quality_warnings.append(
                     {
@@ -1867,16 +1963,14 @@ def parse_ingredients_from_ocr_text(raw_text: str, sqlite_path: Path | None = No
     if not merged["ingredient_objects"] or len(set(object_raws)) < len(set(merged["raw_ingredients"])):
         merged["ingredient_objects"] = _build_ingredient_objects(merged["raw_ingredients"])
 
-    normalized_ingredients: List[str] = []
-    filtered_raw_ingredients: List[str] = []
-    excluded_ingredients: List[str] = []
-    excluded_ingredient_objects: List[dict] = []
     quality_warnings = list(merged["quality_warnings"])
     rebuilt_objects: List[dict] = []
 
     for item in merged["ingredient_objects"]:
         raw = normalize_spacing(item.get("raw", ""))
         if not raw:
+            continue
+        if _looks_like_ocr_fragment_noise(raw):
             continue
         if _looks_like_allergen_notice(raw):
             quality_warnings.append(classify_warning_message(raw, "allergen_notice"))
@@ -1903,13 +1997,24 @@ def parse_ingredients_from_ocr_text(raw_text: str, sqlite_path: Path | None = No
             "category_hint": str(item.get("category_hint") or _guess_category_hint(normalized_for_matching)),
         }
         rebuilt_objects.append(rebuilt)
-        filtered_raw_ingredients.append(raw)
 
+    rebuilt_objects = _collapse_probiotic_group_objects(rebuilt_objects)
+
+    normalized_ingredients: List[str] = []
+    filtered_raw_ingredients: List[str] = []
+    excluded_ingredients: List[str] = []
+    excluded_ingredient_objects: List[dict] = []
+    for rebuilt in rebuilt_objects:
+        raw = normalize_spacing(rebuilt.get("raw", ""))
+        display_name = normalize_spacing(rebuilt.get("display_name", ""))
+        role = str(rebuilt.get("role", ""))
+        normalized_for_matching = normalize_spacing(rebuilt.get("normalized_for_matching", ""))
+        if raw:
+            filtered_raw_ingredients.append(raw)
         if role == "excipient":
-            excluded_ingredients.append(display_name)
+            excluded_ingredients.append(display_name or raw)
             excluded_ingredient_objects.append(rebuilt)
             continue
-
         if normalized_for_matching:
             normalized_ingredients.append(normalized_for_matching)
 

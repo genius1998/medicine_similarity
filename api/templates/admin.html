@@ -46,6 +46,7 @@
     .inline-form { display:grid; gap:6px; }
     .inline-form input { width:100%; border:1px solid #bfc5c2; border-radius:4px; padding:6px 7px; font-size:12px; background:#fff; }
     .button-row { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+    .pager { display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin-top:10px; }
     pre { white-space:pre-wrap; word-break:break-word; margin:0; font-size:12px; }
     @media (max-width: 1080px) {
       .layout { grid-template-columns:1fr; }
@@ -67,6 +68,7 @@
         <a class="button-secondary" href="/home">메인 화면</a>
         <a class="button-secondary" href="/products">제품 목록</a>
         <a class="button-secondary" href="/recommend/image">OCR 화면</a>
+        <a class="button-secondary" href="/admin/ingredients">원료 DB 관리</a>
         <form method="post" action="/logout" style="margin:0;">
           <button class="button-secondary" type="submit">로그아웃</button>
         </form>
@@ -113,7 +115,7 @@
                   <th>원료명</th>
                   <th>카테고리</th>
                   <th>신뢰도</th>
-                  <th>메모</th>
+                  <th>설명/메모</th>
                   <th>승인 처리</th>
                 </tr>
               </thead>
@@ -123,13 +125,18 @@
                   <td><strong>{{ item.functional_ingredient_name }}</strong><div class="muted">{{ item.created_at }}</div></td>
                   <td>{{ item.category_main }} / {{ item.category_sub }}</td>
                   <td>{{ '%.3f'|format(item.confidence or 0) }}</td>
-                  <td>{{ item.notes }}</td>
+                  <td>
+                    {% if item.function_text %}<div><strong>기능설명:</strong> {{ item.function_text }}</div>{% endif %}
+                    {% if item.claim_text %}<div><strong>기능문구:</strong> {{ item.claim_text }}</div>{% endif %}
+                    <div class="muted">{{ item.notes }}</div>
+                  </td>
                   <td>
                     <form class="inline-form" method="post" action="/admin/ingredients/review">
                       <input type="hidden" name="functional_ingredient_name" value="{{ item.functional_ingredient_name }}">
                       <input type="text" name="category_main" value="{{ item.category_main }}" placeholder="메인 카테고리">
                       <input type="text" name="category_sub" value="{{ item.category_sub }}" placeholder="서브 카테고리">
-                      <input type="text" name="claim_text" value="{{ item.claim_text }}" placeholder="기능/설명">
+                      <input type="text" name="function_text" value="{{ item.function_text }}" placeholder="기능 설명">
+                      <input type="text" name="claim_text" value="{{ item.claim_text }}" placeholder="기능 문구">
                       <input type="text" name="notes" value="{{ item.notes }}" placeholder="검토 메모">
                       <div class="button-row">
                         <button class="button" type="submit" name="decision" value="approve">승인</button>
@@ -152,6 +159,7 @@
               <h2>최근 앱 로그</h2>
               <div class="hint-text">최근 요청, 오류, 인증 이벤트</div>
             </div>
+            <div class="hint-text">총 {{ log_total_count }}건 / {{ log_page }} / {{ log_total_pages }} 페이지</div>
           </div>
           <div class="table-wrap">
             <table>
@@ -180,6 +188,22 @@
                 {% endfor %}
               </tbody>
             </table>
+          </div>
+          <div class="pager">
+            <div class="hint-text">페이지당 {{ log_page_size }}건</div>
+            <div class="button-row">
+              {% if log_has_prev %}
+              <a class="button-secondary" href="/admin?log_page={{ log_prev_page }}&log_page_size={{ log_page_size }}">이전</a>
+              {% else %}
+              <span class="button-secondary" style="opacity:.55; pointer-events:none;">이전</span>
+              {% endif %}
+              <span class="hint-text">{{ log_page }} / {{ log_total_pages }}</span>
+              {% if log_has_next %}
+              <a class="button-secondary" href="/admin?log_page={{ log_next_page }}&log_page_size={{ log_page_size }}">다음</a>
+              {% else %}
+              <span class="button-secondary" style="opacity:.55; pointer-events:none;">다음</span>
+              {% endif %}
+            </div>
           </div>
         </section>
       </div>

@@ -23,6 +23,13 @@
     "timeout_sec": 120,
     "max_retries": 2
   },
+  "ingredient_embedding": {
+    "enabled": true,
+    "model_name": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    "metadata_path": "D:\\db\\deploy_ec2\\data\\functional_ingredient_metadata_item_class_final_boosted.pkl",
+    "documents_path": "D:\\db\\deploy_ec2\\data\\functional_ingredient_rag_documents_merged_item_class_boosted.csv",
+    "cache_path": "tmp/ingredient_embedding_cache"
+  },
   "upload": {
     "temp_dir": "tmp/uploads",
     "max_file_size_mb": 10,

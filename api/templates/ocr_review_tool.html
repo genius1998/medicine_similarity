@@ -1,0 +1,609 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>성분콕</title>
+  <style>
+    :root {
+      --bg: #f5f5f5;
+      --panel: #ffffff;
+      --ink: #222222;
+      --muted: #666666;
+      --line: #cfcfcf;
+      --line-strong: #b8b8b8;
+      --accent: #1f5b43;
+      --warn-bg: #f6f1e4;
+      --warn-line: #d8c9a3;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .app-header { border-bottom: 1px solid var(--line-strong); background: #f0f2f1; }
+    .header-inner {
+      max-width: 1440px;
+      margin: 0 auto;
+      padding: 12px 18px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    h1 { margin: 0; font-size: 22px; font-weight: 700; color: #173d2d; }
+    .header-desc { margin-top: 4px; color: var(--muted); font-size: 13px; }
+    .nav-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .wrap { max-width: 1440px; margin: 0 auto; padding: 14px 18px 32px; }
+    .alert-box {
+      padding: 10px 12px;
+      border: 1px solid var(--warn-line);
+      border-radius: 4px;
+      background: var(--warn-bg);
+      color: #5f5644;
+      font-size: 13px;
+      line-height: 1.6;
+      margin-bottom: 12px;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+      gap: 12px;
+      align-items: start;
+    }
+    .stack { display: grid; gap: 12px; }
+    .section-box {
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: var(--panel);
+      padding: 12px;
+    }
+    .section-caption {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #dddddd;
+    }
+    .section-caption h2 { margin: 0; font-size: 17px; font-weight: 700; }
+    .hint-text { color: var(--muted); font-size: 12px; line-height: 1.5; }
+    .form-grid { display: grid; gap: 8px; }
+    label { font-size: 13px; font-weight: 700; color: #333; }
+    .upload-box {
+      border: 1px dashed #b7c2bc;
+      border-radius: 4px;
+      padding: 12px;
+      background: #fafcfa;
+    }
+    input[type="file"] {
+      width: 100%;
+      font-size: 13px;
+    }
+    .button-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .button,
+    .button-secondary {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid #aab7b0;
+      border-radius: 4px;
+      padding: 7px 12px;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      text-decoration: none;
+    }
+    .button { background: var(--accent); border-color: #1b503b; color: #fff; }
+    .button-secondary { background: #f8f8f8; color: #222; }
+    .summary-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    .summary-table th,
+    .summary-table td {
+      border: 1px solid #d7d7d7;
+      padding: 7px 8px;
+      vertical-align: top;
+      text-align: left;
+      font-size: 12px;
+      word-break: break-word;
+    }
+    .summary-table th { width: 150px; background: #f0f0f0; font-weight: 700; color: #333; }
+    .chip-row { display: flex; gap: 6px; flex-wrap: wrap; }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      padding: 3px 7px;
+      border: 1px solid #cfd8d3;
+      background: #f5f8f6;
+      border-radius: 999px;
+      font-size: 12px;
+      color: #264636;
+    }
+    .empty { padding: 12px; border: 1px dashed #cfcfcf; background: #fafafa; color: var(--muted); font-size: 12px; }
+    .status-box { padding: 8px 10px; border: 1px solid #d7d7d7; background: #fafafa; font-size: 12px; }
+    .card-list { display: grid; gap: 8px; }
+    .mini-card { border: 1px solid #d7d7d7; background: #fcfcfc; border-radius: 4px; padding: 8px; }
+    .mini-card strong { display: block; margin-bottom: 4px; font-size: 13px; }
+    .mini-meta { color: var(--muted); font-size: 12px; line-height: 1.5; }
+    .loading-overlay {
+      position: fixed;
+      inset: 0;
+      display: none;
+      place-items: center;
+      background: rgba(0, 0, 0, 0.22);
+      z-index: 30;
+    }
+    .loading-overlay.active { display: grid; }
+    .loading-card {
+      width: min(440px, calc(100vw - 24px));
+      padding: 14px;
+      border-radius: 4px;
+      background: #fff;
+      border: 1px solid var(--line-strong);
+      color: #234d3c;
+    }
+    .loading-title {
+      font-weight: 700;
+      font-size: 16px;
+      margin-bottom: 8px;
+    }
+    .loading-stage,
+    .loading-subtext {
+      font-size: 12px;
+      line-height: 1.5;
+      color: #4a6054;
+    }
+    .loading-progress-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin: 10px 0 6px;
+    }
+    .loading-percent {
+      font-weight: 700;
+      font-size: 20px;
+      color: #1f5a42;
+    }
+    .loading-step-label {
+      font-size: 11px;
+      color: #67756d;
+      text-transform: uppercase;
+      font-weight: 700;
+    }
+    .loading-bar {
+      width: 100%;
+      height: 8px;
+      border-radius: 2px;
+      background: #e5e5e5;
+      overflow: hidden;
+      margin-bottom: 8px;
+    }
+    .loading-bar-fill {
+      height: 100%;
+      width: 0%;
+      background: #2e7d5d;
+      transition: width 220ms ease;
+    }
+    pre {
+      margin: 0;
+      padding: 10px;
+      border: 1px solid #d7d7d7;
+      background: #fbfbfb;
+      overflow: auto;
+      font-size: 12px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    @media (max-width: 980px) {
+      .layout { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="loading-overlay" id="loadingOverlay">
+    <div class="loading-card">
+      <div class="loading-title" id="loadingTitle">OCR 검수 분석 진행 중</div>
+      <div class="loading-stage" id="loadingMessage">업로드 이미지를 확인하고 분석 요청을 준비하는 중입니다.</div>
+      <div class="loading-progress-head">
+        <div class="loading-step-label" id="loadingStepLabel">STEP 1 / 4</div>
+        <div class="loading-percent" id="loadingPercent">0%</div>
+      </div>
+      <div class="loading-bar" aria-hidden="true">
+        <div class="loading-bar-fill" id="loadingBarFill"></div>
+      </div>
+      <div class="loading-subtext" id="loadingSubtext">검수용 화면은 OCR 원문, 추출 원료, 매칭 원료를 정리해서 표시합니다.</div>
+    </div>
+  </div>
+  <header class="app-header">
+    <div class="header-inner">
+      <div>
+        <h1>성분콕</h1>
+        <div class="header-desc">건강기능식품 추천 서비스</div>
+      </div>
+      <div class="nav-actions">
+        <a class="button-secondary" href="/home">메인</a>
+        <a class="button-secondary" href="/recommend/image">OCR 기능</a>
+        <a class="button-secondary" href="/tools/ingredient-rag">원료 RAG 진단</a>
+        <a class="button-secondary" href="/products">제품 목록</a>
+      </div>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <div class="alert-box">
+      OCR 이미지 업로드 후 원문 텍스트, 추출된 원료, 정규화 원료, 매칭된 기능성 원료를 검수하기 위한 화면입니다.
+      추천 결과보다 파싱/매칭 검수에 집중해서 표시합니다.
+    </div>
+
+    <section class="layout">
+      <div class="stack">
+        <section class="section-box">
+          <div class="section-caption">
+            <div>
+              <h2>업로드</h2>
+              <div class="hint-text">원재료명 또는 성분표 이미지 파일을 업로드합니다.</div>
+            </div>
+          </div>
+          <form id="ocr-review-form" class="form-grid">
+            <div class="upload-box">
+              <label for="file-input">이미지 파일</label>
+              <input id="file-input" name="file" type="file" accept=".jpg,.jpeg,.png,.webp,image/png,image/jpeg,image/webp">
+              <div class="hint-text" style="margin-top:6px;">지원 형식: jpg, jpeg, png, webp</div>
+              <div class="hint-text" id="file-meta" style="margin-top:6px;">선택된 파일이 없습니다. 클립보드 이미지도 `Ctrl+V`로 붙여넣을 수 있습니다.</div>
+            </div>
+            <div class="button-row">
+              <button class="button" type="submit">검수용 분석</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="section-box">
+          <div class="section-caption">
+            <div>
+              <h2>요약</h2>
+              <div class="hint-text">OCR 신뢰도, 제품명 후보, 품질 상태를 먼저 확인합니다.</div>
+            </div>
+          </div>
+          <div id="summary-box" class="empty">아직 분석 결과가 없습니다.</div>
+        </section>
+
+        <section class="section-box">
+          <div class="section-caption">
+            <div>
+              <h2>OCR 원문</h2>
+              <div class="hint-text">실제 OCR로 추출된 원문 텍스트입니다.</div>
+            </div>
+          </div>
+          <pre id="ocr-raw-text">아직 분석 결과가 없습니다.</pre>
+        </section>
+      </div>
+
+      <div class="stack">
+        <section class="section-box">
+          <div class="section-caption">
+            <div>
+              <h2>추출 원료</h2>
+              <div class="hint-text">OCR 파서가 추출한 원료 목록과 원료 객체를 검수합니다.</div>
+            </div>
+          </div>
+          <div id="parsed-box" class="empty">아직 분석 결과가 없습니다.</div>
+        </section>
+
+        <section class="section-box">
+          <div class="section-caption">
+            <div>
+              <h2>매칭 원료</h2>
+              <div class="hint-text">기존 원료 DB 기준으로 최종 매칭된 기능성 원료입니다.</div>
+            </div>
+          </div>
+          <div id="matched-box" class="empty">아직 분석 결과가 없습니다.</div>
+        </section>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const formEl = document.getElementById("ocr-review-form");
+    const fileInputEl = document.getElementById("file-input");
+    const summaryBoxEl = document.getElementById("summary-box");
+    const ocrRawTextEl = document.getElementById("ocr-raw-text");
+    const parsedBoxEl = document.getElementById("parsed-box");
+    const matchedBoxEl = document.getElementById("matched-box");
+    const fileMetaEl = document.getElementById("file-meta");
+    const loadingOverlay = document.getElementById("loadingOverlay");
+    const loadingTitle = document.getElementById("loadingTitle");
+    const loadingMessage = document.getElementById("loadingMessage");
+    const loadingStepLabel = document.getElementById("loadingStepLabel");
+    const loadingPercent = document.getElementById("loadingPercent");
+    const loadingBarFill = document.getElementById("loadingBarFill");
+    const loadingSubtext = document.getElementById("loadingSubtext");
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+    }
+
+    function safeArray(value) {
+      return Array.isArray(value) ? value : [];
+    }
+
+    function renderSummaryTable(rows) {
+      return `
+        <table class="summary-table">
+          <tbody>
+            ${rows.map(([label, value]) => `
+              <tr>
+                <th>${escapeHtml(label)}</th>
+                <td>${escapeHtml(value)}</td>
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
+      `;
+    }
+
+    function renderChips(items) {
+      if (!items.length) return `<span class="empty">없음</span>`;
+      return `<div class="chip-row">${items.map(item => `<span class="chip">${escapeHtml(item)}</span>`).join("")}</div>`;
+    }
+
+    function renderParsedIngredients(parsed) {
+      const objects = safeArray(parsed.ingredient_objects);
+      const rows = objects.map((item, index) => `
+        <div class="mini-card">
+          <strong>${index + 1}. ${escapeHtml(item.display_name || item.raw || "-")}</strong>
+          <div class="mini-meta">raw: ${escapeHtml(item.raw || "-")}</div>
+          <div class="mini-meta">normalized: ${escapeHtml(item.normalized_for_matching || "-")}</div>
+          <div class="mini-meta">role: ${escapeHtml(item.role || "-")} / category_hint: ${escapeHtml(item.category_hint || "-")}</div>
+        </div>
+      `).join("");
+      return `
+        <div class="stack">
+          ${renderSummaryTable([
+            ["제품명 후보", parsed.product_name_candidate || "-"],
+            ["원료 section", parsed.ingredient_section_text || "-"],
+            ["needs_user_review", String(Boolean(parsed.needs_user_review))],
+            ["parse confidence", parsed.confidence ?? "-"],
+          ])}
+          <div>
+            <div class="hint-text" style="margin-bottom:6px;">정규화 원료</div>
+            ${renderChips(safeArray(parsed.normalized_ingredients))}
+          </div>
+          <div>
+            <div class="hint-text" style="margin-bottom:6px;">주요 원료</div>
+            ${renderChips(safeArray(parsed.primary_ingredients_normalized))}
+          </div>
+          <div>
+            <div class="hint-text" style="margin-bottom:6px;">제외 원료</div>
+            ${renderChips(safeArray(parsed.excluded_ingredients))}
+          </div>
+          <div class="card-list">
+            ${rows || `<div class="empty">추출된 원료 객체가 없습니다.</div>`}
+          </div>
+        </div>
+      `;
+    }
+
+    function renderMatchedIngredients(items) {
+      if (!items.length) {
+        return `<div class="empty">매칭된 기능성 원료가 없습니다.</div>`;
+      }
+      return `
+        <div class="card-list">
+          ${items.map((item, index) => `
+            <div class="mini-card">
+              <strong>${index + 1}. ${escapeHtml(item.functional_ingredient_name || "-")}</strong>
+              <div class="mini-meta">입력 원료: ${escapeHtml(item.display_name || item.raw_ingredient || "-")}</div>
+              <div class="mini-meta">정규화: ${escapeHtml(item.normalized_for_matching || "-")}</div>
+              <div class="mini-meta">relation: ${escapeHtml(item.relation_type || "-")} / confidence: ${escapeHtml(item.confidence ?? "-")}</div>
+            </div>
+          `).join("")}
+        </div>
+      `;
+    }
+
+    function setFile(file) {
+      const allowed = [".jpg", ".jpeg", ".png", ".webp"];
+      const name = (file && file.name) || "";
+      const lower = name.toLowerCase();
+      const mimeType = String((file && file.type) || "").toLowerCase();
+      const isImageMime = ["image/jpeg", "image/png", "image/webp"].includes(mimeType);
+      if (!file || (!allowed.some((ext) => lower.endsWith(ext)) && !isImageMime)) {
+        fileInputEl.value = "";
+        fileMetaEl.textContent = "이미지 파일만 업로드할 수 있습니다.";
+        return false;
+      }
+      try {
+        const dataTransfer = new DataTransfer();
+        dataTransfer.items.add(file);
+        fileInputEl.files = dataTransfer.files;
+      } catch (_error) {
+        // Some browsers disallow programmatic file assignment. The upload still works via state fallback.
+      }
+      fileMetaEl.textContent = `${file.name} / ${(file.size / 1024 / 1024).toFixed(2)} MB`;
+      return true;
+    }
+
+    function inferClipboardFileName(blob) {
+      const mimeType = String((blob && blob.type) || "").toLowerCase();
+      if (mimeType === "image/png") return "clipboard-image.png";
+      if (mimeType === "image/webp") return "clipboard-image.webp";
+      return "clipboard-image.jpg";
+    }
+
+    function trySetClipboardImage(event) {
+      const clipboardData = event && event.clipboardData;
+      if (!clipboardData || !clipboardData.items) return false;
+      for (const item of clipboardData.items) {
+        if (!item || item.kind !== "file" || !String(item.type || "").startsWith("image/")) {
+          continue;
+        }
+        const blob = item.getAsFile();
+        if (!blob) continue;
+        const file = new File([blob], inferClipboardFileName(blob), { type: blob.type || "image/png" });
+        return setFile(file);
+      }
+      return false;
+    }
+
+    const loadingPreset = {
+      title: "OCR 검수 분석 진행 중",
+      subtext: "검수용 화면은 OCR 원문, 추출 원료, 매칭 원료를 정리해서 표시합니다.",
+      steps: [
+        { label: "STEP 1 / 4", message: "업로드 이미지를 확인하고 분석 요청을 준비하는 중입니다.", percent: 8, delay: 150 },
+        { label: "STEP 2 / 4", message: "OCR 엔진이 이미지에서 텍스트를 추출하는 중입니다.", percent: 32, delay: 900 },
+        { label: "STEP 3 / 4", message: "원재료명을 파싱하고 정규화 원료를 정리하는 중입니다.", percent: 62, delay: 1900 },
+        { label: "STEP 4 / 4", message: "기존 원료 DB와 매칭 결과를 정리하는 중입니다.", percent: 88, delay: 3200 },
+      ],
+    };
+
+    let loadingTimers = [];
+
+    function clearLoadingTimers() {
+      loadingTimers.forEach((timerId) => window.clearTimeout(timerId));
+      loadingTimers = [];
+    }
+
+    function updateLoadingState({ title = "", label = "", message = "", percent = 0, subtext = "" } = {}) {
+      if (title) loadingTitle.textContent = title;
+      if (label) loadingStepLabel.textContent = label;
+      if (message) loadingMessage.textContent = message;
+      if (subtext) loadingSubtext.textContent = subtext;
+      const safePercent = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
+      loadingPercent.textContent = `${safePercent}%`;
+      loadingBarFill.style.width = `${safePercent}%`;
+    }
+
+    function startLoadingProgress() {
+      clearLoadingTimers();
+      loadingOverlay.classList.add("active");
+      updateLoadingState({
+        title: loadingPreset.title,
+        label: loadingPreset.steps[0].label,
+        message: loadingPreset.steps[0].message,
+        percent: 0,
+        subtext: loadingPreset.subtext,
+      });
+      loadingPreset.steps.forEach((step) => {
+        const timerId = window.setTimeout(() => {
+          updateLoadingState({
+            title: loadingPreset.title,
+            label: step.label,
+            message: step.message,
+            percent: step.percent,
+            subtext: loadingPreset.subtext,
+          });
+        }, step.delay);
+        loadingTimers.push(timerId);
+      });
+    }
+
+    function finishLoading(message = "검수용 분석이 완료되었습니다.") {
+      clearLoadingTimers();
+      updateLoadingState({
+        title: loadingPreset.title,
+        label: "DONE",
+        message,
+        percent: 100,
+        subtext: loadingPreset.subtext,
+      });
+      const hideTimerId = window.setTimeout(() => {
+        loadingOverlay.classList.remove("active");
+      }, 250);
+      loadingTimers.push(hideTimerId);
+    }
+
+    function cancelLoading() {
+      clearLoadingTimers();
+      loadingOverlay.classList.remove("active");
+    }
+
+    async function analyzeFile(file) {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("top_k", "1");
+      formData.append("candidate_limit", "50");
+      formData.append("llm_rerank", "false");
+      const response = await fetch("/api/recommend/by-image", {
+        method: "POST",
+        body: formData,
+      });
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || `HTTP ${response.status}`);
+      }
+      return response.json();
+    }
+
+    formEl.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const file = (fileInputEl.files || [])[0];
+      if (!file) {
+        fileInputEl.focus();
+        return;
+      }
+      startLoadingProgress();
+      summaryBoxEl.innerHTML = `<div class="status-box">OCR 분석 중입니다.</div>`;
+      ocrRawTextEl.textContent = "OCR 원문을 불러오는 중입니다.";
+      parsedBoxEl.innerHTML = `<div class="status-box">추출 원료를 정리하는 중입니다.</div>`;
+      matchedBoxEl.innerHTML = `<div class="status-box">원료 DB 매칭 결과를 불러오는 중입니다.</div>`;
+
+      try {
+        const data = await analyzeFile(file);
+        const parsed = data.parsed || {};
+        const estimated = data.estimated_profile || {};
+        const quality = data.quality || {};
+        const ocr = data.ocr || {};
+
+        summaryBoxEl.innerHTML = renderSummaryTable([
+          ["파일명", file.name],
+          ["제품명 후보", parsed.product_name_candidate || "-"],
+          ["OCR confidence", ocr.confidence ?? "-"],
+          ["OCR confidence source", ocr.confidence_source || "-"],
+          ["품질 등급", quality.quality_grade || estimated.quality_grade || "-"],
+          ["review 필요", String(Boolean(data.needs_user_review))],
+          ["메인 카테고리", estimated.product_main_category || "-"],
+          ["trace_id", data.trace_id || "-"],
+        ]);
+        ocrRawTextEl.textContent = ocr.raw_text || "";
+        parsedBoxEl.innerHTML = renderParsedIngredients(parsed);
+        matchedBoxEl.innerHTML = renderMatchedIngredients(safeArray(data.detected_functional_ingredients));
+        finishLoading("OCR 검수 결과 정리가 완료되었습니다.");
+      } catch (error) {
+        const message = String(error.message || error);
+        cancelLoading();
+        summaryBoxEl.innerHTML = `<div class="empty">분석 실패: ${escapeHtml(message)}</div>`;
+        ocrRawTextEl.textContent = message;
+        parsedBoxEl.innerHTML = `<div class="empty">분석 실패</div>`;
+        matchedBoxEl.innerHTML = `<div class="empty">분석 실패</div>`;
+      }
+    });
+
+    fileInputEl.addEventListener("change", (event) => {
+      const file = event.target.files && event.target.files[0];
+      if (file) setFile(file);
+    });
+
+    document.addEventListener("paste", (event) => {
+      const activeTag = document.activeElement && document.activeElement.tagName;
+      if (activeTag === "INPUT" || activeTag === "TEXTAREA") {
+        return;
+      }
+      if (trySetClipboardImage(event)) {
+        event.preventDefault();
+      }
+    });
+  </script>
+</body>
+</html>

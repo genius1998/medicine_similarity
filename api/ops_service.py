@@ -109,6 +109,7 @@ class OperationsService:
                     functional_ingredient_name TEXT UNIQUE NOT NULL,
                     category_main TEXT DEFAULT '',
                     category_sub TEXT DEFAULT '',
+                    function_text TEXT DEFAULT '',
                     claim_text TEXT DEFAULT '',
                     source TEXT DEFAULT '',
                     confidence REAL DEFAULT 0,
@@ -143,6 +144,15 @@ class OperationsService:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_ocr_review_history_trace ON ocr_review_history(base_trace_id, latest_trace_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_ingredient_approval_queue_status ON ingredient_approval_queue(status)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_app_event_log_created_at ON app_event_log(created_at)")
+            for sql in [
+                "ALTER TABLE functional_category_map ADD COLUMN function_text TEXT DEFAULT ''",
+                f"ALTER TABLE {RUNTIME_CUSTOM_FUNCTIONAL_TABLE_NAME} ADD COLUMN function_text TEXT DEFAULT ''",
+                "ALTER TABLE ingredient_approval_queue ADD COLUMN function_text TEXT DEFAULT ''",
+            ]:
+                try:
+                    conn.execute(sql)
+                except sqlite3.OperationalError:
+                    pass
             conn.commit()
 
     def ensure_default_admin(self) -> None:
@@ -428,7 +438,7 @@ class OperationsService:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 f"""
-                SELECT functional_ingredient_name, category_main, category_sub, claim_text, source, confidence, notes
+                SELECT functional_ingredient_name, category_main, category_sub, function_text, claim_text, source, confidence, notes
                 FROM {RUNTIME_CUSTOM_FUNCTIONAL_TABLE_NAME}
                 WHERE source = 'runtime_auto_provisional'
                 """
@@ -437,12 +447,13 @@ class OperationsService:
                 conn.execute(
                     """
                     INSERT INTO ingredient_approval_queue (
-                        functional_ingredient_name, category_main, category_sub, claim_text,
+                        functional_ingredient_name, category_main, category_sub, function_text, claim_text,
                         source, confidence, notes, status, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
                     ON CONFLICT(functional_ingredient_name) DO UPDATE SET
                         category_main = excluded.category_main,
                         category_sub = excluded.category_sub,
+                        function_text = excluded.function_text,
                         claim_text = excluded.claim_text,
                         source = excluded.source,
                         confidence = excluded.confidence,
@@ -453,6 +464,7 @@ class OperationsService:
                         str(row["functional_ingredient_name"] or ""),
                         str(row["category_main"] or ""),
                         str(row["category_sub"] or ""),
+                        str(row["function_text"] or ""),
                         str(row["claim_text"] or ""),
                         str(row["source"] or ""),
                         float(row["confidence"] or 0.0),
@@ -469,7 +481,7 @@ class OperationsService:
             rows = conn.execute(
                 """
                 SELECT q.queue_id, q.functional_ingredient_name, q.category_main, q.category_sub,
-                       q.claim_text, q.source, q.confidence, q.notes, q.status,
+                       q.function_text, q.claim_text, q.source, q.confidence, q.notes, q.status,
                        q.created_at, q.updated_at, q.reviewed_at, u.email AS reviewed_by_email
                 FROM ingredient_approval_queue q
                 LEFT JOIN app_user u ON u.user_id = q.reviewed_by
@@ -489,6 +501,7 @@ class OperationsService:
         reviewer_user_id: int,
         category_main: str = "",
         category_sub: str = "",
+        function_text: str = "",
         claim_text: str = "",
         notes: str = "",
     ) -> None:
@@ -499,10 +512,18 @@ class OperationsService:
                 conn.execute(
                     f"""
                     UPDATE {RUNTIME_CUSTOM_FUNCTIONAL_TABLE_NAME}
-                    SET category_main = ?, category_sub = ?, claim_text = ?, notes = ?, source = 'admin_approved', updated_at = ?
+                    SET category_main = ?, category_sub = ?, function_text = ?, claim_text = ?, notes = ?, source = 'admin_approved', updated_at = ?
                     WHERE functional_ingredient_name = ?
                     """,
-                    (str(category_main or ""), str(category_sub or ""), str(claim_text or ""), str(notes or ""), reviewed_at, cleaned_name),
+                    (
+                        str(category_main or ""),
+                        str(category_sub or ""),
+                        str(function_text or ""),
+                        str(claim_text or ""),
+                        str(notes or ""),
+                        reviewed_at,
+                        cleaned_name,
+                    ),
                 )
             elif decision == "reject":
                 conn.execute(
@@ -522,12 +543,13 @@ class OperationsService:
             conn.execute(
                 """
                 UPDATE ingredient_approval_queue
-                SET category_main = ?, category_sub = ?, claim_text = ?, notes = ?, status = ?, reviewed_by = ?, reviewed_at = ?, updated_at = ?
+                SET category_main = ?, category_sub = ?, function_text = ?, claim_text = ?, notes = ?, status = ?, reviewed_by = ?, reviewed_at = ?, updated_at = ?
                 WHERE functional_ingredient_name = ?
                 """,
                 (
                     str(category_main or ""),
                     str(category_sub or ""),
+                    str(function_text or ""),
                     str(claim_text or ""),
                     str(notes or ""),
                     "approved" if decision == "approve" else "rejected",
@@ -569,7 +591,12 @@ class OperationsService:
             "errors_last_day": int((error_rows[0] if error_rows else 0) or 0),
         }
 
-    def list_app_logs(self, *, limit: int = 200) -> List[dict]:
+    def count_app_logs(self) -> int:
+        with sqlite_connection(self.sqlite_path) as conn:
+            row = conn.execute("SELECT COUNT(*) FROM app_event_log").fetchone()
+        return int((row[0] if row else 0) or 0)
+
+    def list_app_logs(self, *, limit: int = 200, offset: int = 0) -> List[dict]:
         with sqlite_connection(self.sqlite_path) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
@@ -579,9 +606,9 @@ class OperationsService:
                 FROM app_event_log l
                 LEFT JOIN app_user u ON u.user_id = l.user_id
                 ORDER BY l.log_id DESC
-                LIMIT ?
+                LIMIT ? OFFSET ?
                 """,
-                (int(limit),),
+                (int(limit), max(0, int(offset))),
             ).fetchall()
         items = []
         for row in rows:
@@ -629,12 +656,14 @@ class OperationsService:
         wb = Workbook()
         ws = wb.active
         ws.title = "pending_ingredients"
-        ws.append(["functional_ingredient_name", "category_main", "category_sub", "confidence", "source", "notes", "created_at"])
+        ws.append(["functional_ingredient_name", "category_main", "category_sub", "function_text", "claim_text", "confidence", "source", "notes", "created_at"])
         for row in rows:
             ws.append([
                 str(row.get("functional_ingredient_name", "")),
                 str(row.get("category_main", "")),
                 str(row.get("category_sub", "")),
+                str(row.get("function_text", "")),
+                str(row.get("claim_text", "")),
                 float(row.get("confidence", 0.0) or 0.0),
                 str(row.get("source", "")),
                 str(row.get("notes", "")),
@@ -666,6 +695,164 @@ class OperationsService:
         buffer = BytesIO()
         wb.save(buffer)
         return buffer.getvalue()
+
+    def list_ingredient_catalog(self, *, q: str = "", origin: str = "all", limit: int = 300) -> List[dict]:
+        self.sync_pending_ingredients_from_runtime()
+        query = str(q or "").strip().lower()
+        origin_filter = str(origin or "all").strip().lower()
+        with sqlite_connection(self.sqlite_path) as conn:
+            conn.row_factory = sqlite3.Row
+            existing_rows = conn.execute(
+                """
+                SELECT functional_ingredient_name, category_main, category_sub, function_text, claim_text,
+                       source, confidence, notes, '' AS created_at, '' AS updated_at
+                FROM functional_category_map
+                """
+            ).fetchall()
+            custom_rows = conn.execute(
+                f"""
+                SELECT functional_ingredient_name, category_main, category_sub, function_text, claim_text,
+                       source, confidence, notes, created_at, updated_at
+                FROM {RUNTIME_CUSTOM_FUNCTIONAL_TABLE_NAME}
+                """
+            ).fetchall()
+
+        items: Dict[str, dict] = {}
+        for row in existing_rows:
+            item = dict(row)
+            name = str(item.get("functional_ingredient_name", "") or "").strip()
+            if not name:
+                continue
+            items[name] = {
+                "functional_ingredient_name": name,
+                "category_main": str(item.get("category_main", "") or ""),
+                "category_sub": str(item.get("category_sub", "") or ""),
+                "function_text": str(item.get("function_text", "") or ""),
+                "claim_text": str(item.get("claim_text", "") or ""),
+                "source": str(item.get("source", "") or ""),
+                "confidence": float(item.get("confidence", 0.0) or 0.0),
+                "notes": str(item.get("notes", "") or ""),
+                "created_at": str(item.get("created_at", "") or ""),
+                "updated_at": str(item.get("updated_at", "") or ""),
+                "origin_type": "existing",
+                "origin_label": "기존 원료",
+                "source_table": "functional_category_map",
+            }
+
+        for row in custom_rows:
+            item = dict(row)
+            name = str(item.get("functional_ingredient_name", "") or "").strip()
+            if not name:
+                continue
+            items[name] = {
+                "functional_ingredient_name": name,
+                "category_main": str(item.get("category_main", "") or ""),
+                "category_sub": str(item.get("category_sub", "") or ""),
+                "function_text": str(item.get("function_text", "") or ""),
+                "claim_text": str(item.get("claim_text", "") or ""),
+                "source": str(item.get("source", "") or ""),
+                "confidence": float(item.get("confidence", 0.0) or 0.0),
+                "notes": str(item.get("notes", "") or ""),
+                "created_at": str(item.get("created_at", "") or ""),
+                "updated_at": str(item.get("updated_at", "") or ""),
+                "origin_type": "new",
+                "origin_label": "신규 추가",
+                "source_table": RUNTIME_CUSTOM_FUNCTIONAL_TABLE_NAME,
+            }
+
+        rows: List[dict] = []
+        for item in items.values():
+            if origin_filter in {"existing", "new"} and item["origin_type"] != origin_filter:
+                continue
+            haystack = " ".join(
+                [
+                    item["functional_ingredient_name"],
+                    item["category_main"],
+                    item["category_sub"],
+                    item["function_text"],
+                    item["claim_text"],
+                    item["notes"],
+                    item["source"],
+                ]
+            ).lower()
+            if query and query not in haystack:
+                continue
+            rows.append(item)
+
+        rows.sort(
+            key=lambda item: (
+                0 if item["origin_type"] == "new" else 1,
+                item["functional_ingredient_name"],
+            )
+        )
+        return rows[: max(1, int(limit))]
+
+    def update_ingredient_catalog_item(
+        self,
+        *,
+        functional_ingredient_name: str,
+        source_table: str,
+        category_main: str = "",
+        category_sub: str = "",
+        function_text: str = "",
+        claim_text: str = "",
+        notes: str = "",
+    ) -> None:
+        cleaned_name = str(functional_ingredient_name or "").strip()
+        cleaned_table = str(source_table or "").strip()
+        if cleaned_table not in {"functional_category_map", RUNTIME_CUSTOM_FUNCTIONAL_TABLE_NAME}:
+            raise ValueError("invalid source_table")
+        with sqlite_connection(self.sqlite_path) as conn:
+            if cleaned_table == "functional_category_map":
+                conn.execute(
+                    """
+                    UPDATE functional_category_map
+                    SET category_main = ?, category_sub = ?, function_text = ?, claim_text = ?, notes = ?
+                    WHERE functional_ingredient_name = ?
+                    """,
+                    (
+                        str(category_main or ""),
+                        str(category_sub or ""),
+                        str(function_text or ""),
+                        str(claim_text or ""),
+                        str(notes or ""),
+                        cleaned_name,
+                    ),
+                )
+            else:
+                conn.execute(
+                    f"""
+                    UPDATE {RUNTIME_CUSTOM_FUNCTIONAL_TABLE_NAME}
+                    SET category_main = ?, category_sub = ?, function_text = ?, claim_text = ?, notes = ?, updated_at = ?
+                    WHERE functional_ingredient_name = ?
+                    """,
+                    (
+                        str(category_main or ""),
+                        str(category_sub or ""),
+                        str(function_text or ""),
+                        str(claim_text or ""),
+                        str(notes or ""),
+                        _utcnow(),
+                        cleaned_name,
+                    ),
+                )
+                conn.execute(
+                    """
+                    UPDATE ingredient_approval_queue
+                    SET category_main = ?, category_sub = ?, function_text = ?, claim_text = ?, notes = ?, updated_at = ?
+                    WHERE functional_ingredient_name = ?
+                    """,
+                    (
+                        str(category_main or ""),
+                        str(category_sub or ""),
+                        str(function_text or ""),
+                        str(claim_text or ""),
+                        str(notes or ""),
+                        _utcnow(),
+                        cleaned_name,
+                    ),
+                )
+            conn.commit()
 
 
 _ops_service_singleton: Optional[OperationsService] = None

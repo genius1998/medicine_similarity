@@ -14,6 +14,7 @@ import pandas as pd
 
 from api.config import get_settings
 from api.db import sqlite_connection
+from api.ingredient_embedding_index import IngredientEmbeddingIndex
 from api.ingredient_family import (
     PROTECTED_JOINT_FAMILIES,
     canonical_joint_family_name,
@@ -753,6 +754,8 @@ class UploadRecommendationService:
         self._category_map: Optional[Dict[str, dict]] = None
         self._category_loose_map: Optional[Dict[str, dict]] = None
         self._runtime_rag_documents: Optional[List[dict]] = None
+        self._runtime_rag_exact_map: Optional[Dict[str, dict]] = None
+        self._embedding_index: Optional[IngredientEmbeddingIndex] = None
 
     def _ensure_loaded(self) -> None:
         self.recommendation_service.ensure_loaded()
@@ -766,13 +769,13 @@ class UploadRecommendationService:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 """
-                SELECT functional_ingredient_name, category_main, category_sub, claim_text, source, confidence, notes, categories_json
+                SELECT functional_ingredient_name, category_main, category_sub, function_text, claim_text, source, confidence, notes, categories_json
                 FROM functional_category_map
                 """
             ).fetchall()
             custom_rows = conn.execute(
                 f"""
-                SELECT functional_ingredient_name, category_main, category_sub, claim_text, source, confidence, notes, categories_json
+                SELECT functional_ingredient_name, category_main, category_sub, function_text, claim_text, source, confidence, notes, categories_json
                 FROM {RUNTIME_CUSTOM_FUNCTIONAL_TABLE_NAME}
                 """
             ).fetchall()
@@ -786,6 +789,51 @@ class UploadRecommendationService:
         self._category_map = category_map
         self._category_loose_map = category_loose_map
 
+    def _expand_runtime_lookup_terms(self, *values: str) -> List[str]:
+        suffixes = [
+            "혼합제제",
+            "복합제제",
+            "혼합분말",
+            "복합분말",
+            "혼합물",
+            "복합물",
+            "제제",
+            "분말",
+            "농축분말",
+            "추출분말",
+            "추출물분말",
+            "추출물",
+            "추출액",
+            "농축액",
+        ]
+        terms: List[str] = []
+        for value in values:
+            cleaned = str(value or "").strip()
+            if not cleaned:
+                continue
+            terms.append(cleaned)
+            canonical = canonicalize_ingredient_for_matching(cleaned)
+            if canonical and canonical != cleaned:
+                terms.append(canonical)
+            for suffix in suffixes:
+                if cleaned.endswith(suffix) and len(cleaned) > len(suffix):
+                    stripped = cleaned[: -len(suffix)].strip(" ,;/")
+                    if stripped:
+                        terms.append(stripped)
+                        canonical = canonicalize_ingredient_for_matching(stripped)
+                        if canonical and canonical != stripped:
+                            terms.append(canonical)
+            for group in re.findall(r"\(([^)]+)\)", cleaned):
+                for token in split_ingredients(group):
+                    token = str(token or "").strip()
+                    if not token:
+                        continue
+                    terms.append(token)
+                    canonical = canonicalize_ingredient_for_matching(token)
+                    if canonical and canonical != token:
+                        terms.append(canonical)
+        return dedupe_strings(terms)
+
     def _ensure_runtime_extension_tables(self, conn: sqlite3.Connection) -> None:
         conn.execute(
             f"""
@@ -793,6 +841,7 @@ class UploadRecommendationService:
                 functional_ingredient_name TEXT PRIMARY KEY,
                 category_main TEXT,
                 category_sub TEXT,
+                function_text TEXT,
                 claim_text TEXT,
                 source TEXT,
                 confidence REAL,
@@ -803,6 +852,10 @@ class UploadRecommendationService:
             )
             """
         )
+        try:
+            conn.execute(f"ALTER TABLE {RUNTIME_CUSTOM_FUNCTIONAL_TABLE_NAME} ADD COLUMN function_text TEXT")
+        except sqlite3.OperationalError:
+            pass
         conn.execute(
             f"CREATE INDEX IF NOT EXISTS idx_{RUNTIME_CUSTOM_FUNCTIONAL_TABLE_NAME}_category_main ON {RUNTIME_CUSTOM_FUNCTIONAL_TABLE_NAME}(category_main)"
         )
@@ -811,6 +864,7 @@ class UploadRecommendationService:
     def _reset_runtime_lookups(self) -> None:
         self._category_map = None
         self._category_loose_map = None
+        self._runtime_rag_exact_map = None
 
     def _load_runtime_rag_documents(self) -> List[dict]:
         if self._runtime_rag_documents is not None:
@@ -829,6 +883,7 @@ class UploadRecommendationService:
                         "sources_joined": str(row.get("sources_joined", "") or ""),
                         "function_text": str(row.get("function_text", "") or ""),
                         "caution_text": str(row.get("caution_text", "") or ""),
+                        "canonical_priority": float(row.get("canonical_priority", 0.0) or 0.0),
                         "specific_penalty": float(row.get("specific_penalty", 0.0) or 0.0),
                     }
                 )
@@ -851,6 +906,7 @@ class UploadRecommendationService:
                         "sources_joined": "synonym_dictionary",
                         "function_text": function_text,
                         "caution_text": caution_text,
+                        "canonical_priority": 0.0,
                         "specific_penalty": 0.0,
                     }
                 )
@@ -862,6 +918,222 @@ class UploadRecommendationService:
             deduped.setdefault(standard_name, row)
         self._runtime_rag_documents = list(deduped.values())
         return self._runtime_rag_documents
+
+    def _ensure_runtime_rag_exact_map(self) -> Dict[str, dict]:
+        if self._runtime_rag_exact_map is not None:
+            return self._runtime_rag_exact_map
+        exact_map: Dict[str, dict] = {}
+        for row in self._load_runtime_rag_documents():
+            variants = [str(row.get("standard_name", "") or "").strip()]
+            synonyms_joined = str(row.get("synonyms_joined", "") or "")
+            if synonyms_joined:
+                variants.extend([part.strip() for part in synonyms_joined.split(",") if part.strip()])
+            for variant in self._expand_runtime_lookup_terms(*variants):
+                key = normalize_cache_exact_key(variant)
+                if not key:
+                    continue
+                existing = exact_map.get(key)
+                if not existing:
+                    exact_map[key] = row
+                    continue
+                existing_penalty = float(existing.get("specific_penalty", 0.0) or 0.0)
+                new_penalty = float(row.get("specific_penalty", 0.0) or 0.0)
+                existing_priority = float(existing.get("canonical_priority", 0.0) or 0.0)
+                new_priority = float(row.get("canonical_priority", 0.0) or 0.0)
+                current_rank = (existing_penalty, -existing_priority, len(str(existing.get("standard_name", "") or "")))
+                new_rank = (new_penalty, -new_priority, len(str(row.get("standard_name", "") or "")))
+                if new_rank < current_rank:
+                    exact_map[key] = row
+        self._runtime_rag_exact_map = exact_map
+        return self._runtime_rag_exact_map
+
+    def _lookup_runtime_rag_exact_candidate(self, *terms: str) -> Optional[dict]:
+        exact_map = self._ensure_runtime_rag_exact_map()
+        for term in self._expand_runtime_lookup_terms(*terms):
+            key = normalize_cache_exact_key(term)
+            if not key:
+                continue
+            row = exact_map.get(key)
+            if row:
+                return dict(row)
+        return None
+
+    def _build_runtime_rag_exact_payload(
+        self,
+        *,
+        ingredient_name: str,
+        raw_ingredient: str,
+        display_name: str,
+        candidate_row: dict,
+        input_family: str,
+        mapping_rule: Optional[dict],
+    ) -> Optional[dict]:
+        standard_name = str(candidate_row.get("standard_name", "") or "").strip()
+        if not standard_name or not self._is_allowed_by_mapping_rule(mapping_rule, standard_name):
+            return None
+        category_row = self._lookup_category_row(standard_name)
+        if not category_row:
+            return None
+        resolved_name = str(category_row.get("functional_ingredient_name", "") or standard_name).strip()
+        if not resolved_name or not self._is_allowed_by_mapping_rule(mapping_rule, resolved_name):
+            return None
+        resolved_family = infer_joint_ingredient_family(resolved_name)
+        if input_family and resolved_family and resolved_family != input_family:
+            return None
+        return self._build_match_payload(
+            ingredient_name=ingredient_name,
+            raw_ingredient=raw_ingredient,
+            display_name=display_name,
+            functional_ingredient_name=resolved_name,
+            relation_type="same_ingredient",
+            confidence=0.955,
+            category_row=category_row,
+            match_source="rag_synonym_exact",
+            protected_family=input_family,
+        )
+
+    def _has_runtime_lexical_overlap(self, query_terms: List[str], candidate_row: dict) -> bool:
+        normalized_query_terms = [normalize_cache_exact_key(term) for term in query_terms if normalize_cache_exact_key(term)]
+        if not normalized_query_terms:
+            return False
+        candidate_text = " ".join(
+            [
+                str(candidate_row.get("standard_name", "") or ""),
+                str(candidate_row.get("synonyms_joined", "") or ""),
+                str(candidate_row.get("search_text", "") or ""),
+            ]
+        )
+        normalized_candidate = normalize_cache_exact_key(candidate_text)
+        if not normalized_candidate:
+            return False
+        for term in normalized_query_terms:
+            if len(term) >= 2 and term in normalized_candidate:
+                return True
+        query_tokens = {term for term in normalized_query_terms if len(term) >= 2}
+        candidate_tokens = {
+            normalize_cache_exact_key(token)
+            for token in re.split(r"[^0-9A-Za-z가-힣]+", candidate_text.lower())
+            if normalize_cache_exact_key(token)
+        }
+        return bool(query_tokens & candidate_tokens)
+
+    def _get_embedding_index(self) -> Optional[IngredientEmbeddingIndex]:
+        if self._embedding_index is not None:
+            return self._embedding_index
+        settings = get_settings()
+        if not settings.ingredient_embedding_enabled:
+            return None
+        self._embedding_index = IngredientEmbeddingIndex(settings)
+        return self._embedding_index
+
+    def _build_runtime_embedding_query_text(
+        self,
+        *,
+        ingredient_name: str,
+        raw_ingredient: str,
+        display_name: str,
+        input_family: str,
+        mapping_rule: Optional[dict],
+    ) -> str:
+        term_candidates: List[str] = []
+        for value in [display_name, raw_ingredient, ingredient_name]:
+            cleaned = str(value or "").strip()
+            if not cleaned:
+                continue
+            term_candidates.append(cleaned)
+            canonical = canonicalize_ingredient_for_matching(cleaned)
+            if canonical and canonical != cleaned:
+                term_candidates.append(canonical)
+        premix_source = str(display_name or raw_ingredient or ingredient_name or "").strip()
+        if _looks_like_functional_premix(premix_source):
+            inner_terms = re.findall(r"\(([^)]+)\)", premix_source)
+            for group in inner_terms:
+                for token in split_ingredients(group):
+                    token = str(token or "").strip()
+                    if not token:
+                        continue
+                    term_candidates.append(token)
+                    canonical = canonicalize_ingredient_for_matching(token)
+                    if canonical and canonical != token:
+                        term_candidates.append(canonical)
+        deduped_terms = dedupe_strings(term_candidates)
+        parts = [
+            f"입력 원료명: {display_name or raw_ingredient or ingredient_name}",
+            f"원본 원료명: {raw_ingredient or display_name or ingredient_name}",
+            f"정규화 원료명: {ingredient_name or display_name or raw_ingredient}",
+            f"검색 토큰: {', '.join(deduped_terms)}",
+        ]
+        if input_family:
+            parts.append(f"원료 계열 힌트: {input_family}")
+        rule_name = str((mapping_rule or {}).get("name", "") or "").strip()
+        if rule_name:
+            parts.append(f"매핑 검증 규칙: {rule_name}")
+        return "\n".join(part for part in parts if str(part).strip())
+
+    def _search_runtime_embedding_candidates(
+        self,
+        *,
+        ingredient_name: str,
+        raw_ingredient: str,
+        display_name: str,
+        input_family: str,
+        mapping_rule: Optional[dict],
+        top_k: int = RUNTIME_RAG_TOP_K,
+    ) -> List[dict]:
+        index = self._get_embedding_index()
+        if not index:
+            return []
+        query_terms = self._expand_runtime_lookup_terms(display_name, raw_ingredient, ingredient_name)
+        query_text = self._build_runtime_embedding_query_text(
+            ingredient_name=ingredient_name,
+            raw_ingredient=raw_ingredient,
+            display_name=display_name,
+            input_family=input_family,
+            mapping_rule=mapping_rule,
+        )
+        try:
+            results = index.search(query_text, top_k=max(top_k * 3, top_k))
+        except Exception as exc:
+            logger.warning("Ingredient embedding search failed: query=%r error=%s", query_text, exc)
+            return []
+        filtered = [row for row in results if self._has_runtime_lexical_overlap(query_terms, row)]
+        return filtered[:top_k]
+
+    def _merge_runtime_candidate_lists(self, *candidate_groups: List[dict], top_k: int = RUNTIME_RAG_TOP_K) -> List[dict]:
+        merged: Dict[str, dict] = {}
+        for group in candidate_groups:
+            for item in group:
+                standard_name = str(item.get("standard_name", "") or "").strip()
+                if not standard_name:
+                    continue
+                existing = merged.get(standard_name)
+                if not existing:
+                    merged[standard_name] = dict(item)
+                    continue
+                existing["retrieval_score"] = max(
+                    float(existing.get("retrieval_score", 0.0) or 0.0),
+                    float(item.get("retrieval_score", 0.0) or 0.0),
+                )
+                existing["embedding_score"] = max(
+                    float(existing.get("embedding_score", 0.0) or 0.0),
+                    float(item.get("embedding_score", 0.0) or 0.0),
+                )
+                sources = {
+                    str(existing.get("retrieval_source", "") or "").strip(),
+                    str(item.get("retrieval_source", "") or "").strip(),
+                } - {""}
+                if sources:
+                    existing["retrieval_source"] = ",".join(sorted(sources))
+        merged_rows = list(merged.values())
+        merged_rows.sort(
+            key=lambda row: (
+                -float(row.get("retrieval_score", 0.0) or 0.0),
+                -float(row.get("embedding_score", 0.0) or 0.0),
+                float(row.get("specific_penalty", 0.0) or 0.0),
+                str(row.get("standard_name", "") or ""),
+            )
+        )
+        return merged_rows[:top_k]
 
     def _log_trace(
         self,
@@ -1014,6 +1286,113 @@ class UploadRecommendationService:
                 {
                     "standard_name": str(item.get("standard_name", "") or ""),
                     "retrieval_score": float(item.get("retrieval_score", 0.0) or 0.0),
+                    "embedding_score": float(item.get("embedding_score", 0.0) or 0.0),
+                    "retrieval_source": str(item.get("retrieval_source", "") or ""),
+                    "sources_joined": str(item.get("sources_joined", "") or ""),
+                    "synonyms_joined": str(item.get("synonyms_joined", "") or ""),
+                    "function_text": str(item.get("function_text", "") or ""),
+                    "caution_text": str(item.get("caution_text", "") or ""),
+                }
+                for item in candidates
+            ],
+        }
+        content = call_local_llm(json.dumps(payload, ensure_ascii=False, indent=2))
+        parsed = extract_json_from_llm_content(content)
+        if not parsed:
+            raise RuntimeError("runtime RAG LLM returned non-JSON content")
+        parsed["_llm_raw_content"] = content
+        return parsed
+
+    def _generate_new_standard_metadata_with_llm(
+        self,
+        *,
+        ingredient_name: str,
+        raw_ingredient: str,
+        display_name: str,
+        candidates: List[dict],
+    ) -> dict:
+        category_choices = sorted({str(key) for key in CATEGORY_HINT_RULES})
+        payload = {
+            "task": "Generate conservative metadata for a newly discovered functional ingredient candidate.",
+            "rules": [
+                "Use only information reasonably inferable from the ingredient name and nearby candidate evidence.",
+                "Do not invent precise dosage or regulatory claims when uncertain.",
+                "If the function is unclear, leave function_text and claim_text empty.",
+                "Prefer short Korean descriptions suitable for internal review.",
+                "Return JSON only.",
+            ],
+            "allowed_categories": category_choices,
+            "output_schema": {
+                "category_main": "",
+                "category_sub": "",
+                "function_text": "",
+                "claim_text": "",
+                "review_notes": "",
+            },
+            "input": {
+                "ingredient_name": str(ingredient_name or ""),
+                "raw_ingredient": str(raw_ingredient or ""),
+                "display_name": str(display_name or ""),
+            },
+            "nearby_candidates": [
+                {
+                    "standard_name": str(item.get("standard_name", "") or ""),
+                    "function_text": str(item.get("function_text", "") or ""),
+                    "synonyms_joined": str(item.get("synonyms_joined", "") or ""),
+                    "retrieval_source": str(item.get("retrieval_source", "") or ""),
+                }
+                for item in candidates[:5]
+            ],
+        }
+        content = call_local_llm(json.dumps(payload, ensure_ascii=False, indent=2))
+        parsed = extract_json_from_llm_content(content)
+        if not parsed:
+            raise RuntimeError("new standard metadata LLM returned non-JSON content")
+        parsed["_llm_raw_content"] = content
+        return parsed
+
+    def _classify_runtime_rag_candidates_with_llm(
+        self,
+        *,
+        ingredient_name: str,
+        raw_ingredient: str,
+        display_name: str,
+        candidates: List[dict],
+    ) -> dict:
+        category_choices = sorted({str(key) for key in CATEGORY_HINT_RULES})
+        payload = {
+            "task": "Classify whether the input ingredient is an existing standard functional ingredient, a new standard functional ingredient, or not a functional ingredient.",
+            "rules": [
+                "If the input is effectively the same ingredient as one of the candidates, use decision=existing_match.",
+                "If none of the candidates are correct but the input still looks like a real functional ingredient, use decision=new_standard.",
+                "If the input is an excipient, marketing phrase, generic sentence, dosage text, or unrelated text, use decision=no_match.",
+                "When decision=existing_match, matched_standard_name must be exactly one of the candidate standard_name values.",
+                "Prefer the candidate with the strongest name match and compatible function/category evidence.",
+                "Return JSON only.",
+            ],
+            "allowed_categories": category_choices,
+            "output_schema": {
+                "decision": "existing_match|new_standard|no_match",
+                "matched_standard_name": "",
+                "proposed_standard_name": "",
+                "relation_type": "same_ingredient|ingredient_group|marker_compound|nutrient_form|same_function_only|unrelated",
+                "confidence": 0.0,
+                "reason": "",
+                "category_main": "",
+                "category_sub": "",
+                "claim_text": "",
+            },
+            "input": {
+                "ingredient_name": str(ingredient_name or ""),
+                "raw_ingredient": str(raw_ingredient or ""),
+                "display_name": str(display_name or ""),
+            },
+            "candidates": [
+                {
+                    "standard_name": str(item.get("standard_name", "") or ""),
+                    "retrieval_score": float(item.get("retrieval_score", 0.0) or 0.0),
+                    "embedding_score": float(item.get("embedding_score", 0.0) or 0.0),
+                    "retrieval_source": str(item.get("retrieval_source", "") or ""),
                     "sources_joined": str(item.get("sources_joined", "") or ""),
                     "synonyms_joined": str(item.get("synonyms_joined", "") or ""),
                     "function_text": str(item.get("function_text", "") or ""),
@@ -1067,13 +1446,24 @@ class UploadRecommendationService:
             )
             conn.commit()
 
-    def _save_runtime_custom_functional_ingredient(self, *, standard_name: str, category_main: str, category_sub: str, claim_text: str, confidence: float, notes: str) -> dict:
+    def _save_runtime_custom_functional_ingredient(
+        self,
+        *,
+        standard_name: str,
+        category_main: str,
+        category_sub: str,
+        function_text: str,
+        claim_text: str,
+        confidence: float,
+        notes: str,
+    ) -> dict:
         runtime = self.recommendation_service.runtime
         normalized_standard = str(standard_name or "").strip()
         row = {
             "functional_ingredient_name": normalized_standard,
             "category_main": str(category_main or self._detect_category_from_ingredients([normalized_standard]) or "기타"),
             "category_sub": str(category_sub or ""),
+            "function_text": str(function_text or ""),
             "claim_text": str(claim_text or ""),
             "source": "runtime_auto_provisional",
             "confidence": float(confidence or 0.0),
@@ -1085,12 +1475,13 @@ class UploadRecommendationService:
             conn.execute(
                 f"""
                 INSERT INTO {RUNTIME_CUSTOM_FUNCTIONAL_TABLE_NAME} (
-                    functional_ingredient_name, category_main, category_sub, claim_text,
+                    functional_ingredient_name, category_main, category_sub, function_text, claim_text,
                     source, confidence, notes, categories_json, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 ON CONFLICT(functional_ingredient_name) DO UPDATE SET
                     category_main=excluded.category_main,
                     category_sub=excluded.category_sub,
+                    function_text=excluded.function_text,
                     claim_text=excluded.claim_text,
                     source=excluded.source,
                     confidence=excluded.confidence,
@@ -1102,6 +1493,7 @@ class UploadRecommendationService:
                     row["functional_ingredient_name"],
                     row["category_main"],
                     row["category_sub"],
+                    row["function_text"],
                     row["claim_text"],
                     row["source"],
                     row["confidence"],
@@ -1146,9 +1538,7 @@ class UploadRecommendationService:
         alias_terms: List[str] = []
         if mapping_rule:
             alias_terms.extend(mapping_rule.get("safe_aliases", []))
-        canonical_term = canonicalize_ingredient_for_matching(raw_ingredient or display_name or ingredient_name)
-        if canonical_term:
-            alias_terms.append(canonical_term)
+        alias_terms.extend(self._expand_runtime_lookup_terms(raw_ingredient, display_name, ingredient_name))
         return dedupe_strings(alias_terms)
 
     def _is_cache_like_vector_excluded(self, *values: str) -> bool:
@@ -1329,7 +1719,7 @@ class UploadRecommendationService:
         )
 
     def _resolve_match_terms(self, ingredient_name: str, raw_ingredient: str, display_name: str, input_family: str) -> List[str]:
-        terms = [display_name, raw_ingredient, ingredient_name]
+        terms = self._expand_runtime_lookup_terms(display_name, raw_ingredient, ingredient_name)
         if input_family:
             terms.extend(joint_family_aliases(input_family))
             terms.append(canonical_joint_family_name(input_family))
@@ -1467,17 +1857,27 @@ class UploadRecommendationService:
         if contains_guarded_runtime_term(query, RUNTIME_EXCIPIENT_VECTOR_EXCLUDED_TERMS):
             return None
 
+        embedding_results = self._search_runtime_embedding_candidates(
+            ingredient_name=ingredient_name,
+            raw_ingredient=raw_ingredient,
+            display_name=display_name,
+            input_family=input_family,
+            mapping_rule=mapping_rule,
+            top_k=max(RUNTIME_RAG_TOP_K, 8),
+        )
         try:
-            results = self._search_runtime_rag_candidates(query, top_k=RUNTIME_RAG_TOP_K)
+            lexical_results = self._search_runtime_rag_candidates(query, top_k=max(RUNTIME_RAG_TOP_K, 5))
         except Exception as exc:
             logger.warning("Runtime RAG fallback retrieval failed: query=%r error=%s", query, exc)
-            return None
+            lexical_results = []
 
-        if not results:
-            return None
-        top1 = dict(results[0])
-        if float(top1.get("retrieval_score", 0.0) or 0.0) < 2.0:
-            return None
+        results = self._merge_runtime_candidate_lists(embedding_results, lexical_results, top_k=max(RUNTIME_RAG_TOP_K, 8))
+        if results:
+            top1 = dict(results[0])
+            top_retrieval_score = float(top1.get("retrieval_score", 0.0) or 0.0)
+            top_embedding_score = float(top1.get("embedding_score", 0.0) or 0.0)
+            if top_retrieval_score < 2.0 and top_embedding_score < 0.45:
+                results = []
 
         try:
             llm_result = self._classify_runtime_rag_candidates_with_llm(
@@ -1495,6 +1895,8 @@ class UploadRecommendationService:
             return None
 
         if decision == "existing_match":
+            if not results:
+                return None
             standard_name = str(llm_result.get("matched_standard_name", "") or "").strip()
             if not standard_name or not self._is_allowed_by_mapping_rule(mapping_rule, standard_name):
                 return None
@@ -1550,13 +1952,37 @@ class UploadRecommendationService:
         if confidence < 0.7:
             confidence = 0.78
         reason = str(llm_result.get("reason", "") or "runtime RAG+LLM provisional new ingredient").strip()
+        generated_metadata: dict = {}
+        try:
+            generated_metadata = self._generate_new_standard_metadata_with_llm(
+                ingredient_name=ingredient_name,
+                raw_ingredient=raw_ingredient,
+                display_name=display_name,
+                candidates=results,
+            )
+        except Exception as exc:
+            logger.warning("New standard metadata generation failed: query=%r error=%s", query, exc)
+            generated_metadata = {}
+        category_main = str(llm_result.get("category_main", "") or generated_metadata.get("category_main", "") or "").strip()
+        category_sub = str(llm_result.get("category_sub", "") or generated_metadata.get("category_sub", "") or "").strip()
+        function_text = str(generated_metadata.get("function_text", "") or "").strip()
+        claim_text = str(llm_result.get("claim_text", "") or generated_metadata.get("claim_text", "") or "").strip()
+        review_notes = str(generated_metadata.get("review_notes", "") or "").strip()
+        combined_notes = reason if not review_notes else f"{reason} | metadata: {review_notes}"
+        llm_result["category_main"] = category_main
+        llm_result["category_sub"] = category_sub
+        llm_result["function_text"] = function_text
+        llm_result["claim_text"] = claim_text
+        if review_notes:
+            llm_result["review_notes"] = review_notes
         category_row = self._save_runtime_custom_functional_ingredient(
             standard_name=proposed_standard_name,
-            category_main=str(llm_result.get("category_main", "") or ""),
-            category_sub=str(llm_result.get("category_sub", "") or ""),
-            claim_text=str(llm_result.get("claim_text", "") or ""),
+            category_main=category_main,
+            category_sub=category_sub,
+            function_text=function_text,
+            claim_text=claim_text,
             confidence=confidence,
-            notes=reason,
+            notes=combined_notes,
         )
         resolved_name = str(category_row.get("functional_ingredient_name", "") or proposed_standard_name).strip()
         self._save_runtime_cache_match(
@@ -1565,7 +1991,7 @@ class UploadRecommendationService:
             matched_standard_name=resolved_name,
             relation_type="same_ingredient",
             confidence=confidence,
-            reason=reason,
+            reason=combined_notes,
             rag_candidates=results,
             gpt_payload=llm_result,
             match_method="runtime_rag_llm_new",
@@ -1903,6 +2329,19 @@ class UploadRecommendationService:
                     protected_family=input_family,
                 )
 
+            rag_exact = self._lookup_runtime_rag_exact_candidate(display_input, raw_input, normalized_input)
+            if rag_exact:
+                rag_exact_match = self._build_runtime_rag_exact_payload(
+                    ingredient_name=normalized_input,
+                    raw_ingredient=raw_input,
+                    display_name=display_input,
+                    candidate_row=rag_exact,
+                    input_family=input_family,
+                    mapping_rule=mapping_rule,
+                )
+                if rag_exact_match:
+                    return rag_exact_match
+
             matched_standard_terms = dedupe_strings([*safe_alias_terms, *direct_terms])
             for term in matched_standard_terms:
                 for row in iter_unique_rows(self._fetch_cache_rows_by_matched_standard(conn, term)):
@@ -1971,6 +2410,314 @@ class UploadRecommendationService:
             if fallback:
                 return fallback
         return None
+
+    def debug_ingredient_match(self, ingredient_text: str) -> dict:
+        self._ensure_loaded()
+        normalized_input = str(ingredient_text or "").strip()
+        raw_input = normalized_input
+        display_input = normalized_input
+        input_family = resolve_joint_input_family(display_input, raw_input, normalized_input)
+        mapping_rule = resolve_runtime_mapping_rule(display_input, raw_input, normalized_input)
+        direct_terms = self._resolve_match_terms(normalized_input, raw_input, display_input, input_family)
+        safe_alias_terms = self._resolve_safe_alias_terms(normalized_input, raw_input, display_input, mapping_rule)
+        normalized_raw_exact = normalize_cache_exact_key(raw_input or display_input or normalized_input)
+
+        debug = {
+            "input": {
+                "ingredient_text": normalized_input,
+                "normalized_input": normalized_input,
+                "normalized_exact_key": normalized_raw_exact,
+                "input_family": input_family,
+                "mapping_rule": dict(mapping_rule or {}),
+                "direct_terms": list(direct_terms),
+                "safe_alias_terms": list(safe_alias_terms),
+            },
+            "guard_checks": {
+                "looks_like_measurement_or_symbol": looks_like_runtime_measurement_or_symbol(normalized_input),
+                "cache_like_excluded": self._is_cache_like_vector_excluded(normalized_input),
+                "excipient_excluded": self._is_excipient_vector_excluded(normalized_input),
+            },
+            "exact_candidates": [],
+            "direct_candidates": [],
+            "safe_alias_candidates": [],
+            "matched_standard_candidates": [],
+            "like_candidates": [],
+            "embedding_candidates": [],
+            "lexical_candidates": [],
+            "merged_candidates": [],
+            "llm_result": None,
+            "final_selection": None,
+        }
+
+        def serialize_match(match: dict, *, source: str) -> dict:
+            category_row = dict(match.get("category_row", {}) or {})
+            return {
+                "source": source,
+                "functional_ingredient_name": str(match.get("functional_ingredient_name", "") or ""),
+                "relation_type": str(match.get("relation_type", "") or ""),
+                "confidence": float(match.get("confidence", 0.0) or 0.0),
+                "match_source": str(match.get("match_source", source) or source),
+                "profile_ingredient_name": str(match.get("profile_ingredient_name", "") or ""),
+                "category_main": str(category_row.get("category_main", "") or ""),
+                "category_sub": str(category_row.get("category_sub", "") or ""),
+                "function_text": str(category_row.get("function_text", "") or ""),
+                "claim_text": str(category_row.get("claim_text", "") or ""),
+            }
+
+        def serialize_candidate(item: dict) -> dict:
+            return {
+                "standard_name": str(item.get("standard_name", "") or ""),
+                "retrieval_score": float(item.get("retrieval_score", 0.0) or 0.0),
+                "embedding_score": float(item.get("embedding_score", 0.0) or 0.0),
+                "retrieval_source": str(item.get("retrieval_source", "") or ""),
+                "sources_joined": str(item.get("sources_joined", "") or ""),
+                "synonyms_joined": str(item.get("synonyms_joined", "") or ""),
+                "function_text": str(item.get("function_text", "") or ""),
+                "caution_text": str(item.get("caution_text", "") or ""),
+            }
+
+        def add_first_final(candidates: List[dict]) -> None:
+            if candidates and not debug["final_selection"]:
+                debug["final_selection"] = dict(candidates[0])
+
+        def iter_unique_rows(rows: List[sqlite3.Row]) -> List[sqlite3.Row]:
+            seen = set()
+            unique_rows: List[sqlite3.Row] = []
+            for row in rows:
+                key = (
+                    str(row["raw_ingredient"] or ""),
+                    str(row["matched_standard_name"] or ""),
+                    str(row["relation_type"] or ""),
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
+                unique_rows.append(row)
+            return unique_rows
+
+        runtime = self.recommendation_service.runtime
+        with sqlite_connection(runtime["sqlite_path"]) as conn:
+            conn.row_factory = sqlite3.Row
+
+            normalized_exact_rows = iter_unique_rows(self._fetch_cache_rows_by_normalized_raw(conn, normalized_raw_exact))
+            for row in normalized_exact_rows:
+                match = self._resolve_cache_row_match(
+                    ingredient_name=normalized_input,
+                    raw_ingredient=raw_input,
+                    display_name=display_input,
+                    row=row,
+                    input_family=input_family,
+                    allow_like=False,
+                    mapping_rule=mapping_rule,
+                    source_override="cache_normalized_exact",
+                )
+                if match:
+                    debug["exact_candidates"].append(serialize_match(match, source="cache_normalized_exact"))
+
+            raw_exact_rows = iter_unique_rows(self._fetch_cache_rows_by_raw(conn, raw_input))
+            for row in raw_exact_rows:
+                match = self._resolve_cache_row_match(
+                    ingredient_name=normalized_input,
+                    raw_ingredient=raw_input,
+                    display_name=display_input,
+                    row=row,
+                    input_family=input_family,
+                    allow_like=False,
+                    mapping_rule=mapping_rule,
+                    source_override="cache_raw_exact",
+                )
+                if match:
+                    debug["exact_candidates"].append(serialize_match(match, source="cache_raw_exact"))
+
+            for direct_name in direct_terms:
+                direct = self._lookup_category_row(direct_name)
+                if not direct:
+                    continue
+                resolved_name = str(direct["functional_ingredient_name"] or "").strip()
+                if not resolved_name or not self._is_allowed_by_mapping_rule(mapping_rule, resolved_name):
+                    continue
+                resolved_family = infer_joint_ingredient_family(resolved_name)
+                if input_family and resolved_family and resolved_family != input_family:
+                    continue
+                payload = self._build_match_payload(
+                    ingredient_name=normalized_input,
+                    raw_ingredient=raw_input,
+                    display_name=display_input,
+                    functional_ingredient_name=resolved_name,
+                    relation_type="same_ingredient",
+                    confidence=0.99 if input_family else 0.98,
+                    category_row=direct,
+                    match_source="direct_category",
+                    protected_family=input_family,
+                )
+                debug["direct_candidates"].append(serialize_match(payload, source="direct_category"))
+
+            for alias_term in safe_alias_terms:
+                direct = self._lookup_category_row(alias_term)
+                if not direct:
+                    continue
+                resolved_name = str(direct["functional_ingredient_name"] or "").strip()
+                if not resolved_name or not self._is_allowed_by_mapping_rule(mapping_rule, resolved_name):
+                    continue
+                resolved_family = infer_joint_ingredient_family(resolved_name)
+                if input_family and resolved_family and resolved_family != input_family:
+                    continue
+                payload = self._build_match_payload(
+                    ingredient_name=normalized_input,
+                    raw_ingredient=raw_input,
+                    display_name=display_input,
+                    functional_ingredient_name=resolved_name,
+                    relation_type="same_ingredient",
+                    confidence=0.97 if mapping_rule else 0.96,
+                    category_row=direct,
+                    match_source="safe_alias_exact",
+                    protected_family=input_family,
+                )
+                debug["safe_alias_candidates"].append(serialize_match(payload, source="safe_alias_exact"))
+
+            rag_exact = self._lookup_runtime_rag_exact_candidate(display_input, raw_input, normalized_input)
+            if rag_exact:
+                rag_exact_match = self._build_runtime_rag_exact_payload(
+                    ingredient_name=normalized_input,
+                    raw_ingredient=raw_input,
+                    display_name=display_input,
+                    candidate_row=rag_exact,
+                    input_family=input_family,
+                    mapping_rule=mapping_rule,
+                )
+                if rag_exact_match:
+                    debug["safe_alias_candidates"].append(
+                        serialize_match(rag_exact_match, source="rag_synonym_exact")
+                    )
+
+            matched_standard_terms = dedupe_strings([*safe_alias_terms, *direct_terms])
+            for term in matched_standard_terms:
+                for row in iter_unique_rows(self._fetch_cache_rows_by_matched_standard(conn, term)):
+                    match = self._resolve_cache_row_match(
+                        ingredient_name=normalized_input,
+                        raw_ingredient=raw_input,
+                        display_name=display_input,
+                        row=row,
+                        input_family=input_family,
+                        allow_like=False,
+                        mapping_rule=mapping_rule,
+                        source_override="cache_matched_standard_exact",
+                    )
+                    if match:
+                        debug["matched_standard_candidates"].append(
+                            serialize_match(match, source="cache_matched_standard_exact")
+                        )
+
+            if not is_like_blocked_input(raw_input, display_input, normalized_input):
+                like_rows: List[sqlite3.Row] = []
+                seen_like = set()
+                for term in direct_terms:
+                    normalized_term = normalize_cache_exact_key(term)
+                    if not normalized_term or is_like_blocked_input(term):
+                        continue
+                    if len(normalized_term) < 5:
+                        continue
+                    for row in self._fetch_cache_rows(conn, term, like=True):
+                        key = (
+                            str(row["raw_ingredient"] or ""),
+                            str(row["matched_standard_name"] or ""),
+                            str(row["relation_type"] or ""),
+                        )
+                        if key in seen_like:
+                            continue
+                        seen_like.add(key)
+                        like_rows.append(row)
+                for row in like_rows:
+                    match = self._resolve_cache_row_match(
+                        ingredient_name=normalized_input,
+                        raw_ingredient=raw_input,
+                        display_name=display_input,
+                        row=row,
+                        input_family=input_family,
+                        allow_like=True,
+                        mapping_rule=mapping_rule,
+                    )
+                    if match:
+                        debug["like_candidates"].append(serialize_match(match, source="cache_like"))
+
+        add_first_final(debug["exact_candidates"])
+        add_first_final(debug["direct_candidates"])
+        add_first_final(debug["safe_alias_candidates"])
+        add_first_final(debug["matched_standard_candidates"])
+        add_first_final(debug["like_candidates"])
+
+        embedding_results = self._search_runtime_embedding_candidates(
+            ingredient_name=normalized_input,
+            raw_ingredient=raw_input,
+            display_name=display_input,
+            input_family=input_family,
+            mapping_rule=mapping_rule,
+            top_k=max(RUNTIME_RAG_TOP_K, 8),
+        )
+        lexical_results = self._search_runtime_rag_candidates(normalized_input, top_k=max(RUNTIME_RAG_TOP_K, 5))
+        merged_results = self._merge_runtime_candidate_lists(embedding_results, lexical_results, top_k=max(RUNTIME_RAG_TOP_K, 8))
+        debug["embedding_candidates"] = [serialize_candidate(item) for item in embedding_results]
+        debug["lexical_candidates"] = [serialize_candidate(item) for item in lexical_results]
+        debug["merged_candidates"] = [serialize_candidate(item) for item in merged_results]
+
+        try:
+            llm_result = self._classify_runtime_rag_candidates_with_llm(
+                ingredient_name=normalized_input,
+                raw_ingredient=raw_input,
+                display_name=display_input,
+                candidates=merged_results,
+            )
+            debug["llm_result"] = llm_result
+            if not debug["final_selection"]:
+                decision = str(llm_result.get("decision", "") or "").strip().lower()
+                if decision == "existing_match":
+                    matched_standard_name = str(llm_result.get("matched_standard_name", "") or "").strip()
+                    category_row = self._lookup_category_row(matched_standard_name) if matched_standard_name else None
+                    if category_row:
+                        payload = self._build_match_payload(
+                            ingredient_name=normalized_input,
+                            raw_ingredient=raw_input,
+                            display_name=display_input,
+                            functional_ingredient_name=str(category_row["functional_ingredient_name"] or ""),
+                            relation_type=str(llm_result.get("relation_type", "") or "same_ingredient"),
+                            confidence=float(llm_result.get("confidence", 0.0) or 0.0),
+                            category_row=category_row,
+                            match_source="runtime_rag_llm_existing",
+                            protected_family=input_family,
+                        )
+                        debug["final_selection"] = serialize_match(payload, source="runtime_rag_llm_existing")
+                elif decision == "new_standard":
+                    final_name = str(
+                        llm_result.get("proposed_standard_name", "")
+                        or llm_result.get("matched_standard_name", "")
+                        or normalized_input
+                    )
+                    metadata = {}
+                    try:
+                        metadata = self._generate_new_standard_metadata_with_llm(
+                            ingredient_name=normalized_input,
+                            raw_ingredient=raw_input,
+                            display_name=display_input,
+                            candidates=merged_results,
+                        )
+                    except Exception:
+                        metadata = {}
+                    debug["final_selection"] = {
+                        "source": "runtime_rag_llm_new",
+                        "functional_ingredient_name": final_name,
+                        "relation_type": "same_ingredient",
+                        "confidence": float(llm_result.get("confidence", 0.0) or 0.0),
+                        "match_source": "runtime_rag_llm_new",
+                        "profile_ingredient_name": final_name,
+                        "category_main": str(llm_result.get("category_main", "") or metadata.get("category_main", "") or ""),
+                        "category_sub": str(llm_result.get("category_sub", "") or metadata.get("category_sub", "") or ""),
+                        "function_text": str(metadata.get("function_text", "") or ""),
+                        "claim_text": str(llm_result.get("claim_text", "") or metadata.get("claim_text", "") or ""),
+                    }
+        except Exception as exc:  # noqa: BLE001
+            debug["llm_result"] = {"error": str(exc)}
+
+        return debug
 
     def match_raw_ingredients_to_functional_ingredients(self, ingredient_objects: List[dict]) -> List[dict]:
         results = []
