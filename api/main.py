@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 import time
 from io import BytesIO
+import re
 from typing import Optional
 from urllib.parse import quote_plus
 
@@ -83,6 +84,67 @@ def require_admin_user(request: Request) -> AuthUser:
 
 def login_redirect() -> RedirectResponse:
     return RedirectResponse(url="/login", status_code=303)
+
+
+def _summarize_top_results(recommendations: list[dict], limit: int = 3) -> list[dict]:
+    items = []
+    for item in list(recommendations or [])[: max(1, int(limit))]:
+        items.append(
+            {
+                "product_name": str(item.get("target_product_name") or item.get("product_name") or ""),
+                "report_no": str(item.get("target_report_no") or item.get("report_no") or ""),
+                "similarity_score": float(item.get("similarity_score", 0.0) or 0.0),
+            }
+        )
+    return items
+
+
+def _build_admin_user_activity_context(*, activity_limit: int = 200, user_limit: int = 500) -> dict:
+    users = ops_service.list_user_accounts(limit=user_limit)
+    activity_items = ops_service.list_recent_analysis_activity(limit=activity_limit)
+    fillable_db_items = 0
+    report_no_pattern = re.compile(r"^UPLOADED-")
+
+    for item in activity_items:
+        if item.get("activity_type") != "db_product":
+            continue
+        report_no = str(item.get("analyzed_report_no", "") or "")
+        if report_no and not item.get("analyzed_target"):
+            catalog_detail = service.get_catalog_product_detail(report_no) or {}
+            profile = service.get_profile_by_report_no(report_no) or {}
+            item["analyzed_target"] = str(
+                catalog_detail.get("product_name") or profile.get("product_name") or report_no
+            )
+        if item.get("result_recorded") or not report_no or report_no_pattern.match(report_no):
+            continue
+        if fillable_db_items >= 10:
+            continue
+        try:
+            similar_payload = service.get_similar_products(
+                report_no,
+                top_k=3,
+                candidate_limit=min(settings.default_candidate_limit, 300),
+                force_refresh=False,
+                llm_rerank=False,
+            )
+            item["top_results"] = _summarize_top_results(similar_payload.get("recommendations", []), limit=3)
+            item["result_recorded"] = bool(item["top_results"])
+            fillable_db_items += 1
+        except Exception:
+            continue
+
+    summary = {
+        "total_users": len(users),
+        "active_users": sum(1 for item in users if bool(item.get("is_active"))),
+        "total_ocr_reviews": sum(int(item.get("ocr_review_count", 0) or 0) for item in users),
+        "total_db_product_analyses": sum(int(item.get("product_analysis_count", 0) or 0) for item in users),
+        "latest_signup_at": max((str(item.get("created_at", "") or "") for item in users), default=""),
+    }
+    return {
+        "user_accounts": users,
+        "analysis_activity": activity_items,
+        "user_activity_summary": summary,
+    }
 
 
 @app.middleware("http")
@@ -296,6 +358,26 @@ def admin_page(
         log_next_page=min(log_total_pages, current_log_page + 1),
     )
     return templates.TemplateResponse(request, "admin.html", context)
+
+
+@app.get("/admin/users", response_class=HTMLResponse)
+def admin_user_activity_page(
+    request: Request,
+    activity_limit: int = Query(120, ge=20, le=500),
+    user_limit: int = Query(500, ge=20, le=2000),
+) -> HTMLResponse:
+    user = get_current_user(request)
+    if not user:
+        return login_redirect()
+    if user.role != "admin":
+        return RedirectResponse(url="/home", status_code=303)
+    context = template_context(
+        request,
+        activity_limit=activity_limit,
+        user_limit=user_limit,
+        **_build_admin_user_activity_context(activity_limit=activity_limit, user_limit=user_limit),
+    )
+    return templates.TemplateResponse(request, "admin_user_activity.html", context)
 
 
 @app.get("/admin/ingredients", response_class=HTMLResponse)
@@ -516,11 +598,26 @@ def get_similar_products(
     force_refresh: bool = Query(False),
     llm_rerank: bool = Query(False),
 ) -> RecommendationResponse:
-    require_api_user(request)
+    user = require_api_user(request)
     try:
         payload = service.get_similar_products(report_no, top_k, candidate_limit, force_refresh, llm_rerank)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    ops_service.log_event(
+        event_type="product_similarity_lookup",
+        level="info",
+        user_id=user.user_id,
+        request_path=f"/api/products/{report_no}/similar",
+        request_method="GET",
+        status_code=200,
+        message="existing db product similarity lookup",
+        payload={
+            "report_no": str(report_no or ""),
+            "base_product_name": str(payload.get("base_product", {}).get("product_name", "") or ""),
+            "llm_rerank_applied": bool(payload.get("llm_rerank_applied", False)),
+            "top_results": _summarize_top_results(payload.get("recommendations", []), limit=3),
+        },
+    )
     return RecommendationResponse(
         base_product=RecommendationBaseProduct(**payload["base_product"]),
         recommendations=[RecommendationItem(**item) for item in payload["recommendations"]],

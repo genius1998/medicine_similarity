@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import re
 import secrets
 import sqlite3
 from dataclasses import dataclass
@@ -695,6 +696,191 @@ class OperationsService:
         buffer = BytesIO()
         wb.save(buffer)
         return buffer.getvalue()
+
+    def list_user_accounts(self, *, limit: int = 500) -> List[dict]:
+        with sqlite_connection(self.sqlite_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """
+                SELECT
+                    u.user_id,
+                    u.email,
+                    u.full_name,
+                    u.organization,
+                    u.role,
+                    u.is_active,
+                    u.created_at,
+                    u.updated_at,
+                    (
+                        SELECT MAX(created_at)
+                        FROM app_event_log l
+                        WHERE l.user_id = u.user_id
+                    ) AS last_activity_at,
+                    (
+                        SELECT COUNT(*)
+                        FROM ocr_review_history h
+                        WHERE h.user_id = u.user_id
+                    ) AS ocr_review_count,
+                    (
+                        SELECT COUNT(*)
+                        FROM app_event_log l
+                        WHERE l.user_id = u.user_id
+                          AND (
+                              l.event_type = 'product_similarity_lookup'
+                              OR (l.event_type = 'http_request' AND l.request_path LIKE '/api/products/%/similar')
+                          )
+                    ) AS product_analysis_count
+                FROM app_user u
+                ORDER BY datetime(u.created_at) DESC, u.user_id DESC
+                LIMIT ?
+                """,
+                (int(limit),),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_recent_analysis_activity(self, *, limit: int = 200) -> List[dict]:
+        with sqlite_connection(self.sqlite_path) as conn:
+            conn.row_factory = sqlite3.Row
+            ocr_rows = conn.execute(
+                """
+                SELECT
+                    h.review_id AS activity_id,
+                    h.created_at,
+                    h.updated_at,
+                    h.user_id,
+                    u.email AS user_email,
+                    h.source_type,
+                    h.product_name_candidate,
+                    h.normalized_ingredients_json,
+                    h.edited_ingredients_json,
+                    h.recommendations_json,
+                    h.latest_trace_id
+                FROM ocr_review_history h
+                LEFT JOIN app_user u ON u.user_id = h.user_id
+                ORDER BY h.review_id DESC
+                LIMIT ?
+                """,
+                (int(limit),),
+            ).fetchall()
+            event_rows = conn.execute(
+                """
+                SELECT
+                    l.log_id AS activity_id,
+                    l.created_at,
+                    l.user_id,
+                    u.email AS user_email,
+                    l.event_type,
+                    l.request_path,
+                    l.message,
+                    l.payload_json
+                FROM app_event_log l
+                LEFT JOIN app_user u ON u.user_id = l.user_id
+                WHERE l.event_type = 'product_similarity_lookup'
+                   OR (l.event_type = 'http_request' AND l.request_path LIKE '/api/products/%/similar')
+                ORDER BY l.log_id DESC
+                LIMIT ?
+                """,
+                (int(limit),),
+            ).fetchall()
+
+        items: List[dict] = []
+        for row in ocr_rows:
+            recommendations = _safe_json_loads(row["recommendations_json"], [])
+            items.append(
+                {
+                    "activity_type": f"ocr_{str(row['source_type'] or '')}",
+                    "activity_id": int(row["activity_id"]),
+                    "created_at": str(row["created_at"] or ""),
+                    "updated_at": str(row["updated_at"] or ""),
+                    "user_id": int(row["user_id"]) if row["user_id"] is not None else None,
+                    "user_email": str(row["user_email"] or ""),
+                    "source_label": f"OCR/{str(row['source_type'] or '').upper()}",
+                    "analyzed_target": str(row["product_name_candidate"] or ""),
+                    "analyzed_report_no": "",
+                    "trace_id": str(row["latest_trace_id"] or ""),
+                    "normalized_ingredients": _safe_json_loads(row["normalized_ingredients_json"], []),
+                    "edited_ingredients": _safe_json_loads(row["edited_ingredients_json"], []),
+                    "top_results": [
+                        {
+                            "product_name": str(item.get("target_product_name") or item.get("product_name") or ""),
+                            "report_no": str(item.get("target_report_no") or item.get("report_no") or ""),
+                            "similarity_score": float(item.get("similarity_score", 0.0) or 0.0),
+                        }
+                        for item in recommendations[:3]
+                    ],
+                    "result_recorded": True,
+                }
+            )
+
+        report_no_pattern = re.compile(r"/api/products/([^/]+)/similar")
+        db_event_items: List[dict] = []
+        for row in event_rows:
+            payload = _safe_json_loads(row["payload_json"], {})
+            request_path = str(row["request_path"] or "")
+            matched = report_no_pattern.search(request_path)
+            report_no = str(payload.get("report_no") or (matched.group(1) if matched else "") or "")
+            top_results = []
+            for item in list(payload.get("top_results", []) or [])[:3]:
+                top_results.append(
+                    {
+                        "product_name": str(item.get("product_name") or ""),
+                        "report_no": str(item.get("report_no") or ""),
+                        "similarity_score": float(item.get("similarity_score", 0.0) or 0.0),
+                    }
+                )
+            db_event_items.append(
+                {
+                    "activity_type": "db_product",
+                    "activity_id": int(row["activity_id"]),
+                    "created_at": str(row["created_at"] or ""),
+                    "updated_at": str(row["created_at"] or ""),
+                    "user_id": int(row["user_id"]) if row["user_id"] is not None else None,
+                    "user_email": str(row["user_email"] or ""),
+                    "source_label": "기존DB 제품",
+                    "analyzed_target": str(payload.get("base_product_name") or ""),
+                    "analyzed_report_no": report_no,
+                    "trace_id": "",
+                    "normalized_ingredients": [],
+                    "edited_ingredients": [],
+                    "top_results": top_results,
+                    "llm_rerank_applied": bool(payload.get("llm_rerank_applied", False)),
+                    "result_recorded": bool(top_results),
+                    "message": str(row["message"] or ""),
+                    "request_path": request_path,
+                    "event_type": str(row["event_type"] or ""),
+                }
+            )
+
+        deduped_db_events: Dict[tuple, dict] = {}
+        for item in db_event_items:
+            dedupe_key = (
+                item.get("user_id"),
+                item.get("analyzed_report_no"),
+                item.get("created_at"),
+            )
+            existing = deduped_db_events.get(dedupe_key)
+            if existing is None:
+                deduped_db_events[dedupe_key] = item
+                continue
+            existing_score = (
+                1 if existing.get("event_type") == "product_similarity_lookup" else 0,
+                1 if existing.get("result_recorded") else 0,
+                int(existing.get("activity_id", 0) or 0),
+            )
+            candidate_score = (
+                1 if item.get("event_type") == "product_similarity_lookup" else 0,
+                1 if item.get("result_recorded") else 0,
+                int(item.get("activity_id", 0) or 0),
+            )
+            if candidate_score > existing_score:
+                deduped_db_events[dedupe_key] = item
+
+        for item in deduped_db_events.values():
+            item.pop("event_type", None)
+            items.append(item)
+
+        items.sort(key=lambda item: (str(item.get("created_at", "")), int(item.get("activity_id", 0))), reverse=True)
+        return items[: max(1, int(limit))]
 
     def list_ingredient_catalog(self, *, q: str = "", origin: str = "all", limit: int = 300) -> List[dict]:
         self.sync_pending_ingredients_from_runtime()
