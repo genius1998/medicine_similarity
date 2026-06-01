@@ -80,6 +80,7 @@ class RecommendationResponse(BaseModel):
     base_product: RecommendationBaseProduct
     recommendations: List[RecommendationItem]
     cache_used: bool
+    similarity_algorithm: str = ""
     llm_rerank_applied: bool = False
     llm_rerank_error: str = ""
     execution_seconds: float

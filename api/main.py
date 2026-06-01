@@ -599,12 +599,15 @@ def get_similar_products(
     candidate_limit: int = Query(settings.default_candidate_limit, ge=10, le=5000),
     force_refresh: bool = Query(False),
     llm_rerank: bool = Query(False),
+    similarity_algorithm: str = Query("v1"),
 ) -> RecommendationResponse:
     user = require_api_user(request)
     try:
-        payload = service.get_similar_products(report_no, top_k, candidate_limit, force_refresh, llm_rerank)
+        payload = service.get_similar_products(report_no, top_k, candidate_limit, force_refresh, llm_rerank, similarity_algorithm)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     ops_service.log_event(
         event_type="product_similarity_lookup",
         level="info",
@@ -616,6 +619,7 @@ def get_similar_products(
         payload={
             "report_no": str(report_no or ""),
             "base_product_name": str(payload.get("base_product", {}).get("product_name", "") or ""),
+            "similarity_algorithm": str(payload.get("similarity_algorithm", "") or ""),
             "llm_rerank_applied": bool(payload.get("llm_rerank_applied", False)),
             "top_results": _summarize_top_results(payload.get("recommendations", []), limit=3),
         },
@@ -624,6 +628,7 @@ def get_similar_products(
         base_product=RecommendationBaseProduct(**payload["base_product"]),
         recommendations=[RecommendationItem(**item) for item in payload["recommendations"]],
         cache_used=bool(payload["cache_used"]),
+        similarity_algorithm=str(payload.get("similarity_algorithm", "") or ""),
         llm_rerank_applied=bool(payload.get("llm_rerank_applied", False)),
         llm_rerank_error=str(payload.get("llm_rerank_error", "") or ""),
         execution_seconds=float(payload["execution_seconds"]),

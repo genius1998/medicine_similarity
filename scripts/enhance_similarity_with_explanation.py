@@ -23,10 +23,22 @@ from config_loader import get_config_value, load_config
 
 
 TABLE_NAME = "product_similarity_explanation_cache"
-SIMILARITY_ALGORITHM_VERSION = "role_component_v2"
+SIMILARITY_ALGORITHM_V1 = "role_component_v2"
+SIMILARITY_ALGORITHM_V2 = "semantic_weighted_jaccard_v2"
+SIMILARITY_ALGORITHM_VERSION = SIMILARITY_ALGORITHM_V1
+SIMILARITY_ALGORITHM_ALIASES = {
+    "v1": SIMILARITY_ALGORITHM_V1,
+    SIMILARITY_ALGORITHM_V1: SIMILARITY_ALGORITHM_V1,
+    "role_component": SIMILARITY_ALGORITHM_V1,
+    "v2": SIMILARITY_ALGORITHM_V2,
+    SIMILARITY_ALGORITHM_V2: SIMILARITY_ALGORITHM_V2,
+    "semantic": SIMILARITY_ALGORITHM_V2,
+    "semantic_jaccard": SIMILARITY_ALGORITHM_V2,
+}
 DEFAULT_TOP_K = 10
 DEFAULT_CANDIDATE_LIMIT = 1000
 DEFAULT_MAX_DF_FOR_SEED = 3000
+SEMANTIC_MATCH_CONFIDENCE_MIN = 0.45
 CAUTION_TEXT = (
     "본 추천은 건강기능식품의 기능성원료, 표시 기능, 원재료 정보를 기준으로 한 비교 결과입니다. "
     "질병의 예방·치료 효과를 의미하지 않으며, 실제 섭취 전 제품 라벨의 함량, 1일 섭취량, 주의사항을 확인해야 합니다."
@@ -60,6 +72,64 @@ EXCIPIENT_PATTERNS = [
     r"글리세린지방산에스테르",
 ]
 
+PRODUCT_CATEGORY_LABELS = {
+    "영양보충",
+    "장 건강",
+    "뼈 건강",
+    "면역",
+    "기타",
+    "관절/연골",
+    "혈중지질",
+    "눈 건강",
+    "혈당",
+    "남성 건강",
+    "체지방",
+    "구강 건강",
+    "피부 건강",
+    "기억력",
+    "여성 건강",
+    "피로개선",
+    "운동/근력",
+    "수면/긴장완화",
+    "간 건강",
+    "항산화",
+    "혈행",
+    "인지력",
+    "혈압",
+}
+
+NON_SPECIFIC_CATEGORY_LABELS = {"", "기타"}
+
+SEMANTIC_EXCIPIENT_PATTERNS = [
+    r"^히드록시프로필메틸셀룰로오스(\(|$)",
+    r"^hpmc$",
+    r"^결정셀룰로오스(\(|$)",
+    r"^결정셀룰로스(\(|$)",
+    r"^미결정셀룰로오스(\(|$)",
+    r"^스테아린산마그네슘(\(|$)",
+    r"^스테아린산칼슘(\(|$)",
+    r"^이산화규소(\(|$)",
+    r"^카복시메틸셀룰로오스(\(|$)",
+    r"^카르복시메틸셀룰로오스(\(|$)",
+    r"^글리세린(\(|$)",
+    r"^캡슐기제(\(|$)",
+    r"^착색료(\(|$)",
+    r"^향료(\(|$)",
+    r"^감미료(\(|$)",
+    r"^정제수$",
+    r"^정제소금$",
+]
+
+SEMANTIC_EXCIPIENT_EXACT_NAMES = {
+    "말토덱스트린",
+    "덱스트린",
+    "유당",
+    "옥수수전분",
+    "감자전분",
+    "돼지젤라틴",
+    "젤라틴",
+}
+
 JOINT_KEYWORDS = [r"\bnem\b", r"난각막", r"난각막가수분해물", r"\bmsm\b", r"엠에스엠", r"보스웰리아", r"초록입홍합", r"\bnag\b", r"글루코사민", r"콘드로이친", r"관절", r"연골"]
 BONE_KEYWORDS = [r"칼슘", r"비타민 d", r"비타민 k", r"\bk2\b", r"마그네슘", r"뼈", r"칼마디"]
 GUT_KEYWORDS = [r"프로바이오틱스", r"유산균", r"이눌린", r"치커리", r"프락토올리고당", r"난소화성말토덱스트린", r"장"]
@@ -77,6 +147,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--candidate-limit", type=int, default=DEFAULT_CANDIDATE_LIMIT)
     parser.add_argument("--max-df-for-seed", type=int, default=DEFAULT_MAX_DF_FOR_SEED)
     parser.add_argument("--force-refresh", action="store_true")
+    parser.add_argument(
+        "--similarity-algorithm",
+        default="v1",
+        choices=sorted(SIMILARITY_ALGORITHM_ALIASES),
+        help="유사도 알고리즘. v1은 기존 role component, v2는 semantic weighted Jaccard입니다.",
+    )
+    parser.add_argument(
+        "--ingredient-category-profile",
+        default="",
+        help="semantic weighted Jaccard v2용 ingredient_category_profile.csv 경로",
+    )
     parser.add_argument("--output-prefix", default="output/similarity_top10_with_explanation")
     args = parser.parse_args()
     if not any([args.report_no.strip(), args.product_id.strip(), args.product_name.strip()]):
@@ -89,6 +170,13 @@ def first_existing_path(candidates: list[Path]) -> Path:
         if path and path.exists():
             return path
     raise FileNotFoundError(f"경로를 찾을 수 없습니다: {[str(path) for path in candidates]}")
+
+
+def first_existing_optional_path(candidates: list[Path]):
+    for path in candidates:
+        if path and path.exists():
+            return path
+    return None
 
 
 def resolve_output_dir(config: dict) -> Path:
@@ -115,11 +203,17 @@ def resolve_runtime_paths() -> dict[str, Path]:
     if configured_sqlite:
         sqlite_candidates.append(Path(configured_sqlite))
     sqlite_candidates.append(Path(r"D:\ec2_cache_snapshot\ingredient_match_cache_rebuilt_item_class_i0050_final.sqlite"))
+    ingredient_profile_candidates = [
+        output_dir / "ingredient_category_profile.csv",
+        ROOT_DIR / "output" / "ingredient_category_profile.csv",
+        output_dir / "semantic_jaccard_v2" / "ingredient_category_profile.csv",
+    ]
     return {
         "output_dir": output_dir,
         "vector_csv_path": first_existing_path(vector_candidates),
         "product_profile_csv_path": first_existing_path(product_profile_candidates),
         "sqlite_path": first_existing_path(sqlite_candidates),
+        "ingredient_category_profile_path": first_existing_optional_path(ingredient_profile_candidates),
     }
 
 
@@ -129,6 +223,15 @@ def normalize_token(value: object) -> str:
 
 def normalize_text(value: object) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+
+def normalize_similarity_algorithm(value: object) -> str:
+    key = str(value or "").strip().lower()
+    if not key:
+        return SIMILARITY_ALGORITHM_VERSION
+    if key in SIMILARITY_ALGORITHM_ALIASES:
+        return SIMILARITY_ALGORITHM_ALIASES[key]
+    raise ValueError(f"지원하지 않는 similarity_algorithm입니다: {value}")
 
 
 def safe_product_key(value: str) -> str:
@@ -143,8 +246,14 @@ def ingredient_matches_patterns(name: str, patterns: list[str]) -> bool:
     return any(re.search(pattern, lowered, flags=re.IGNORECASE) for pattern in patterns)
 
 
+def is_semantic_excipient_name(name: str) -> bool:
+    if normalize_token(name) in {normalize_token(item) for item in SEMANTIC_EXCIPIENT_EXACT_NAMES}:
+        return True
+    return ingredient_matches_patterns(name, SEMANTIC_EXCIPIENT_PATTERNS)
+
+
 def is_excipient(name: str) -> bool:
-    return ingredient_matches_patterns(name, EXCIPIENT_PATTERNS)
+    return ingredient_matches_patterns(name, EXCIPIENT_PATTERNS) or is_semantic_excipient_name(name)
 
 
 def is_low_priority_reason_ingredient(name: str, category: str) -> bool:
@@ -219,6 +328,59 @@ def load_product_function_profiles(path: Path) -> dict[str, dict]:
             "notes": str(getattr(row, "notes", "") or ""),
         }
         profiles[profile["product_id"]] = profile
+    return profiles
+
+
+def coerce_bool(value: object, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    text = str(value).strip().lower()
+    if text in {"1", "true", "t", "yes", "y"}:
+        return True
+    if text in {"0", "false", "f", "no", "n"}:
+        return False
+    return default
+
+
+def parse_category_list(value: object) -> list[str]:
+    parsed = safe_json_loads(value, [])
+    if isinstance(parsed, list):
+        return [str(item).strip() for item in parsed if str(item).strip()]
+    if isinstance(parsed, str) and parsed.strip():
+        return [parsed.strip()]
+    return []
+
+
+def load_ingredient_category_profiles(path=None) -> dict[str, dict]:
+    if not path:
+        return {}
+    path = Path(path)
+    if not path.exists():
+        return {}
+    df = pd.read_csv(path, encoding="utf-8-sig", low_memory=False)
+    if "functional_ingredient_name" not in df.columns:
+        raise ValueError(f"ingredient category profile에 functional_ingredient_name 컬럼이 없습니다: {path}")
+    profiles: dict[str, dict] = {}
+    for row in df.to_dict(orient="records"):
+        name = str(row.get("functional_ingredient_name", "") or "").strip()
+        if not name:
+            continue
+        sub_categories = parse_category_list(row.get("ingredient_sub_function_categories_json", "[]"))
+        main_category = str(row.get("ingredient_main_category", "") or "").strip()
+        ingredient_type = str(row.get("ingredient_type", "functional") or "functional").strip()
+        profiles[name] = {
+            "functional_ingredient_name": name,
+            "ingredient_main_category": main_category,
+            "ingredient_sub_function_categories": sub_categories,
+            "ingredient_type": ingredient_type,
+            "vector_include": coerce_bool(row.get("vector_include", True), True),
+            "is_excipient": coerce_bool(row.get("is_excipient", False), False),
+            "confidence": float(row.get("confidence", 0.0) or 0.0),
+            "reason": str(row.get("reason", "") or "").strip(),
+            "source": str(row.get("source", "") or "").strip(),
+        }
     return profiles
 
 
@@ -485,6 +647,231 @@ def calculate_weighted_jaccard_with_idf(
     if not has_primary_ingredient_overlap(base_profile, target_profile):
         similarity = min(similarity, NO_PRIMARY_OVERLAP_SCORE_CAP)
     return round(max(0.0, min(float(similarity), 1.0)), 6), shared_ingredients
+
+
+def ingredient_score_items(profile: dict) -> list[dict]:
+    items = profile.get("ingredient_scores", []) or []
+    if items:
+        return [dict(item) for item in items if str(item.get("ingredient", "") or "").strip()]
+    fallback_items = []
+    for role_name in ("primary", "secondary", "support"):
+        for ingredient in profile.get(f"{role_name}_ingredients", []) or []:
+            name = str(ingredient or "").strip()
+            if name:
+                fallback_items.append(
+                    {
+                        "ingredient": name,
+                        "weight": 1.0,
+                        "role": role_name,
+                        "category_main": product_ingredient_category(profile, name),
+                        "category_sub": "",
+                    }
+                )
+    return fallback_items
+
+
+def fallback_ingredient_category_profile(ingredient: str, score_item: dict) -> dict:
+    category_main = str(score_item.get("category_main", "") or "").strip()
+    if category_main not in PRODUCT_CATEGORY_LABELS:
+        category_main = "기타"
+    is_excipient_value = is_semantic_excipient_name(ingredient)
+    ingredient_type = "excipient" if is_excipient_value else "functional"
+    return {
+        "functional_ingredient_name": ingredient,
+        "ingredient_main_category": category_main,
+        "ingredient_sub_function_categories": [],
+        "ingredient_type": ingredient_type,
+        "vector_include": not is_excipient_value,
+        "is_excipient": is_excipient_value,
+        "confidence": float(score_item.get("weight", 0.0) or 0.0),
+        "reason": "ingredient_category_profile.csv가 없어 functional_category_map의 category_main만 fallback으로 사용",
+        "source": "functional_category_map_fallback",
+    }
+
+
+def ingredient_category_profile_for_item(ingredient: str, score_item: dict, ingredient_category_profiles: dict[str, dict] | None) -> dict:
+    profile = dict((ingredient_category_profiles or {}).get(ingredient, {}) or {})
+    if not profile:
+        return fallback_ingredient_category_profile(ingredient, score_item)
+    profile.setdefault("functional_ingredient_name", ingredient)
+    profile.setdefault("ingredient_sub_function_categories", [])
+    profile.setdefault("ingredient_type", "functional")
+    profile.setdefault("vector_include", True)
+    profile.setdefault("is_excipient", False)
+    if is_semantic_excipient_name(ingredient):
+        profile["ingredient_type"] = "excipient"
+        profile["vector_include"] = False
+        profile["is_excipient"] = True
+    return profile
+
+
+def product_semantic_category_set(profile: dict) -> set[str]:
+    categories = {str(profile.get("product_main_category", "") or "").strip()}
+    categories.update(sub_function_categories(profile))
+    return {category for category in categories if category}
+
+
+def semantic_weight_for_product_ingredient(
+    product_profile: dict,
+    score_item: dict,
+    ingredient_category_profiles: dict[str, dict] | None = None,
+    min_match_confidence: float = SEMANTIC_MATCH_CONFIDENCE_MIN,
+) -> tuple[float, str, dict]:
+    ingredient = str(score_item.get("ingredient", "") or "").strip()
+    if not ingredient:
+        return 0.0, "empty_ingredient", {}
+    match_confidence = float(score_item.get("weight", 0.0) or 0.0)
+    if match_confidence > 0 and match_confidence < min_match_confidence:
+        return 0.0, "low_match_confidence", {}
+
+    ingredient_profile = ingredient_category_profile_for_item(ingredient, score_item, ingredient_category_profiles)
+    ingredient_type = str(ingredient_profile.get("ingredient_type", "functional") or "functional").strip()
+    vector_include = coerce_bool(ingredient_profile.get("vector_include", True), True)
+    is_excipient_value = coerce_bool(ingredient_profile.get("is_excipient", False), False)
+    if is_excipient_value or ingredient_type in {"excipient", "additive", "formulation_aid"} or not vector_include:
+        return 0.0, "excluded_non_functional", ingredient_profile
+
+    product_main = str(product_profile.get("product_main_category", "") or "").strip()
+    product_subs = set(sub_function_categories(product_profile))
+    ingredient_main = str(ingredient_profile.get("ingredient_main_category", "") or "").strip()
+    ingredient_subs = {
+        str(item).strip()
+        for item in ingredient_profile.get("ingredient_sub_function_categories", []) or []
+        if str(item).strip()
+    }
+    ingredient_categories = ({ingredient_main} if ingredient_main else set()) | ingredient_subs
+    product_category_is_specific = product_main not in NON_SPECIFIC_CATEGORY_LABELS
+
+    if ingredient_type in {"nutrient", "generic_nutrient"}:
+        if product_category_is_specific and product_main in ingredient_categories:
+            return 0.4, "generic_nutrient_category_aligned", ingredient_profile
+        if product_subs & ingredient_categories:
+            return 0.3, "generic_nutrient_sub_category_overlap", ingredient_profile
+        return 0.2, "generic_nutrient_weak_signal", ingredient_profile
+
+    if product_category_is_specific and product_main == ingredient_main:
+        return 1.0, "main_category_match", ingredient_profile
+    if product_category_is_specific and product_main in ingredient_subs:
+        return 0.7, "product_main_in_ingredient_sub_functions", ingredient_profile
+    if product_subs & ingredient_categories:
+        return 0.7, "product_sub_function_overlap", ingredient_profile
+    if ingredient_type == "functional":
+        return 0.3, "functional_weak_signal", ingredient_profile
+    return 0.0, "unsupported_ingredient_type", ingredient_profile
+
+
+def semantic_ingredient_key(ingredient: str) -> str:
+    family = infer_joint_ingredient_family(ingredient)
+    if family:
+        return f"family::{family}"
+    return ingredient
+
+
+def build_semantic_weight_vector(
+    product_profile: dict,
+    ingredient_category_profiles: dict[str, dict] | None = None,
+    include_details: bool = False,
+):
+    vector: dict[str, float] = {}
+    details: dict[str, dict] = {}
+    for score_item in ingredient_score_items(product_profile):
+        ingredient = str(score_item.get("ingredient", "") or "").strip()
+        weight, reason, ingredient_profile = semantic_weight_for_product_ingredient(
+            product_profile,
+            score_item,
+            ingredient_category_profiles,
+        )
+        key = semantic_ingredient_key(ingredient)
+        if include_details:
+            details.setdefault(
+                key,
+                {
+                    "semantic_key": key,
+                    "ingredients": [],
+                    "weight": 0.0,
+                    "reason": reason,
+                    "ingredient_main_category": str(ingredient_profile.get("ingredient_main_category", "") or ""),
+                    "ingredient_sub_function_categories": list(ingredient_profile.get("ingredient_sub_function_categories", []) or []),
+                    "ingredient_type": str(ingredient_profile.get("ingredient_type", "") or ""),
+                    "vector_include": coerce_bool(ingredient_profile.get("vector_include", True), True),
+                    "is_excipient": coerce_bool(ingredient_profile.get("is_excipient", False), False),
+                },
+            )
+            details[key]["ingredients"].append(ingredient)
+            if weight >= float(details[key].get("weight", 0.0) or 0.0):
+                details[key]["weight"] = weight
+                details[key]["reason"] = reason
+        if weight <= 0:
+            continue
+        vector[key] = max(vector.get(key, 0.0), float(weight))
+    if include_details:
+        return vector, details
+    return vector
+
+
+def calculate_semantic_weighted_jaccard_v2(
+    base_profile: dict,
+    target_profile: dict,
+    ingredient_category_profiles: dict[str, dict] | None = None,
+) -> tuple[float, list[str], dict]:
+    base_vector, base_details = build_semantic_weight_vector(base_profile, ingredient_category_profiles, include_details=True)
+    target_vector, target_details = build_semantic_weight_vector(target_profile, ingredient_category_profiles, include_details=True)
+    union_keys = set(base_vector) | set(target_vector)
+    shared_keys = sorted(set(base_vector) & set(target_vector))
+    if not shared_keys:
+        return 0.0, [], {
+            "algorithm": SIMILARITY_ALGORITHM_V2,
+            "base_semantic_ingredient_count": len(base_vector),
+            "target_semantic_ingredient_count": len(target_vector),
+            "shared_semantic_keys": [],
+            "excluded_base_ingredients": [
+                name
+                for detail in base_details.values()
+                if float(detail.get("weight", 0.0) or 0.0) <= 0
+                for name in detail.get("ingredients", [])
+            ],
+            "excluded_target_ingredients": [
+                name
+                for detail in target_details.values()
+                if float(detail.get("weight", 0.0) or 0.0) <= 0
+                for name in detail.get("ingredients", [])
+            ],
+        }
+    numerator = sum(min(base_vector.get(key, 0.0), target_vector.get(key, 0.0)) for key in union_keys)
+    denominator = sum(max(base_vector.get(key, 0.0), target_vector.get(key, 0.0)) for key in union_keys)
+    score = 0.0 if denominator <= 0 else float(numerator / denominator)
+
+    shared_labels = []
+    shared_details = []
+    for key in shared_keys:
+        base_names = list(base_details.get(key, {}).get("ingredients", []) or [])
+        target_names = list(target_details.get(key, {}).get("ingredients", []) or [])
+        if key.startswith("family::") and base_names and target_names and base_names[0] != target_names[0]:
+            label = f"{base_names[0]} ~ {target_names[0]}"
+        elif base_names and target_names and base_names[0] == target_names[0]:
+            label = base_names[0]
+        else:
+            label = key
+        shared_labels.append(label)
+        shared_details.append(
+            {
+                "semantic_key": key,
+                "label": label,
+                "base_weight": base_vector.get(key, 0.0),
+                "target_weight": target_vector.get(key, 0.0),
+                "base_ingredients": base_names,
+                "target_ingredients": target_names,
+            }
+        )
+
+    return round(max(0.0, min(score, 1.0)), 6), shared_labels, {
+        "algorithm": SIMILARITY_ALGORITHM_V2,
+        "numerator": round(float(numerator), 6),
+        "denominator": round(float(denominator), 6),
+        "base_semantic_ingredient_count": len(base_vector),
+        "target_semantic_ingredient_count": len(target_vector),
+        "shared_semantic_keys": shared_details,
+    }
 
 
 def calculate_function_similarity(base_profile: dict, target_profile: dict) -> float:
@@ -857,6 +1244,86 @@ def build_candidate_pool(
     return rows[:candidate_limit]
 
 
+def build_candidate_pool_v2(
+    base_product_id: str,
+    base_profile: dict,
+    product_vectors: dict[str, dict[str, float]],
+    profiles: dict[str, dict],
+    ingredient_postings: dict[str, list[str]],
+    ingredient_frequency: dict[str, int],
+    candidate_limit: int,
+    max_df_for_seed: int,
+    ingredient_category_profiles: dict[str, dict] | None = None,
+) -> list[dict]:
+    candidate_stats: dict[str, dict] = {}
+    base_categories = product_semantic_category_set(base_profile)
+    base_sub_categories = set(sub_function_categories(base_profile))
+    base_focus_families = focus_joint_families(base_profile)
+    base_semantic_vector, base_semantic_details = build_semantic_weight_vector(
+        base_profile,
+        ingredient_category_profiles,
+        include_details=True,
+    )
+
+    def ensure_candidate(candidate_id: str) -> dict:
+        if candidate_id not in candidate_stats:
+            candidate_profile = profiles[candidate_id]
+            candidate_categories = product_semantic_category_set(candidate_profile)
+            candidate_focus_families = focus_joint_families(candidate_profile)
+            candidate_stats[candidate_id] = {
+                "target_product_id": candidate_id,
+                "same_main_category": int(candidate_profile.get("product_main_category") == base_profile.get("product_main_category")),
+                "shared_primary_count": 0,
+                "shared_secondary_count": 0,
+                "shared_support_count": 0,
+                "shared_semantic_ingredient_count": 0,
+                "shared_focus_family_count": len(base_focus_families & candidate_focus_families),
+                "joint_family_conflict": 0,
+                "shared_category_count": len(base_categories & candidate_categories),
+                "preliminary_score": 0.0,
+            }
+        return candidate_stats[candidate_id]
+
+    for candidate_id, profile in profiles.items():
+        if candidate_id == base_product_id:
+            continue
+        candidate_categories = product_semantic_category_set(profile)
+        same_main = profile.get("product_main_category") == base_profile.get("product_main_category")
+        sub_overlap = bool(base_sub_categories & candidate_categories)
+        family_overlap = bool(base_focus_families & focus_joint_families(profile))
+        if same_main or sub_overlap or family_overlap:
+            ensure_candidate(candidate_id)
+
+    for semantic_key, semantic_weight in base_semantic_vector.items():
+        exact_ingredient_names = list(base_semantic_details.get(semantic_key, {}).get("ingredients", []) or [])
+        for ingredient in exact_ingredient_names:
+            ingredient_df = ingredient_frequency.get(ingredient, 0)
+            if ingredient_df <= 0:
+                continue
+            if ingredient_df > max_df_for_seed and semantic_weight < 0.7:
+                continue
+            for candidate_id in ingredient_postings.get(ingredient, []):
+                if candidate_id == base_product_id or candidate_id not in profiles:
+                    continue
+                stat = ensure_candidate(candidate_id)
+                stat["shared_semantic_ingredient_count"] += 1
+                stat["preliminary_score"] += float(semantic_weight) * ingredient_idf(len(product_vectors), max(1, ingredient_df))
+
+    rows = list(candidate_stats.values())
+    rows = sorted(
+        rows,
+        key=lambda item: (
+            -item["same_main_category"],
+            -item["shared_semantic_ingredient_count"],
+            -item["shared_focus_family_count"],
+            -item["shared_category_count"],
+            -item["preliminary_score"],
+            item["target_product_id"],
+        ),
+    )
+    return rows[:candidate_limit]
+
+
 def ensure_cache_table(conn: sqlite3.Connection) -> None:
     conn.execute(
         f"""
@@ -896,7 +1363,12 @@ def ensure_cache_table(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def load_cached_rows(conn: sqlite3.Connection, base_product_id: str, top_k: int) -> list[dict]:
+def load_cached_rows(
+    conn: sqlite3.Connection,
+    base_product_id: str,
+    top_k: int,
+    algorithm_version: str = SIMILARITY_ALGORITHM_VERSION,
+) -> list[dict]:
     query = f"""
     SELECT base_product_id, target_product_id, base_product_name, target_product_name,
            similarity_score, function_similarity_score, core_match_score,
@@ -909,11 +1381,18 @@ def load_cached_rows(conn: sqlite3.Connection, base_product_id: str, top_k: int)
     ORDER BY similarity_score DESC, target_product_id ASC
     LIMIT ?
     """
-    df = pd.read_sql_query(query, conn, params=(base_product_id, SIMILARITY_ALGORITHM_VERSION, top_k))
+    df = pd.read_sql_query(query, conn, params=(base_product_id, algorithm_version, top_k))
     return df.to_dict(orient="records")
 
 
-def refresh_cache_rows(conn: sqlite3.Connection, base_product_id: str, rows: list[dict]) -> None:
+def refresh_cache_rows(
+    conn: sqlite3.Connection,
+    base_product_id: str,
+    rows: list[dict],
+    algorithm_version: str = SIMILARITY_ALGORITHM_VERSION,
+) -> None:
+    if algorithm_version != SIMILARITY_ALGORITHM_VERSION:
+        raise ValueError("현재 캐시 테이블 기본키는 v1 전용입니다. v2 비교 결과는 캐시에 저장하지 않습니다.")
     now_text = datetime.now().isoformat()
     conn.execute(f"DELETE FROM {TABLE_NAME} WHERE base_product_id = ?", (base_product_id,))
     conn.executemany(
@@ -930,7 +1409,7 @@ def refresh_cache_rows(conn: sqlite3.Connection, base_product_id: str, rows: lis
             (
                 row["base_product_id"],
                 row["target_product_id"],
-                SIMILARITY_ALGORITHM_VERSION,
+                algorithm_version,
                 row["base_product_name"],
                 row["target_product_name"],
                 row["similarity_score"],
@@ -979,24 +1458,41 @@ def compute_topk_for_single_product(
     profiles: dict[str, dict],
     ingredient_postings: dict[str, list[str]],
     ingredient_frequency: dict[str, int],
+    similarity_algorithm: str = SIMILARITY_ALGORITHM_VERSION,
+    ingredient_category_profiles: dict[str, dict] | None = None,
 ) -> tuple[list[dict], list[dict], dict]:
     base_profile = profiles[base_product_id]
     base_vector = product_vectors[base_product_id]
     total_product_count = len(product_vectors)
+    similarity_algorithm = normalize_similarity_algorithm(similarity_algorithm)
 
     t0 = time.perf_counter()
-    candidate_pool = build_candidate_pool(
-        base_product_id,
-        base_profile,
-        product_vectors,
-        profiles,
-        ingredient_postings,
-        ingredient_frequency,
-        candidate_limit,
-        max_df_for_seed,
-    )
+    if similarity_algorithm == SIMILARITY_ALGORITHM_V2:
+        candidate_pool = build_candidate_pool_v2(
+            base_product_id,
+            base_profile,
+            product_vectors,
+            profiles,
+            ingredient_postings,
+            ingredient_frequency,
+            candidate_limit,
+            max_df_for_seed,
+            ingredient_category_profiles,
+        )
+    else:
+        candidate_pool = build_candidate_pool(
+            base_product_id,
+            base_profile,
+            product_vectors,
+            profiles,
+            ingredient_postings,
+            ingredient_frequency,
+            candidate_limit,
+            max_df_for_seed,
+        )
     candidate_stage_seconds = round(time.perf_counter() - t0, 3)
     print(f"[INFO] base_product={base_profile['product_name']} ({base_product_id})")
+    print(f"[INFO] similarity_algorithm={similarity_algorithm}")
     print(f"[INFO] candidate_count_before_topk={len(candidate_pool)}")
 
     rows = []
@@ -1006,22 +1502,37 @@ def compute_topk_for_single_product(
         try:
             target_profile = profiles[target_product_id]
             target_vector = product_vectors[target_product_id]
-            similarity_score, _ = calculate_weighted_jaccard_with_idf(
-                base_vector,
-                target_vector,
-                ingredient_frequency,
-                total_product_count,
-                base_profile,
-                target_profile,
-            )
+            semantic_explanation = {}
+            shared_semantic_ingredients = []
+            if similarity_algorithm == SIMILARITY_ALGORITHM_V2:
+                similarity_score, shared_semantic_ingredients, semantic_explanation = calculate_semantic_weighted_jaccard_v2(
+                    base_profile,
+                    target_profile,
+                    ingredient_category_profiles,
+                )
+            else:
+                similarity_score, _ = calculate_weighted_jaccard_with_idf(
+                    base_vector,
+                    target_vector,
+                    ingredient_frequency,
+                    total_product_count,
+                    base_profile,
+                    target_profile,
+                )
             if similarity_score <= 0:
                 continue
             comparison = compare_product_profiles(base_profile, target_profile, base_vector, target_vector)
+            if similarity_algorithm == SIMILARITY_ALGORITHM_V2 and shared_semantic_ingredients:
+                comparison["shared_ingredients"] = shared_semantic_ingredients
+                comparison["shared_ingredients_raw"] = shared_semantic_ingredients
             function_similarity_score = calculate_function_similarity(base_profile, target_profile)
             core_match_score = calculate_core_match_score(base_profile, target_profile)
             substitutability = classify_substitutability(similarity_score, base_profile, target_profile)
             reason = generate_recommendation_reason(base_profile, target_profile, comparison, ingredient_frequency)
             explanation_json = build_explanation_json(reason, comparison, substitutability)
+            explanation_json["similarity_algorithm"] = similarity_algorithm
+            if semantic_explanation:
+                explanation_json["semantic_weighted_jaccard_v2"] = semantic_explanation
             rows.append(
                 {
                     "base_product_id": base_product_id,
@@ -1041,6 +1552,7 @@ def compute_topk_for_single_product(
                     "reason": reason,
                     "caution": generate_caution(),
                     "explanation_json": json.dumps(explanation_json, ensure_ascii=False),
+                    "similarity_algorithm": similarity_algorithm,
                 }
             )
         except Exception as exc:  # noqa: BLE001
@@ -1066,23 +1578,34 @@ def compute_topk_for_single_product(
     print(f"[INFO] candidate_count_after_scoring={len(rows)}")
     print("[SAMPLE] top results")
     print(pd.DataFrame(rows).head(10).to_string(index=False) if rows else "No result")
-    return rows, failed_rows, {"candidate_count": len(candidate_pool), "topk_count": len(rows), "candidate_stage_seconds": candidate_stage_seconds}
+    return rows, failed_rows, {
+        "candidate_count": len(candidate_pool),
+        "topk_count": len(rows),
+        "candidate_stage_seconds": candidate_stage_seconds,
+        "similarity_algorithm": similarity_algorithm,
+    }
 
 
 def main() -> None:
     start_time = time.perf_counter()
     args = parse_args()
     runtime = resolve_runtime_paths()
+    similarity_algorithm = normalize_similarity_algorithm(args.similarity_algorithm)
     output_prefix = Path(args.output_prefix)
     if not output_prefix.is_absolute():
         output_prefix = ROOT_DIR / output_prefix
+    ingredient_profile_path = Path(args.ingredient_category_profile) if str(args.ingredient_category_profile or "").strip() else runtime.get("ingredient_category_profile_path")
 
     print(f"[INFO] vector_csv_path={runtime['vector_csv_path']}")
     print(f"[INFO] product_profile_csv_path={runtime['product_profile_csv_path']}")
     print(f"[INFO] sqlite_path={runtime['sqlite_path']}")
+    print(f"[INFO] similarity_algorithm={similarity_algorithm}")
+    if similarity_algorithm == SIMILARITY_ALGORITHM_V2:
+        print(f"[INFO] ingredient_category_profile_path={ingredient_profile_path or '(fallback only)'}")
 
     vector_df = load_vector_inputs(runtime["vector_csv_path"])
     profiles = load_product_function_profiles(runtime["product_profile_csv_path"])
+    ingredient_category_profiles = load_ingredient_category_profiles(ingredient_profile_path)
     product_vectors, product_names, report_to_product_ids, ingredient_postings, ingredient_frequency = build_vector_indexes(vector_df)
 
     base_product_id = resolve_base_product_id(args, profiles, product_names, report_to_product_ids)
@@ -1092,8 +1615,9 @@ def main() -> None:
     with sqlite3.connect(runtime["sqlite_path"]) as conn:
         ensure_cache_table(conn)
         cached_rows = []
-        if not args.force_refresh:
-            cached_rows = load_cached_rows(conn, base_product_id, args.top_k)
+        cache_enabled = similarity_algorithm == SIMILARITY_ALGORITHM_VERSION
+        if cache_enabled and not args.force_refresh:
+            cached_rows = load_cached_rows(conn, base_product_id, args.top_k, similarity_algorithm)
         if len(cached_rows) >= args.top_k:
             elapsed_seconds = round(time.perf_counter() - start_time, 3)
             summary = {
@@ -1101,6 +1625,7 @@ def main() -> None:
                 "base_product_id": base_product_id,
                 "base_product_name": base_profile["product_name"],
                 "report_no": base_profile["report_no"],
+                "similarity_algorithm": similarity_algorithm,
                 "candidate_count": 0,
                 "topk_count": len(cached_rows),
                 "cache_used": True,
@@ -1123,9 +1648,14 @@ def main() -> None:
             profiles,
             ingredient_postings,
             ingredient_frequency,
+            similarity_algorithm,
+            ingredient_category_profiles,
         )
-        refresh_cache_rows(conn, base_product_id, rows)
-        cache_row_count = conn.execute(f"SELECT COUNT(*) FROM {TABLE_NAME} WHERE base_product_id = ?", (base_product_id,)).fetchone()[0]
+        if cache_enabled:
+            refresh_cache_rows(conn, base_product_id, rows, similarity_algorithm)
+            cache_row_count = conn.execute(f"SELECT COUNT(*) FROM {TABLE_NAME} WHERE base_product_id = ?", (base_product_id,)).fetchone()[0]
+        else:
+            cache_row_count = 0
 
     elapsed_seconds = round(time.perf_counter() - start_time, 3)
     summary = {
@@ -1134,6 +1664,8 @@ def main() -> None:
         "base_product_name": base_profile["product_name"],
         "report_no": base_profile["report_no"],
         "product_main_category": base_profile["product_main_category"],
+        "similarity_algorithm": similarity_algorithm,
+        "ingredient_category_profile_path": str(ingredient_profile_path or ""),
         "candidate_count": stats["candidate_count"],
         "topk_count": len(rows),
         "cache_used": False,

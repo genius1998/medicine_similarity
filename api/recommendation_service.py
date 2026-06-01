@@ -16,12 +16,15 @@ from scripts.enhance_similarity_with_explanation import (
     build_vector_indexes,
     compute_topk_for_single_product,
     ensure_cache_table,
+    load_ingredient_category_profiles,
     load_cached_rows,
     load_product_function_profiles,
     load_vector_inputs,
+    normalize_similarity_algorithm,
     refresh_cache_rows,
     resolve_runtime_paths,
     safe_json_loads,
+    SIMILARITY_ALGORITHM_VERSION,
 )
 
 
@@ -98,6 +101,7 @@ class RecommendationService:
         self.report_to_product_ids: Dict[str, List[str]] = {}
         self.ingredient_postings: Dict[str, List[str]] = {}
         self.ingredient_frequency: Dict[str, int] = {}
+        self.ingredient_category_profiles: Dict[str, dict] = {}
         self.catalog_count: int = 0
         self.uploaded_catalog_count: int = 0
 
@@ -115,6 +119,7 @@ class RecommendationService:
             self.ingredient_postings,
             self.ingredient_frequency,
         ) = build_vector_indexes(vector_df)
+        self.ingredient_category_profiles = load_ingredient_category_profiles(self.runtime.get("ingredient_category_profile_path"))
 
         profile_df = pd.read_csv(self.runtime["product_profile_csv_path"], encoding="utf-8-sig", low_memory=False)
         self.profile_records = []
@@ -1105,8 +1110,10 @@ class RecommendationService:
         candidate_limit: int,
         force_refresh: bool,
         llm_rerank: bool = False,
+        similarity_algorithm: str = SIMILARITY_ALGORITHM_VERSION,
     ) -> dict:
         self.ensure_loaded()
+        similarity_algorithm = normalize_similarity_algorithm(similarity_algorithm)
         base_product_id = self.resolve_product_id_by_report_no(report_no)
         base_profile = self.profiles[base_product_id]
         start_time = time.perf_counter()
@@ -1116,8 +1123,9 @@ class RecommendationService:
         with sqlite_connection(self.runtime["sqlite_path"]) as conn:
             ensure_cache_table(conn)
             cached_rows = []
-            if not force_refresh:
-                cached_rows = load_cached_rows(conn, base_product_id, top_k)
+            cache_enabled = similarity_algorithm == SIMILARITY_ALGORITHM_VERSION
+            if cache_enabled and not force_refresh:
+                cached_rows = load_cached_rows(conn, base_product_id, top_k, similarity_algorithm)
             if len(cached_rows) >= top_k:
                 recommendations = [self._convert_cache_row(row, idx) for idx, row in enumerate(cached_rows, start=1)]
                 if llm_rerank:
@@ -1139,6 +1147,7 @@ class RecommendationService:
                     },
                     "recommendations": recommendations,
                     "cache_used": True,
+                    "similarity_algorithm": similarity_algorithm,
                     "llm_rerank_applied": llm_rerank_applied,
                     "llm_rerank_error": llm_rerank_error,
                     "execution_seconds": execution_seconds,
@@ -1154,10 +1163,13 @@ class RecommendationService:
                 self.profiles,
                 self.ingredient_postings,
                 self.ingredient_frequency,
+                similarity_algorithm,
+                self.ingredient_category_profiles,
             )
             if failed_rows:
                 pass
-            refresh_cache_rows(conn, base_product_id, rows)
+            if cache_enabled:
+                refresh_cache_rows(conn, base_product_id, rows, similarity_algorithm)
             recommendations = [self._convert_cache_row(row, idx) for idx, row in enumerate(rows, start=1)]
             if llm_rerank:
                 try:
@@ -1178,6 +1190,7 @@ class RecommendationService:
                 },
                 "recommendations": recommendations,
                 "cache_used": False,
+                "similarity_algorithm": similarity_algorithm,
                 "llm_rerank_applied": llm_rerank_applied,
                 "llm_rerank_error": llm_rerank_error,
                 "execution_seconds": execution_seconds,

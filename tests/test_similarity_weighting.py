@@ -7,7 +7,9 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from scripts.enhance_similarity_with_explanation import (
+    calculate_semantic_weighted_jaccard_v2,
     calculate_weighted_jaccard_with_idf,
+    build_semantic_weight_vector,
     effective_ingredient_weight,
     ensure_cache_table,
     load_cached_rows,
@@ -32,6 +34,16 @@ def profile(main_category, primary=None, secondary=None, support=None, ingredien
         "role_by_ingredient": role_by_ingredient,
         "category_by_ingredient": ingredient_categories or {},
         "category_scores": {main_category: 5.0},
+        "ingredient_scores": [
+            {
+                "ingredient": name,
+                "weight": 0.95,
+                "role": role,
+                "category_main": (ingredient_categories or {}).get(name, main_category),
+                "category_sub": "",
+            }
+            for name, role in role_by_ingredient.items()
+        ],
     }
 
 
@@ -128,3 +140,86 @@ def test_cache_uses_current_similarity_algorithm_version():
 
     assert len(rows) == 1
     assert rows[0]["target_product_id"] == "target"
+
+
+def test_semantic_v2_excludes_formulation_aids():
+    base_profile = profile("관절/연골", primary=["보스웰리아"], support=["히드록시프로필메틸셀룰로오스", "결정셀룰로오스"])
+    target_profile = profile("관절/연골", primary=["보스웰리아"], support=["스테아린산마그네슘"])
+    ingredient_profiles = {
+        "보스웰리아": {
+            "ingredient_main_category": "관절/연골",
+            "ingredient_sub_function_categories": [],
+            "ingredient_type": "functional",
+            "vector_include": True,
+            "is_excipient": False,
+        },
+        "히드록시프로필메틸셀룰로오스": {
+            "ingredient_main_category": "기타",
+            "ingredient_sub_function_categories": [],
+            "ingredient_type": "excipient",
+            "vector_include": False,
+            "is_excipient": True,
+        },
+        "결정셀룰로오스": {
+            "ingredient_main_category": "기타",
+            "ingredient_sub_function_categories": [],
+            "ingredient_type": "excipient",
+            "vector_include": False,
+            "is_excipient": True,
+        },
+        "스테아린산마그네슘": {
+            "ingredient_main_category": "기타",
+            "ingredient_sub_function_categories": [],
+            "ingredient_type": "formulation_aid",
+            "vector_include": False,
+            "is_excipient": True,
+        },
+    }
+
+    base_vector = build_semantic_weight_vector(base_profile, ingredient_profiles)
+    target_vector = build_semantic_weight_vector(target_profile, ingredient_profiles)
+    score, shared, detail = calculate_semantic_weighted_jaccard_v2(base_profile, target_profile, ingredient_profiles)
+
+    assert "히드록시프로필메틸셀룰로오스" not in base_vector
+    assert "결정셀룰로오스" not in base_vector
+    assert "스테아린산마그네슘" not in target_vector
+    assert score == 1.0
+    assert shared == ["보스웰리아"]
+    assert detail["shared_semantic_keys"][0]["base_weight"] == 1.0
+
+
+def test_semantic_v2_uses_product_sub_category_overlap_without_legacy_sub_category():
+    base_profile = profile("혈행", primary=["EPA 및 DHA 함유 유지"])
+    target_profile = profile("눈 건강", primary=["EPA 및 DHA 함유 유지"])
+    target_profile["llm_sub_function_categories"] = ["혈행"]
+    ingredient_profiles = {
+        "EPA 및 DHA 함유 유지": {
+            "ingredient_main_category": "혈중지질",
+            "ingredient_sub_function_categories": ["혈행", "눈 건강", "기억력"],
+            "ingredient_type": "functional",
+            "vector_include": True,
+            "is_excipient": False,
+        },
+    }
+
+    score, shared, _detail = calculate_semantic_weighted_jaccard_v2(base_profile, target_profile, ingredient_profiles)
+
+    assert shared == ["EPA 및 DHA 함유 유지"]
+    assert 0.99 <= score <= 1.0
+
+
+def test_semantic_v2_caps_generic_nutrient_weight():
+    nutrient_profile = profile("영양보충", primary=["비타민 C"])
+    ingredient_profiles = {
+        "비타민 C": {
+            "ingredient_main_category": "영양보충",
+            "ingredient_sub_function_categories": ["항산화"],
+            "ingredient_type": "nutrient",
+            "vector_include": True,
+            "is_excipient": False,
+        },
+    }
+
+    vector = build_semantic_weight_vector(nutrient_profile, ingredient_profiles)
+
+    assert vector["비타민 C"] == 0.4
