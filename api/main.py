@@ -574,7 +574,10 @@ def get_product_profile(request: Request, report_no: str) -> ProductProfileRespo
                     "category_hint": str(profile.get("product_main_category", "") or ""),
                 }
             )
-    ingredient_db_match_statuses = upload_service.build_ingredient_db_match_statuses(ingredient_objects)
+    ingredient_db_match_statuses = upload_service.build_ingredient_db_match_statuses(
+        ingredient_objects,
+        estimated_profile=profile,
+    )
     sub_function_categories = list(profile.get("llm_sub_function_categories", []))
     return ProductProfileResponse(
         report_no=str(profile.get("report_no", "")),

@@ -111,6 +111,63 @@ def test_non_functional_cache_relation_is_not_reported_as_match(tmp_path):
     assert match is None
 
 
+def test_product_profile_match_statuses_use_semantic_profile_details():
+    ingredient = "\ub9c8\ub9ac\uace8\ub4dc\uaf43\ucd94\ucd9c\ubb3c"
+    service = UploadRecommendationService.__new__(UploadRecommendationService)
+    service.recommendation_service = SimpleNamespace(
+        ingredient_category_profiles={
+            ingredient: {
+                "functional_ingredient_name": ingredient,
+                "ingredient_main_category": "\ub208 \uac74\uac15",
+                "ingredient_sub_function_categories": [],
+                "ingredient_type": "functional",
+                "vector_include": True,
+                "is_excipient": False,
+            }
+        }
+    )
+    ingredient_objects = [
+        {
+            "raw": ingredient,
+            "display_name": ingredient,
+            "normalized_for_matching": ingredient,
+            "role": "primary",
+            "category_hint": "\ub208 \uac74\uac15",
+        }
+    ]
+    matched = [
+        {
+            "raw_input": ingredient,
+            "raw_ingredient": ingredient,
+            "display_name": ingredient,
+            "normalized_for_matching": ingredient,
+            "functional_ingredient_name": ingredient,
+            "profile_ingredient_name": ingredient,
+            "relation_type": "same_ingredient",
+            "confidence": 0.98,
+            "match_source": "direct_category",
+            "category_row": {
+                "functional_ingredient_name": ingredient,
+                "category_main": "\ub208 \uac74\uac15",
+                "category_sub": "",
+            },
+        }
+    ]
+    profile = {
+        "product_main_category": "\ub208 \uac74\uac15",
+        "primary_ingredients": [ingredient],
+        "secondary_ingredients": [],
+        "support_ingredients": [],
+        "llm_sub_function_categories": [],
+    }
+
+    rows = service.build_ingredient_db_match_statuses(ingredient_objects, matched, estimated_profile=profile)
+
+    assert rows[0]["vector_include"] is True
+    assert rows[0]["semantic_weight"] == 1.0
+    assert rows[0]["semantic_weight_reason"] == "main_category_match"
+
+
 def test_runtime_rag_name_similarity_promotes_korean_typo_candidate(tmp_path, monkeypatch):
     standard = "L-\uc544\ub974\uae30\ub2cc"
     typo = "L-\uc544\ub974\uc9c0\ub2cc"
