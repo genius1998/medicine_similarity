@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from difflib import SequenceMatcher
 import hashlib
 import json
 import logging
@@ -245,6 +246,7 @@ logger = logging.getLogger(__name__)
 ENABLE_RUNTIME_RAG_FALLBACK = True
 RUNTIME_CUSTOM_FUNCTIONAL_TABLE_NAME = "runtime_custom_functional_ingredient_map"
 RUNTIME_RAG_TOP_K = 5
+RUNTIME_RAG_NAME_SIMILARITY_MIN = 0.78
 
 RUNTIME_LIKE_DISABLED_KEYS = {
     "hca",
@@ -410,6 +412,19 @@ def normalize_lookup_key(value: str) -> str:
 
 def normalize_cache_exact_key(value: str) -> str:
     return re.sub(r"[^0-9a-z가-힣]", "", str(value or "").strip().lower())
+
+
+def normalized_name_similarity(left: str, right: str) -> float:
+    left_key = normalize_cache_exact_key(left)
+    right_key = normalize_cache_exact_key(right)
+    if not left_key or not right_key:
+        return 0.0
+    if left_key == right_key:
+        return 1.0
+    shorter = min(len(left_key), len(right_key))
+    if shorter < 4:
+        return 0.0
+    return float(SequenceMatcher(None, left_key, right_key).ratio())
 
 
 def dedupe_strings(values: List[str]) -> List[str]:
@@ -996,6 +1011,21 @@ class UploadRecommendationService:
             protected_family=input_family,
         )
 
+    def _runtime_candidate_name_variants(self, candidate_row: dict) -> List[str]:
+        variants = [str(candidate_row.get("standard_name", "") or "").strip()]
+        synonyms_joined = str(candidate_row.get("synonyms_joined", "") or "")
+        if synonyms_joined:
+            variants.extend([part.strip() for part in synonyms_joined.split(",") if part.strip()])
+        return dedupe_strings(variants)
+
+    def _runtime_name_similarity(self, query: str, candidate_row: dict) -> float:
+        query_terms = self._expand_runtime_lookup_terms(query)
+        scores: List[float] = []
+        for query_term in query_terms:
+            for variant in self._runtime_candidate_name_variants(candidate_row):
+                scores.append(normalized_name_similarity(query_term, variant))
+        return round(max(scores or [0.0]), 6)
+
     def _has_runtime_lexical_overlap(self, query_terms: List[str], candidate_row: dict) -> bool:
         normalized_query_terms = [normalize_cache_exact_key(term) for term in query_terms if normalize_cache_exact_key(term)]
         if not normalized_query_terms:
@@ -1013,6 +1043,10 @@ class UploadRecommendationService:
         for term in normalized_query_terms:
             if len(term) >= 2 and term in normalized_candidate:
                 return True
+            if len(term) >= 4:
+                for variant in self._runtime_candidate_name_variants(candidate_row):
+                    if normalized_name_similarity(term, variant) >= RUNTIME_RAG_NAME_SIMILARITY_MIN:
+                        return True
         query_tokens = {term for term in normalized_query_terms if len(term) >= 2}
         candidate_tokens = {
             normalize_cache_exact_key(token)
@@ -1122,6 +1156,10 @@ class UploadRecommendationService:
                     float(existing.get("embedding_score", 0.0) or 0.0),
                     float(item.get("embedding_score", 0.0) or 0.0),
                 )
+                existing["name_similarity_score"] = max(
+                    float(existing.get("name_similarity_score", 0.0) or 0.0),
+                    float(item.get("name_similarity_score", 0.0) or 0.0),
+                )
                 sources = {
                     str(existing.get("retrieval_source", "") or "").strip(),
                     str(item.get("retrieval_source", "") or "").strip(),
@@ -1133,11 +1171,22 @@ class UploadRecommendationService:
             key=lambda row: (
                 -float(row.get("retrieval_score", 0.0) or 0.0),
                 -float(row.get("embedding_score", 0.0) or 0.0),
+                -float(row.get("name_similarity_score", 0.0) or 0.0),
                 float(row.get("specific_penalty", 0.0) or 0.0),
                 str(row.get("standard_name", "") or ""),
             )
         )
         return merged_rows[:top_k]
+
+    def _has_strong_runtime_rag_signal(self, candidates: List[dict]) -> bool:
+        for item in candidates:
+            if float(item.get("retrieval_score", 0.0) or 0.0) >= 2.0:
+                return True
+            if float(item.get("embedding_score", 0.0) or 0.0) >= 0.45:
+                return True
+            if float(item.get("name_similarity_score", 0.0) or 0.0) >= RUNTIME_RAG_NAME_SIMILARITY_MIN:
+                return True
+        return False
 
     def _log_trace(
         self,
@@ -1215,6 +1264,7 @@ class UploadRecommendationService:
         normalized_standard = normalize_cache_exact_key(standard_name)
         normalized_search = normalize_cache_exact_key(search_text)
         normalized_synonyms = normalize_cache_exact_key(synonyms_joined)
+        name_similarity_score = self._runtime_name_similarity(query_text, row)
         score = 0.0
         if normalized_standard == normalized_query:
             score += 12.0
@@ -1232,6 +1282,8 @@ class UploadRecommendationService:
         score += float(len(shared_tokens)) * 1.7
         if len(normalized_query) >= 4 and normalized_standard and normalized_query[:4] == normalized_standard[:4]:
             score += 0.8
+        if name_similarity_score >= RUNTIME_RAG_NAME_SIMILARITY_MIN:
+            score += 4.8 * name_similarity_score
         score -= float(row.get("specific_penalty", 0.0) or 0.0) * 0.35
         return round(score, 6)
 
@@ -1241,7 +1293,7 @@ class UploadRecommendationService:
             score = self._score_runtime_rag_candidate(query, row)
             if score <= 0:
                 continue
-            rows.append({**row, "retrieval_score": score})
+            rows.append({**row, "retrieval_score": score, "name_similarity_score": self._runtime_name_similarity(query, row)})
         rows.sort(
             key=lambda item: (
                 -float(item.get("retrieval_score", 0.0) or 0.0),
@@ -1661,6 +1713,36 @@ class UploadRecommendationService:
             (cleaned,),
         ).fetchall()
 
+    def _nonfunctional_cache_relation_types(self, rows: List[sqlite3.Row]) -> set[str]:
+        return {
+            str(row["relation_type"] or "").strip()
+            for row in rows
+            if str(row["relation_type"] or "").strip() in NON_FUNCTIONAL_CACHE_RELATION_TYPES
+        }
+
+    def _should_stop_after_nonfunctional_cache_hit(
+        self,
+        *,
+        relation_types: set[str],
+        normalized_input: str,
+        raw_input: str,
+        display_input: str,
+    ) -> bool:
+        if not relation_types:
+            return False
+        values = [raw_input, display_input, normalized_input]
+        if any(looks_like_runtime_measurement_or_symbol(value) for value in values):
+            return True
+        if any(contains_guarded_runtime_term(value, RUNTIME_CACHE_LIKE_VECTOR_EXCLUDED_TERMS) for value in values):
+            return True
+        if "excipient" in relation_types:
+            if any(
+                is_excipient(value) or contains_guarded_runtime_term(value, RUNTIME_EXCIPIENT_VECTOR_EXCLUDED_TERMS)
+                for value in values
+            ):
+                return True
+        return False
+
     def _build_match_payload(
         self,
         *,
@@ -1868,6 +1950,7 @@ class UploadRecommendationService:
         display_name: str,
         input_family: str,
         mapping_rule: Optional[dict],
+        allow_new_standard: bool = True,
     ) -> Optional[dict]:
         if not ENABLE_RUNTIME_RAG_FALLBACK:
             return None
@@ -1897,12 +1980,8 @@ class UploadRecommendationService:
             lexical_results = []
 
         results = self._merge_runtime_candidate_lists(embedding_results, lexical_results, top_k=max(RUNTIME_RAG_TOP_K, 8))
-        if results:
-            top1 = dict(results[0])
-            top_retrieval_score = float(top1.get("retrieval_score", 0.0) or 0.0)
-            top_embedding_score = float(top1.get("embedding_score", 0.0) or 0.0)
-            if top_retrieval_score < 2.0 and top_embedding_score < 0.45:
-                results = []
+        if results and not self._has_strong_runtime_rag_signal(results):
+            results = []
 
         try:
             llm_result = self._classify_runtime_rag_candidates_with_llm(
@@ -1962,7 +2041,7 @@ class UploadRecommendationService:
                 protected_family=input_family,
             )
 
-        if decision != "new_standard":
+        if decision != "new_standard" or not allow_new_standard:
             return None
 
         proposed_standard_name = str(
@@ -2237,6 +2316,7 @@ class UploadRecommendationService:
             and normalized_raw_exact != raw_normalized_exact
             and self._lookup_category_row(normalized_input)
         )
+        nonfunctional_cache_hit = False
 
         def iter_unique_rows(rows: List[sqlite3.Row]) -> List[sqlite3.Row]:
             seen = set()
@@ -2269,14 +2349,28 @@ class UploadRecommendationService:
                 )
                 if match:
                     return match
-            if any(str(row["relation_type"] or "").strip() in NON_FUNCTIONAL_CACHE_RELATION_TYPES for row in normalized_exact_rows):
+            normalized_negative_types = self._nonfunctional_cache_relation_types(normalized_exact_rows)
+            if normalized_negative_types:
+                nonfunctional_cache_hit = True
+                if self._should_stop_after_nonfunctional_cache_hit(
+                    relation_types=normalized_negative_types,
+                    normalized_input=normalized_input,
+                    raw_input=raw_input,
+                    display_input=display_input,
+                ):
+                    logger.info(
+                        "Stopping after normalized exact non-functional cache hit: input=%r raw=%r rows=%s",
+                        normalized_input,
+                        raw_input,
+                        [str(row["relation_type"] or "").strip() for row in normalized_exact_rows],
+                    )
+                    return None
                 logger.info(
-                    "Stopping after normalized exact non-functional cache hit: input=%r raw=%r rows=%s",
+                    "Revalidating stale normalized non-functional cache hit: input=%r raw=%r rows=%s",
                     normalized_input,
                     raw_input,
                     [str(row["relation_type"] or "").strip() for row in normalized_exact_rows],
                 )
-                return None
 
             if raw_normalized_exact and raw_normalized_exact != normalized_raw_exact:
                 raw_normalized_exact_rows = iter_unique_rows(
@@ -2295,10 +2389,9 @@ class UploadRecommendationService:
                     )
                     if match:
                         return match
-                if any(
-                    str(row["relation_type"] or "").strip() in NON_FUNCTIONAL_CACHE_RELATION_TYPES
-                    for row in raw_normalized_exact_rows
-                ):
+                raw_normalized_negative_types = self._nonfunctional_cache_relation_types(raw_normalized_exact_rows)
+                if raw_normalized_negative_types:
+                    nonfunctional_cache_hit = True
                     if canonical_overrides_raw_cache:
                         logger.info(
                             "Ignoring stale raw normalized non-functional cache because canonical input resolves directly: input=%r raw=%r rows=%s",
@@ -2306,7 +2399,12 @@ class UploadRecommendationService:
                             raw_input,
                             [str(row["relation_type"] or "").strip() for row in raw_normalized_exact_rows],
                         )
-                    else:
+                    elif self._should_stop_after_nonfunctional_cache_hit(
+                        relation_types=raw_normalized_negative_types,
+                        normalized_input=normalized_input,
+                        raw_input=raw_input,
+                        display_input=display_input,
+                    ):
                         logger.info(
                             "Stopping after raw normalized non-functional cache hit: input=%r raw=%r rows=%s",
                             normalized_input,
@@ -2314,6 +2412,13 @@ class UploadRecommendationService:
                             [str(row["relation_type"] or "").strip() for row in raw_normalized_exact_rows],
                         )
                         return None
+                    else:
+                        logger.info(
+                            "Revalidating stale raw normalized non-functional cache hit: input=%r raw=%r rows=%s",
+                            normalized_input,
+                            raw_input,
+                            [str(row["relation_type"] or "").strip() for row in raw_normalized_exact_rows],
+                        )
 
             raw_exact_rows = iter_unique_rows(self._fetch_cache_rows_by_raw(conn, raw_input))
             for row in raw_exact_rows:
@@ -2329,7 +2434,9 @@ class UploadRecommendationService:
                 )
                 if match:
                     return match
-            if any(str(row["relation_type"] or "").strip() in NON_FUNCTIONAL_CACHE_RELATION_TYPES for row in raw_exact_rows):
+            raw_negative_types = self._nonfunctional_cache_relation_types(raw_exact_rows)
+            if raw_negative_types:
+                nonfunctional_cache_hit = True
                 if canonical_overrides_raw_cache:
                     logger.info(
                         "Ignoring stale raw exact non-functional cache because canonical input resolves directly: input=%r raw=%r rows=%s",
@@ -2337,7 +2444,12 @@ class UploadRecommendationService:
                         raw_input,
                         [str(row["relation_type"] or "").strip() for row in raw_exact_rows],
                     )
-                else:
+                elif self._should_stop_after_nonfunctional_cache_hit(
+                    relation_types=raw_negative_types,
+                    normalized_input=normalized_input,
+                    raw_input=raw_input,
+                    display_input=display_input,
+                ):
                     logger.info(
                         "Stopping after raw exact non-functional cache hit: input=%r raw=%r rows=%s",
                         normalized_input,
@@ -2345,6 +2457,13 @@ class UploadRecommendationService:
                         [str(row["relation_type"] or "").strip() for row in raw_exact_rows],
                     )
                     return None
+                else:
+                    logger.info(
+                        "Revalidating stale raw exact non-functional cache hit: input=%r raw=%r rows=%s",
+                        normalized_input,
+                        raw_input,
+                        [str(row["relation_type"] or "").strip() for row in raw_exact_rows],
+                    )
 
             for direct_name in direct_terms:
                 direct = self._lookup_category_row(direct_name)
@@ -2435,7 +2554,7 @@ class UploadRecommendationService:
                     if match:
                         return match
 
-            if not is_like_blocked_input(raw_input, display_input, normalized_input):
+            if not nonfunctional_cache_hit and not is_like_blocked_input(raw_input, display_input, normalized_input):
                 like_rows: List[sqlite3.Row] = []
                 seen_like = set()
                 for term in direct_terms:
@@ -2473,6 +2592,7 @@ class UploadRecommendationService:
             display_name=display_input,
             input_family=input_family,
             mapping_rule=mapping_rule,
+            allow_new_standard=not nonfunctional_cache_hit,
         )
         if runtime_rag_match:
             return runtime_rag_match
@@ -2547,6 +2667,7 @@ class UploadRecommendationService:
                 "standard_name": str(item.get("standard_name", "") or ""),
                 "retrieval_score": float(item.get("retrieval_score", 0.0) or 0.0),
                 "embedding_score": float(item.get("embedding_score", 0.0) or 0.0),
+                "name_similarity_score": float(item.get("name_similarity_score", 0.0) or 0.0),
                 "retrieval_source": str(item.get("retrieval_source", "") or ""),
                 "sources_joined": str(item.get("sources_joined", "") or ""),
                 "synonyms_joined": str(item.get("synonyms_joined", "") or ""),
