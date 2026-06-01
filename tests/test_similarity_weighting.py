@@ -19,6 +19,7 @@ from scripts.enhance_similarity_with_explanation import (
     normalize_similarity_algorithm,
     refresh_cache_rows,
 )
+from api.upload_recommendation_service import UploadRecommendationService
 
 
 def profile(main_category, primary=None, secondary=None, support=None, ingredient_categories=None):
@@ -56,6 +57,65 @@ def test_similarity_algorithm_default_is_semantic_v2_but_v1_is_still_selectable(
     assert normalize_similarity_algorithm("") == SIMILARITY_ALGORITHM_V2
     assert normalize_similarity_algorithm("v2") == SIMILARITY_ALGORITHM_V2
     assert normalize_similarity_algorithm("v1") == SIMILARITY_ALGORITHM_V1
+
+
+def test_upload_recommendation_temp_vector_uses_semantic_v2():
+    base_profile = {
+        **profile("관절/연골", primary=["MSM"], ingredient_categories={"MSM": "관절/연골"}),
+        "product_id": "uploaded::base",
+        "report_no": "",
+        "product_name": "업로드 MSM",
+    }
+    target_profile = {
+        **profile(
+            "관절/연골",
+            primary=["엠에스엠(MSM, Methyl sulfonylmethane, 디메틸설폰)"],
+            ingredient_categories={"엠에스엠(MSM, Methyl sulfonylmethane, 디메틸설폰)": "관절/연골"},
+        ),
+        "product_id": "target::1",
+        "report_no": "T1",
+        "product_name": "타겟 MSM",
+        "is_candidate_enabled": True,
+    }
+    ingredient_profiles = {
+        "MSM": {
+            "functional_ingredient_name": "MSM",
+            "ingredient_main_category": "관절/연골",
+            "ingredient_sub_function_categories": [],
+            "ingredient_type": "functional",
+            "vector_include": True,
+            "is_excipient": False,
+        },
+        "엠에스엠(MSM, Methyl sulfonylmethane, 디메틸설폰)": {
+            "functional_ingredient_name": "엠에스엠(MSM, Methyl sulfonylmethane, 디메틸설폰)",
+            "ingredient_main_category": "관절/연골",
+            "ingredient_sub_function_categories": [],
+            "ingredient_type": "functional",
+            "vector_include": True,
+            "is_excipient": False,
+        },
+    }
+
+    class DummyRecommendationService:
+        product_vectors = {"target::1": {"엠에스엠(MSM, Methyl sulfonylmethane, 디메틸설폰)": 1.0}}
+        profiles = {"target::1": target_profile}
+        ingredient_postings = {
+            "MSM": [],
+            "엠에스엠(MSM, Methyl sulfonylmethane, 디메틸설폰)": ["target::1"],
+        }
+        ingredient_frequency = {"MSM": 1, "엠에스엠(MSM, Methyl sulfonylmethane, 디메틸설폰)": 1}
+        ingredient_category_profiles = ingredient_profiles
+
+        def ensure_loaded(self):
+            return None
+
+    upload_service = UploadRecommendationService(DummyRecommendationService())
+    rows = upload_service.calculate_similar_products_for_temp_vector({"MSM": 1.0}, base_profile, top_k=1, candidate_limit=10)
+
+    assert rows
+    assert rows[0]["explanation"]["similarity_algorithm"] == SIMILARITY_ALGORITHM_V2
+    assert "semantic_weighted_jaccard_v2" in rows[0]["explanation"]
+    assert rows[0]["similarity_score"] > 0.0
 
 
 def test_same_category_without_shared_ingredients_scores_zero():

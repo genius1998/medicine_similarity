@@ -35,16 +35,18 @@ from api.local_llm_client import call_local_llm, extract_json_from_llm_content
 from api.ocr_service import extract_text_from_image, save_temp_upload
 from api.recommendation_service import RecommendationService
 from scripts.enhance_similarity_with_explanation import (
-    build_candidate_pool,
+    build_candidate_pool_v2,
     build_explanation_json,
     calculate_core_match_score,
     calculate_function_similarity,
-    calculate_weighted_jaccard_with_idf,
+    calculate_semantic_weighted_jaccard_v2,
     classify_substitutability,
     compare_product_profiles,
     generate_caution,
     generate_recommendation_reason,
+    is_semantic_excipient_name,
     safe_json_loads,
+    SIMILARITY_ALGORITHM_VERSION,
 )
 
 
@@ -1571,6 +1573,25 @@ class UploadRecommendationService:
         if relation_type in {"unrelated", "unknown", "error", "excipient"}:
             return "excluded_from_vector_by_relation_guard"
 
+        high_confidence_exact_match = (
+            confidence >= 0.90
+            and relation_type in VECTOR_ALLOWED_RELATION_TYPES
+            and match_source in {
+                "direct_category",
+                "safe_alias_exact",
+                "cache_normalized_exact",
+                "cache_raw_exact",
+                "cache_matched_standard_exact",
+                "rag_synonym_exact",
+                "runtime_rag_llm_existing",
+                "runtime_rag_llm_new",
+            }
+            and not looks_like_runtime_measurement_or_symbol(normalized_input)
+            and not looks_like_runtime_measurement_or_symbol(functional_name)
+        )
+        if high_confidence_exact_match:
+            return ""
+
         if self._is_cache_like_vector_excluded(raw_input, display_name, normalized_input) and not functional_premix_input:
             return "excluded_from_vector_by_cache_like_guard"
 
@@ -2850,6 +2871,10 @@ class UploadRecommendationService:
                     "role": role,
                     "category_main": category_main,
                     "category_sub": category_sub,
+                    "relation_type": str(item.get("relation_type", "") or ""),
+                    "v2_decision": "family_signal" if str(item.get("relation_type", "") or "") == "family_fallback" else "existing_match",
+                    "source_raw_ingredients": str(item.get("raw_input", "") or item.get("raw_ingredient", "") or display_name),
+                    "source_match_methods": str(item.get("match_source", "") or ""),
                 }
             )
 
@@ -3118,7 +3143,7 @@ class UploadRecommendationService:
         temp_upload_signature = str(temp_profile.get("upload_signature", "") or "")
         temp_profile_signature = str(temp_profile.get("profile_signature", "") or "")
         temp_ocr_text_hash = str(temp_profile.get("ocr_text_hash", "") or "")
-        candidate_pool = build_candidate_pool(
+        candidate_pool = build_candidate_pool_v2(
             temp_product_id,
             temp_profile,
             service.product_vectors,
@@ -3127,6 +3152,7 @@ class UploadRecommendationService:
             service.ingredient_frequency,
             candidate_limit,
             get_settings().default_max_df_for_seed,
+            service.ingredient_category_profiles,
         )
         candidate_target_ids = [str(candidate.get("target_product_id", "") or "") for candidate in candidate_pool]
         if temp_upload_signature:
@@ -3142,7 +3168,6 @@ class UploadRecommendationService:
                     candidate_target_ids.insert(0, exact_target_id)
 
         rows: List[dict] = []
-        total_product_count = len(service.product_vectors)
         for candidate in candidate_pool:
             target_product_id = candidate["target_product_id"]
             target_profile = service.profiles[target_product_id]
@@ -3155,6 +3180,7 @@ class UploadRecommendationService:
             candidate_enabled = bool(target_profile.get("is_candidate_enabled", True))
             if not exact_same_upload and not candidate_enabled:
                 continue
+            semantic_explanation = {}
 
             uploaded_match_types: List[str] = []
             uploaded_match_labels: List[str] = []
@@ -3193,28 +3219,57 @@ class UploadRecommendationService:
                 substitutability = "높음"
                 reason = "이전에 업로드된 동일 이미지와 일치해 동일 제품으로 판정했습니다."
             else:
-                similarity_score, _ = calculate_weighted_jaccard_with_idf(
-                    temp_vector,
-                    target_vector,
-                    service.ingredient_frequency,
-                    total_product_count,
+                similarity_score, shared_semantic_ingredients, semantic_explanation = calculate_semantic_weighted_jaccard_v2(
                     temp_profile,
                     target_profile,
+                    service.ingredient_category_profiles,
                 )
                 if similarity_score <= 0:
                     continue
+                if shared_semantic_ingredients:
+                    comparison["shared_ingredients"] = shared_semantic_ingredients
+                    comparison["shared_ingredients_raw"] = shared_semantic_ingredients
+                    base_semantic_shared = set()
+                    target_semantic_shared = set()
+                    for detail in semantic_explanation.get("shared_semantic_keys", []) or []:
+                        base_semantic_shared.update(str(name) for name in detail.get("base_ingredients", []) or [])
+                        target_semantic_shared.update(str(name) for name in detail.get("target_ingredients", []) or [])
+                    comparison["base_only_ingredients"] = [
+                        name for name in comparison["base_only_ingredients"] if name not in base_semantic_shared
+                    ]
+                    comparison["target_only_ingredients"] = [
+                        name for name in comparison["target_only_ingredients"] if name not in target_semantic_shared
+                    ]
+                    comparison["base_only_ingredients"] = [
+                        name for name in comparison["base_only_ingredients"] if not is_semantic_excipient_name(name)
+                    ]
+                    comparison["target_only_ingredients"] = [
+                        name for name in comparison["target_only_ingredients"] if not is_semantic_excipient_name(name)
+                    ]
                 function_similarity_score = calculate_function_similarity(temp_profile, target_profile)
                 core_match_score = calculate_core_match_score(temp_profile, target_profile)
                 substitutability = classify_substitutability(similarity_score, temp_profile, target_profile)
                 reason = generate_recommendation_reason(temp_profile, target_profile, comparison, service.ingredient_frequency)
             explanation = build_explanation_json(reason, comparison, substitutability)
+            explanation["similarity_algorithm"] = SIMILARITY_ALGORITHM_VERSION
+            if semantic_explanation:
+                explanation["semantic_weighted_jaccard_v2"] = semantic_explanation
             target_primary_ingredients = list(target_profile.get("primary_ingredients", []))
             target_secondary_ingredients = list(target_profile.get("secondary_ingredients", []))
             target_support_ingredients = list(target_profile.get("support_ingredients", []))
             target_all_ingredients = list(
                 dict.fromkeys(target_primary_ingredients + target_secondary_ingredients + target_support_ingredients)
             )
-            target_other_ingredients = [item for item in target_all_ingredients if item not in comparison["shared_ingredients"]]
+            semantic_shared_target_ingredients = set()
+            for detail in semantic_explanation.get("shared_semantic_keys", []) or []:
+                semantic_shared_target_ingredients.update(str(name) for name in detail.get("target_ingredients", []) or [])
+            target_other_ingredients = [
+                item
+                for item in target_all_ingredients
+                if item not in comparison["shared_ingredients"]
+                and item not in semantic_shared_target_ingredients
+                and (not semantic_explanation or not is_semantic_excipient_name(item))
+            ]
             rows.append(
                 {
                     "rank": 0,
