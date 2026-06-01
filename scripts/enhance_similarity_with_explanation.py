@@ -23,6 +23,7 @@ from config_loader import get_config_value, load_config
 
 
 TABLE_NAME = "product_similarity_explanation_cache"
+SIMILARITY_ALGORITHM_VERSION = "role_component_v2"
 DEFAULT_TOP_K = 10
 DEFAULT_CANDIDATE_LIMIT = 1000
 DEFAULT_MAX_DF_FOR_SEED = 3000
@@ -278,18 +279,158 @@ def resolve_base_product_id(args: argparse.Namespace, profiles: dict[str, dict],
     raise ValueError(f"product_name을 찾지 못했습니다: {args.product_name}")
 
 
+ROLE_FACTORS = {
+    "primary": 1.2,
+    "secondary": 0.55,
+    "support": 0.2,
+}
+
+ROLE_IDF_CAPS = {
+    "primary": 6.0,
+    "secondary": 3.5,
+    "support": 2.0,
+}
+
+OFF_CATEGORY_FACTORS = {
+    "primary": 0.75,
+    "secondary": 0.35,
+    "support": 0.5,
+}
+
+FINAL_SIMILARITY_COMPONENT_WEIGHTS = {
+    "primary": 0.65,
+    "secondary": 0.20,
+    "function": 0.10,
+    "support": 0.05,
+}
+
+NO_PRIMARY_OVERLAP_SCORE_CAP = 0.35
+
+
+def normalize_role(role: str) -> str:
+    role = str(role or "").strip()
+    return role if role in ROLE_FACTORS else "secondary"
+
+
 def role_factor(role: str) -> float:
-    if role == "primary":
-        return 1.15
-    if role == "secondary":
-        return 1.0
-    if role == "support":
-        return 0.35
-    return 0.8
+    return ROLE_FACTORS.get(normalize_role(role), 0.45)
 
 
 def ingredient_idf(total_product_count: int, ingredient_df: int) -> float:
     return math.log((1.0 + total_product_count) / (1.0 + ingredient_df)) + 1.0
+
+
+def capped_ingredient_idf(total_product_count: int, ingredient_df: int, role: str) -> float:
+    normalized_role = normalize_role(role)
+    return min(
+        ingredient_idf(total_product_count, ingredient_df),
+        ROLE_IDF_CAPS.get(normalized_role, ROLE_IDF_CAPS["secondary"]),
+    )
+
+
+def product_ingredient_category(profile: dict, ingredient: str) -> str:
+    return str(dict(profile.get("category_by_ingredient", {}) or {}).get(ingredient, "") or "").strip()
+
+
+def category_alignment_factor(profile: dict, ingredient: str, role: str) -> float:
+    product_main_category = str(profile.get("product_main_category", "") or "").strip()
+    ingredient_category = product_ingredient_category(profile, ingredient)
+    if not product_main_category or not ingredient_category or product_main_category == ingredient_category:
+        return 1.0
+    return OFF_CATEGORY_FACTORS.get(normalize_role(role), OFF_CATEGORY_FACTORS["secondary"])
+
+
+def effective_ingredient_weight(
+    vector_weight: float,
+    ingredient: str,
+    profile: dict,
+    ingredient_frequency: dict[str, int],
+    total_product_count: int,
+) -> float:
+    if vector_weight <= 0:
+        return 0.0
+    role = normalize_role(dict(profile.get("role_by_ingredient", {}) or {}).get(ingredient, ""))
+    idf = capped_ingredient_idf(total_product_count, ingredient_frequency.get(ingredient, 0), role)
+    return float(vector_weight) * idf * role_factor(role) * category_alignment_factor(profile, ingredient, role)
+
+
+def strongest_component_role(*roles: str) -> str:
+    normalized_roles = [normalize_role(role) for role in roles if str(role or "").strip()]
+    if "primary" in normalized_roles:
+        return "primary"
+    if "secondary" in normalized_roles:
+        return "secondary"
+    if "support" in normalized_roles:
+        return "support"
+    return "secondary"
+
+
+def all_profile_ingredients(profile: dict) -> set[str]:
+    return {
+        str(item or "")
+        for item in (
+            list(profile.get("primary_ingredients", []) or [])
+            + list(profile.get("secondary_ingredients", []) or [])
+            + list(profile.get("support_ingredients", []) or [])
+        )
+        if str(item or "")
+    }
+
+
+def has_primary_ingredient_overlap(base_profile: dict, target_profile: dict) -> bool:
+    base_primary = {str(item or "") for item in base_profile.get("primary_ingredients", []) if str(item or "")}
+    target_primary = {str(item or "") for item in target_profile.get("primary_ingredients", []) if str(item or "")}
+    if not base_primary or not target_primary:
+        return True
+    base_all = all_profile_ingredients(base_profile)
+    target_all = all_profile_ingredients(target_profile)
+    if base_primary & target_all or target_primary & base_all:
+        return True
+    base_primary_families = collect_joint_ingredient_families(base_primary)
+    target_all_families = collect_joint_ingredient_families(target_all)
+    target_primary_families = collect_joint_ingredient_families(target_primary)
+    base_all_families = collect_joint_ingredient_families(base_all)
+    return bool((base_primary_families & target_all_families) or (target_primary_families & base_all_families))
+
+
+def weighted_jaccard_for_component(
+    component: str,
+    union_ingredients: set[str],
+    base_vector: dict[str, float],
+    target_vector: dict[str, float],
+    ingredient_frequency: dict[str, int],
+    total_product_count: int,
+    base_profile: dict,
+    target_profile: dict,
+) -> float:
+    base_roles = dict(base_profile.get("role_by_ingredient", {}) or {})
+    target_roles = dict(target_profile.get("role_by_ingredient", {}) or {})
+    numerator = 0.0
+    denominator = 0.0
+    for ingredient in union_ingredients:
+        ingredient_component = strongest_component_role(
+            base_roles.get(ingredient, "") if ingredient in base_vector else "",
+            target_roles.get(ingredient, "") if ingredient in target_vector else "",
+        )
+        if ingredient_component != component:
+            continue
+        effective_base = effective_ingredient_weight(
+            float(base_vector.get(ingredient, 0.0)),
+            ingredient,
+            base_profile,
+            ingredient_frequency,
+            total_product_count,
+        )
+        effective_target = effective_ingredient_weight(
+            float(target_vector.get(ingredient, 0.0)),
+            ingredient,
+            target_profile,
+            ingredient_frequency,
+            total_product_count,
+        )
+        numerator += min(effective_base, effective_target)
+        denominator += max(effective_base, effective_target)
+    return 0.0 if denominator <= 0 else float(numerator / denominator)
 
 
 def calculate_weighted_jaccard_with_idf(
@@ -302,20 +443,48 @@ def calculate_weighted_jaccard_with_idf(
 ) -> tuple[float, list[str]]:
     union_ingredients = set(base_vector) | set(target_vector)
     shared_ingredients = sorted(set(base_vector) & set(target_vector))
-    numerator = 0.0
-    denominator = 0.0
-    for ingredient in union_ingredients:
-        base_weight = float(base_vector.get(ingredient, 0.0))
-        target_weight = float(target_vector.get(ingredient, 0.0))
-        idf = ingredient_idf(total_product_count, ingredient_frequency.get(ingredient, 0))
-        base_role = base_profile["role_by_ingredient"].get(ingredient, "")
-        target_role = target_profile["role_by_ingredient"].get(ingredient, "")
-        effective_base = base_weight * idf * role_factor(base_role)
-        effective_target = target_weight * idf * role_factor(target_role)
-        numerator += min(effective_base, effective_target)
-        denominator += max(effective_base, effective_target)
-    similarity = 0.0 if denominator <= 0 else numerator / denominator
-    return round(float(similarity), 6), shared_ingredients
+    if not shared_ingredients:
+        return 0.0, shared_ingredients
+    primary_similarity = weighted_jaccard_for_component(
+        "primary",
+        union_ingredients,
+        base_vector,
+        target_vector,
+        ingredient_frequency,
+        total_product_count,
+        base_profile,
+        target_profile,
+    )
+    secondary_similarity = weighted_jaccard_for_component(
+        "secondary",
+        union_ingredients,
+        base_vector,
+        target_vector,
+        ingredient_frequency,
+        total_product_count,
+        base_profile,
+        target_profile,
+    )
+    support_similarity = weighted_jaccard_for_component(
+        "support",
+        union_ingredients,
+        base_vector,
+        target_vector,
+        ingredient_frequency,
+        total_product_count,
+        base_profile,
+        target_profile,
+    )
+    function_similarity = calculate_function_similarity(base_profile, target_profile)
+    similarity = (
+        FINAL_SIMILARITY_COMPONENT_WEIGHTS["primary"] * primary_similarity
+        + FINAL_SIMILARITY_COMPONENT_WEIGHTS["secondary"] * secondary_similarity
+        + FINAL_SIMILARITY_COMPONENT_WEIGHTS["function"] * function_similarity
+        + FINAL_SIMILARITY_COMPONENT_WEIGHTS["support"] * support_similarity
+    )
+    if not has_primary_ingredient_overlap(base_profile, target_profile):
+        similarity = min(similarity, NO_PRIMARY_OVERLAP_SCORE_CAP)
+    return round(max(0.0, min(float(similarity), 1.0)), 6), shared_ingredients
 
 
 def calculate_function_similarity(base_profile: dict, target_profile: dict) -> float:
@@ -694,6 +863,7 @@ def ensure_cache_table(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
             base_product_id TEXT NOT NULL,
             target_product_id TEXT NOT NULL,
+            algorithm_version TEXT NOT NULL DEFAULT 'legacy',
             base_product_name TEXT,
             target_product_name TEXT,
             similarity_score REAL,
@@ -713,7 +883,16 @@ def ensure_cache_table(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    existing_columns = {
+        str(row[1])
+        for row in conn.execute(f'PRAGMA table_info("{TABLE_NAME}")').fetchall()
+    }
+    if "algorithm_version" not in existing_columns:
+        conn.execute(f"ALTER TABLE {TABLE_NAME} ADD COLUMN algorithm_version TEXT NOT NULL DEFAULT 'legacy'")
     conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{TABLE_NAME}_base_product_id ON {TABLE_NAME} (base_product_id)")
+    conn.execute(
+        f"CREATE INDEX IF NOT EXISTS idx_{TABLE_NAME}_base_product_algorithm ON {TABLE_NAME} (base_product_id, algorithm_version)"
+    )
     conn.commit()
 
 
@@ -726,10 +905,11 @@ def load_cached_rows(conn: sqlite3.Connection, base_product_id: str, top_k: int)
            reason, caution, explanation_json
     FROM {TABLE_NAME}
     WHERE base_product_id = ?
+      AND algorithm_version = ?
     ORDER BY similarity_score DESC, target_product_id ASC
     LIMIT ?
     """
-    df = pd.read_sql_query(query, conn, params=(base_product_id, top_k))
+    df = pd.read_sql_query(query, conn, params=(base_product_id, SIMILARITY_ALGORITHM_VERSION, top_k))
     return df.to_dict(orient="records")
 
 
@@ -739,17 +919,18 @@ def refresh_cache_rows(conn: sqlite3.Connection, base_product_id: str, rows: lis
     conn.executemany(
         f"""
         INSERT INTO {TABLE_NAME} (
-            base_product_id, target_product_id, base_product_name, target_product_name,
+            base_product_id, target_product_id, algorithm_version, base_product_name, target_product_name,
             similarity_score, function_similarity_score, core_match_score,
             shared_ingredients_json, base_only_ingredients_json, target_only_ingredients_json,
             shared_categories_json, different_categories_json, substitutability,
             reason, caution, explanation_json, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             (
                 row["base_product_id"],
                 row["target_product_id"],
+                SIMILARITY_ALGORITHM_VERSION,
                 row["base_product_name"],
                 row["target_product_name"],
                 row["similarity_score"],

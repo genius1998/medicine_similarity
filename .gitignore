@@ -24,6 +24,8 @@ output/*.jsonl
 output/*.sqlite
 output/*.db
 output/failed_*.csv
+output/**
+outputs/**
 logs/
 logs/*.log
 
