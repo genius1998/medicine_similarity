@@ -20,6 +20,7 @@ from scripts.enhance_similarity_with_explanation import (
     load_cached_rows,
     load_product_function_profiles,
     load_vector_inputs,
+    is_semantic_excipient_name,
     normalize_similarity_algorithm,
     refresh_cache_rows,
     resolve_runtime_paths,
@@ -998,7 +999,18 @@ class RecommendationService:
             dict.fromkeys(target_primary_ingredients + target_secondary_ingredients + target_support_ingredients)
         )
         shared_ingredients = safe_json_loads(row.get("shared_ingredients_json", "[]"), [])
-        target_other_ingredients = [item for item in target_all_ingredients if item not in shared_ingredients]
+        explanation = safe_json_loads(row.get("explanation_json", "{}"), {})
+        semantic_shared_target_ingredients = set()
+        semantic_detail = dict(explanation.get("semantic_weighted_jaccard_v2", {}) or {})
+        for detail in semantic_detail.get("shared_semantic_keys", []) or []:
+            semantic_shared_target_ingredients.update(str(name) for name in detail.get("target_ingredients", []) or [])
+        target_other_ingredients = [
+            item
+            for item in target_all_ingredients
+            if item not in shared_ingredients
+            and item not in semantic_shared_target_ingredients
+            and (not semantic_detail or not is_semantic_excipient_name(item))
+        ]
         return {
             "rank": rank,
             "target_report_no": target_report_no,
@@ -1017,7 +1029,7 @@ class RecommendationService:
             "shared_categories": safe_json_loads(row.get("shared_categories_json", "[]"), []),
             "reason": str(row.get("reason", "") or ""),
             "caution": str(row.get("caution", "") or ""),
-            "explanation": safe_json_loads(row.get("explanation_json", "{}"), {}),
+            "explanation": explanation,
         }
 
     def _candidate_summary_for_llm(self, recommendation: dict) -> dict:

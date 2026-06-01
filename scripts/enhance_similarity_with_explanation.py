@@ -1525,6 +1525,23 @@ def compute_topk_for_single_product(
             if similarity_algorithm == SIMILARITY_ALGORITHM_V2 and shared_semantic_ingredients:
                 comparison["shared_ingredients"] = shared_semantic_ingredients
                 comparison["shared_ingredients_raw"] = shared_semantic_ingredients
+                base_semantic_shared = set()
+                target_semantic_shared = set()
+                for detail in semantic_explanation.get("shared_semantic_keys", []) or []:
+                    base_semantic_shared.update(str(name) for name in detail.get("base_ingredients", []) or [])
+                    target_semantic_shared.update(str(name) for name in detail.get("target_ingredients", []) or [])
+                comparison["base_only_ingredients"] = [
+                    name for name in comparison["base_only_ingredients"] if name not in base_semantic_shared
+                ]
+                comparison["target_only_ingredients"] = [
+                    name for name in comparison["target_only_ingredients"] if name not in target_semantic_shared
+                ]
+                comparison["base_only_ingredients"] = [
+                    name for name in comparison["base_only_ingredients"] if not is_semantic_excipient_name(name)
+                ]
+                comparison["target_only_ingredients"] = [
+                    name for name in comparison["target_only_ingredients"] if not is_semantic_excipient_name(name)
+                ]
             function_similarity_score = calculate_function_similarity(base_profile, target_profile)
             core_match_score = calculate_core_match_score(base_profile, target_profile)
             substitutability = classify_substitutability(similarity_score, base_profile, target_profile)
