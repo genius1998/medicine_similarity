@@ -95,6 +95,7 @@ class IngredientRecommendationRequest(BaseModel):
     top_k: int = 10
     candidate_limit: int = 1000
     llm_rerank: bool = False
+    request_id: str = ""
 
 
 class OCRTextRecommendationRequest(BaseModel):
@@ -102,6 +103,7 @@ class OCRTextRecommendationRequest(BaseModel):
     top_k: int = 10
     candidate_limit: int = 1000
     llm_rerank: bool = False
+    request_id: str = ""
 
 
 class ParsedOCRPayload(BaseModel):

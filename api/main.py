@@ -26,7 +26,7 @@ from api.schemas import (
     RecommendationResponse,
     UploadRecommendationResponse,
 )
-from api.upload_recommendation_service import UploadRecommendationService, coerce_ingredient_request_payload
+from api.upload_recommendation_service import UploadRecommendationService, coerce_ingredient_request_payload, get_request_progress
 
 
 settings = get_settings()
@@ -645,6 +645,7 @@ def recommend_by_ingredients(request: Request, payload_in: IngredientRecommendat
         payload_in.candidate_limit,
         product_name_candidate=payload_in.product_name_candidate,
         llm_rerank=payload_in.llm_rerank,
+        request_id=payload_in.request_id,
     )
     ops_service.save_ocr_review(
         user_id=user.user_id,
@@ -669,7 +670,13 @@ def recommend_by_ingredients(request: Request, payload_in: IngredientRecommendat
 @app.post("/api/recommend/by-ocr-text", response_model=UploadRecommendationResponse)
 def recommend_by_ocr_text(request: Request, payload_in: OCRTextRecommendationRequest) -> UploadRecommendationResponse:
     user = require_api_user(request)
-    payload = upload_service.recommend_from_ocr_text(payload_in.ocr_text, payload_in.top_k, payload_in.candidate_limit, llm_rerank=payload_in.llm_rerank)
+    payload = upload_service.recommend_from_ocr_text(
+        payload_in.ocr_text,
+        payload_in.top_k,
+        payload_in.candidate_limit,
+        llm_rerank=payload_in.llm_rerank,
+        request_id=payload_in.request_id,
+    )
     ops_service.save_ocr_review(user_id=user.user_id, source_type="ocr_text", response_payload=payload)
     ops_service.log_event(
         event_type="ocr_recommend",
@@ -690,6 +697,7 @@ async def recommend_by_image(
     top_k: int = Form(settings.default_top_k),
     candidate_limit: int = Form(settings.default_candidate_limit),
     llm_rerank: bool = Form(False),
+    request_id: str = Form(""),
 ) -> UploadRecommendationResponse:
     user = require_api_user(request)
     filename = str(file.filename or "upload.jpg")
@@ -702,7 +710,14 @@ async def recommend_by_image(
     if len(image_bytes) > max_size:
         raise HTTPException(status_code=400, detail=f"file too large: max {settings.upload_max_file_size_mb}MB")
 
-    payload = upload_service.recommend_from_uploaded_image(image_bytes, filename, top_k, candidate_limit, llm_rerank=llm_rerank)
+    payload = upload_service.recommend_from_uploaded_image(
+        image_bytes,
+        filename,
+        top_k,
+        candidate_limit,
+        llm_rerank=llm_rerank,
+        request_id=request_id,
+    )
     ops_service.save_ocr_review(user_id=user.user_id, source_type="image", response_payload=payload)
     ops_service.log_event(
         event_type="ocr_recommend",
@@ -714,6 +729,12 @@ async def recommend_by_image(
         payload={"trace_id": payload.get("trace_id", ""), "filename": filename},
     )
     return UploadRecommendationResponse(**payload)
+
+
+@app.get("/api/recommend/progress/{request_id}")
+def recommend_progress(request: Request, request_id: str) -> dict:
+    require_api_user(request)
+    return get_request_progress(request_id)
 
 
 @app.get("/api/tools/ingredient-rag")

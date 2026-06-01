@@ -469,10 +469,20 @@
       margin-bottom: 8px;
     }
     .loading-stage,
-    .loading-subtext {
+    .loading-subtext,
+    .loading-detail {
       font-size: 12px;
       line-height: 1.5;
       color: #4a6054;
+    }
+    .loading-detail {
+      margin-top: 6px;
+      padding: 6px 8px;
+      border: 1px solid var(--line);
+      background: #f7faf8;
+      color: #2f4e3f;
+      word-break: keep-all;
+      overflow-wrap: anywhere;
     }
     .loading-progress-head {
       display: flex;
@@ -540,6 +550,7 @@
         <div class="loading-bar-fill" id="loadingBarFill"></div>
       </div>
       <div class="loading-subtext" id="loadingSubtext">분석 시간은 이미지 품질과 OCR 텍스트 양에 따라 달라질 수 있습니다.</div>
+      <div class="loading-detail" id="loadingDetail" hidden></div>
     </div>
   </div>
   <header class="app-header">
@@ -682,6 +693,7 @@
     const loadingPercent = document.getElementById("loadingPercent");
     const loadingBarFill = document.getElementById("loadingBarFill");
     const loadingSubtext = document.getElementById("loadingSubtext");
+    const loadingDetail = document.getElementById("loadingDetail");
     const errorBox = document.getElementById("errorBox");
     const successBox = document.getElementById("successBox");
     const recommendationModeText = document.getElementById("recommendationModeText");
@@ -726,20 +738,84 @@
     };
 
     let loadingTimers = [];
+    let loadingPollTimer = null;
+    let loadingProgressRequestId = "";
 
     function clearLoadingTimers() {
       loadingTimers.forEach((timerId) => window.clearTimeout(timerId));
       loadingTimers = [];
     }
 
-    function updateLoadingState({ title = "", label = "", message = "", percent = 0, subtext = "" } = {}) {
+    function stopProgressPolling() {
+      if (loadingPollTimer) {
+        window.clearInterval(loadingPollTimer);
+        loadingPollTimer = null;
+      }
+      loadingProgressRequestId = "";
+    }
+
+    function makeRequestId(prefix = "ocr") {
+      if (window.crypto && typeof window.crypto.randomUUID === "function") {
+        return `${prefix}-${window.crypto.randomUUID()}`;
+      }
+      return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    }
+
+    function buildProgressDetail(data) {
+      const parts = [];
+      const detail = String((data && data.detail) || "").trim();
+      const currentIngredient = String((data && data.current_ingredient) || "").trim();
+      if (detail) parts.push(detail);
+      if (currentIngredient && !detail.includes(currentIngredient)) parts.push(`현재 원료: ${currentIngredient}`);
+      if (Number.isFinite(Number(data && data.current)) && Number.isFinite(Number(data && data.total)) && Number(data.total) > 0) {
+        parts.push(`진행: ${Number(data.current)} / ${Number(data.total)}`);
+      }
+      return parts.join(" · ");
+    }
+
+    function updateLoadingState({ title = "", label = "", message = "", percent = 0, subtext = "", detail = undefined } = {}) {
       if (title) loadingTitle.textContent = title;
       if (label) loadingStepLabel.textContent = label;
       if (message) loadingMessage.textContent = message;
       if (subtext) loadingSubtext.textContent = subtext;
+      if (detail !== undefined && loadingDetail) {
+        loadingDetail.textContent = detail || "";
+        loadingDetail.hidden = !detail;
+      }
       const safePercent = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
       loadingPercent.textContent = `${safePercent}%`;
       loadingBarFill.style.width = `${safePercent}%`;
+    }
+
+    function startProgressPolling(requestId, mode) {
+      stopProgressPolling();
+      if (!requestId) return;
+      loadingProgressRequestId = requestId;
+      const preset = loadingPresets[mode] || {};
+      const poll = async () => {
+        try {
+          const response = await fetch(`${getApiBase()}/api/recommend/progress/${encodeURIComponent(requestId)}`);
+          if (!response.ok) return;
+          const data = await response.json();
+          if (!data || data.status === "unknown" || data.status === "missing") return;
+          clearLoadingTimers();
+          updateLoadingState({
+            title: preset.title || "Analysis Running",
+            label: data.phase || "SERVER",
+            message: data.message || "서버에서 처리 중입니다.",
+            percent: data.percent ?? 15,
+            subtext: preset.subtext || "서버 진행상황을 확인하는 중입니다.",
+            detail: buildProgressDetail(data),
+          });
+          if (data.status === "complete" || data.status === "error") {
+            stopProgressPolling();
+          }
+        } catch (error) {
+          // Progress polling is best-effort; the main request still controls success/failure.
+        }
+      };
+      poll();
+      loadingPollTimer = window.setInterval(poll, 800);
     }
 
     function startLoadingProgress(mode, fallbackMessage = "처리 중...") {
@@ -762,6 +838,7 @@
         message: preset.steps[0].message,
         percent: 0,
         subtext: preset.subtext,
+        detail: "",
       });
       preset.steps.forEach((step) => {
         const timerId = window.setTimeout(() => {
@@ -883,11 +960,13 @@
     }
 
     function finishLoading(message = "Done.") {
+      stopProgressPolling();
       clearLoadingTimers();
       updateLoadingState({
         label: "DONE",
         message,
         percent: 100,
+        detail: "",
       });
       const hideTimerId = window.setTimeout(() => {
         loadingOverlay.classList.remove("active");
@@ -896,6 +975,7 @@
     }
 
     function cancelLoading() {
+      stopProgressPolling();
       clearLoadingTimers();
       loadingOverlay.classList.remove("active");
     }
@@ -1397,12 +1477,15 @@
       setError("");
       setSuccess("");
       startLoadingProgress("image", "OCR 분석 및 추천 생성 중...");
+      const requestId = makeRequestId("image");
+      startProgressPolling(requestId, "image");
       try {
         const formData = new FormData();
         formData.append("file", state.file);
         formData.append("top_k", String(defaultTopK));
         formData.append("candidate_limit", String(defaultCandidateLimit));
         formData.append("llm_rerank", llmRerank ? "true" : "false");
+        formData.append("request_id", requestId);
 
         const response = await fetch(`${getApiBase()}/api/recommend/by-image`, {
           method: "POST",
@@ -1438,6 +1521,8 @@
       setError("");
       setSuccess("");
       startLoadingProgress("ingredients", "수정한 원료 기준으로 추천 재생성 중...");
+      const requestId = makeRequestId("ingredients");
+      startProgressPolling(requestId, "ingredients");
       try {
         const response = await fetch(`${getApiBase()}/api/recommend/by-ingredients`, {
           method: "POST",
@@ -1449,6 +1534,7 @@
             top_k: defaultTopK,
             candidate_limit: defaultCandidateLimit,
             llm_rerank: Boolean(llmRerank),
+            request_id: requestId,
           }),
         });
         if (!response.ok) {

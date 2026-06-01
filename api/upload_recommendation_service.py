@@ -9,6 +9,7 @@ import re
 import sqlite3
 import time
 from pathlib import Path
+from threading import Lock
 from typing import Dict, List, Optional
 
 import pandas as pd
@@ -243,6 +244,68 @@ INFO_WARNING_CODES = {
 }
 
 logger = logging.getLogger(__name__)
+
+PROGRESS_TTL_SECONDS = 900
+_PROGRESS_LOCK = Lock()
+_REQUEST_PROGRESS: Dict[str, dict] = {}
+
+
+def update_request_progress(
+    request_id: str,
+    *,
+    phase: str = "",
+    message: str = "",
+    percent: Optional[float] = None,
+    detail: str = "",
+    current_ingredient: str = "",
+    current: Optional[int] = None,
+    total: Optional[int] = None,
+    status: str = "running",
+    extra: Optional[dict] = None,
+) -> None:
+    request_id = str(request_id or "").strip()
+    if not request_id:
+        return
+    now = time.time()
+    with _PROGRESS_LOCK:
+        stale_ids = [
+            key
+            for key, value in _REQUEST_PROGRESS.items()
+            if now - float(value.get("updated_at_epoch", now) or now) > PROGRESS_TTL_SECONDS
+        ]
+        for key in stale_ids:
+            _REQUEST_PROGRESS.pop(key, None)
+        previous = dict(_REQUEST_PROGRESS.get(request_id, {}) or {})
+        payload = {
+            **previous,
+            "request_id": request_id,
+            "phase": phase or previous.get("phase", ""),
+            "message": message or previous.get("message", ""),
+            "detail": detail if detail else previous.get("detail", ""),
+            "current_ingredient": current_ingredient if current_ingredient else previous.get("current_ingredient", ""),
+            "status": status or previous.get("status", "running"),
+            "updated_at_epoch": now,
+        }
+        if percent is not None:
+            payload["percent"] = max(0, min(100, round(float(percent), 1)))
+        if current is not None:
+            payload["current"] = int(current)
+        if total is not None:
+            payload["total"] = int(total)
+        if extra:
+            payload["extra"] = {**dict(previous.get("extra", {}) or {}), **extra}
+        _REQUEST_PROGRESS[request_id] = payload
+
+
+def get_request_progress(request_id: str) -> dict:
+    request_id = str(request_id or "").strip()
+    if not request_id:
+        return {"request_id": "", "status": "missing", "percent": 0}
+    with _PROGRESS_LOCK:
+        payload = dict(_REQUEST_PROGRESS.get(request_id, {}) or {})
+    if not payload:
+        return {"request_id": request_id, "status": "unknown", "percent": 0, "message": "No progress record found."}
+    return payload
 
 ENABLE_RUNTIME_RAG_FALLBACK = True
 RUNTIME_CUSTOM_FUNCTIONAL_TABLE_NAME = "runtime_custom_functional_ingredient_map"
@@ -1952,6 +2015,7 @@ class UploadRecommendationService:
         input_family: str,
         mapping_rule: Optional[dict],
         allow_new_standard: bool = True,
+        request_id: str = "",
     ) -> Optional[dict]:
         if not ENABLE_RUNTIME_RAG_FALLBACK:
             return None
@@ -1966,6 +2030,13 @@ class UploadRecommendationService:
         if contains_guarded_runtime_term(query, RUNTIME_EXCIPIENT_VECTOR_EXCLUDED_TERMS):
             return None
 
+        update_request_progress(
+            request_id,
+            phase="ingredient_rag_retrieval",
+            message="RAG 후보를 검색하는 중입니다.",
+            detail=f"원료: {display_name or raw_ingredient or ingredient_name}",
+            current_ingredient=display_name or raw_ingredient or ingredient_name,
+        )
         embedding_results = self._search_runtime_embedding_candidates(
             ingredient_name=ingredient_name,
             raw_ingredient=raw_ingredient,
@@ -1984,6 +2055,15 @@ class UploadRecommendationService:
         if results and not self._has_strong_runtime_rag_signal(results):
             results = []
 
+        candidate_names = [str(item.get("standard_name", "") or "") for item in results[:5]]
+        update_request_progress(
+            request_id,
+            phase="ingredient_rag_llm",
+            message="RAG 후보를 LLM으로 판정하는 중입니다.",
+            detail=f"원료: {display_name or raw_ingredient or ingredient_name} / 후보: {', '.join(candidate_names) if candidate_names else '없음'}",
+            current_ingredient=display_name or raw_ingredient or ingredient_name,
+            extra={"rag_candidates": candidate_names},
+        )
         try:
             llm_result = self._classify_runtime_rag_candidates_with_llm(
                 ingredient_name=ingredient_name,
@@ -1997,6 +2077,13 @@ class UploadRecommendationService:
 
         decision = str(llm_result.get("decision", "") or "").strip().lower()
         if decision == "no_match" or not decision:
+            update_request_progress(
+                request_id,
+                phase="ingredient_rag_no_match",
+                message="RAG 판정 결과 매칭 원료가 없습니다.",
+                detail=f"원료: {display_name or raw_ingredient or ingredient_name}",
+                current_ingredient=display_name or raw_ingredient or ingredient_name,
+            )
             return None
 
         if decision == "existing_match":
@@ -2019,6 +2106,14 @@ class UploadRecommendationService:
             if confidence < 0.6:
                 confidence = 0.84
             reason = str(llm_result.get("reason", "") or "runtime RAG+LLM existing ingredient match").strip()
+            update_request_progress(
+                request_id,
+                phase="ingredient_rag_match",
+                message="RAG 판정으로 기능성 원료 매칭을 확정했습니다.",
+                detail=f"{display_name or raw_ingredient or ingredient_name} -> {resolved_name}",
+                current_ingredient=display_name or raw_ingredient or ingredient_name,
+                extra={"matched_standard_name": resolved_name, "relation_type": relation_type, "confidence": confidence},
+            )
             self._save_runtime_cache_match(
                 raw_ingredient=query,
                 normalized_raw=normalized_query,
@@ -2286,7 +2381,7 @@ class UploadRecommendationService:
         ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
         return ranked[0][0] if ranked else ""
 
-    def _find_match_in_cache(self, ingredient_name: str, raw_ingredient: str = "", display_name: str = "") -> Optional[dict]:
+    def _find_match_in_cache(self, ingredient_name: str, raw_ingredient: str = "", display_name: str = "", request_id: str = "") -> Optional[dict]:
         # Match order:
         # 1) ingredient_match_cache.normalized_raw exact
         # 2) ingredient_match_cache.raw_ingredient exact
@@ -2594,6 +2689,7 @@ class UploadRecommendationService:
             input_family=input_family,
             mapping_rule=mapping_rule,
             allow_new_standard=not nonfunctional_cache_hit,
+            request_id=request_id,
         )
         if runtime_rag_match:
             return runtime_rag_match
@@ -2919,19 +3015,44 @@ class UploadRecommendationService:
 
         return debug
 
-    def match_raw_ingredients_to_functional_ingredients(self, ingredient_objects: List[dict]) -> List[dict]:
+    def match_raw_ingredients_to_functional_ingredients(self, ingredient_objects: List[dict], request_id: str = "") -> List[dict]:
         results = []
         seen = set()
+        matchable_items = [item for item in ingredient_objects if item.get("role") != "excipient" and str(item.get("normalized_for_matching", "") or "").strip()]
+        total = len(matchable_items)
+        processed = 0
         for item in ingredient_objects:
             if item.get("role") == "excipient":
                 continue
             normalized = str(item.get("normalized_for_matching", "") or "").strip()
             if not normalized:
                 continue
+            processed += 1
             raw_ingredient = str(item.get("raw", normalized) or normalized)
             display_name = str(item.get("display_name", raw_ingredient) or raw_ingredient)
-            match = self._find_match_in_cache(normalized, raw_ingredient=raw_ingredient, display_name=display_name)
+            percent = 50 + (18 * (processed - 1) / max(total, 1))
+            update_request_progress(
+                request_id,
+                phase="ingredient_matching",
+                message="원료를 기능성 원료 DB와 매칭하는 중입니다.",
+                percent=percent,
+                detail=f"{processed}/{total}: {display_name}",
+                current_ingredient=display_name,
+                current=processed,
+                total=total,
+            )
+            match = self._find_match_in_cache(normalized, raw_ingredient=raw_ingredient, display_name=display_name, request_id=request_id)
             if not match:
+                update_request_progress(
+                    request_id,
+                    phase="ingredient_matching",
+                    message="원료 매칭을 계속 진행 중입니다.",
+                    percent=50 + (18 * processed / max(total, 1)),
+                    detail=f"{display_name}: 매칭 없음",
+                    current_ingredient=display_name,
+                    current=processed,
+                    total=total,
+                )
                 continue
             key = (str(match.get("raw_input", raw_ingredient)), match["functional_ingredient_name"])
             if key in seen:
@@ -2942,6 +3063,17 @@ class UploadRecommendationService:
             match["input_role"] = str(item.get("role", "") or "")
             match["raw_input"] = raw_ingredient
             results.append(match)
+            update_request_progress(
+                request_id,
+                phase="ingredient_matching",
+                message="원료 매칭을 계속 진행 중입니다.",
+                percent=50 + (18 * processed / max(total, 1)),
+                detail=f"{display_name} -> {match.get('functional_ingredient_name', '')} ({match.get('match_source', '')})",
+                current_ingredient=display_name,
+                current=processed,
+                total=total,
+                extra={"last_match_source": str(match.get("match_source", "") or "")},
+            )
         return results
 
     def _semantic_detail_by_ingredient(self, estimated_profile: Optional[dict]) -> Dict[str, dict]:
@@ -3392,12 +3524,26 @@ class UploadRecommendationService:
             "category_diversity_count": category_diversity_count,
         }
 
-    def calculate_similar_products_for_temp_vector(self, temp_vector: Dict[str, float], temp_profile: dict, top_k: int, candidate_limit: int) -> List[dict]:
+    def calculate_similar_products_for_temp_vector(
+        self,
+        temp_vector: Dict[str, float],
+        temp_profile: dict,
+        top_k: int,
+        candidate_limit: int,
+        request_id: str = "",
+    ) -> List[dict]:
         service = self.recommendation_service
         temp_product_id = str(temp_profile["product_id"])
         temp_upload_signature = str(temp_profile.get("upload_signature", "") or "")
         temp_profile_signature = str(temp_profile.get("profile_signature", "") or "")
         temp_ocr_text_hash = str(temp_profile.get("ocr_text_hash", "") or "")
+        update_request_progress(
+            request_id,
+            phase="candidate_pool",
+            message="후보 제품군을 추출하는 중입니다.",
+            percent=74,
+            detail=f"candidate_limit={candidate_limit}",
+        )
         candidate_pool = build_candidate_pool_v2(
             temp_product_id,
             temp_profile,
@@ -3408,6 +3554,15 @@ class UploadRecommendationService:
             candidate_limit,
             get_settings().default_max_df_for_seed,
             service.ingredient_category_profiles,
+        )
+        update_request_progress(
+            request_id,
+            phase="candidate_scoring",
+            message="후보 제품별 semantic weighted Jaccard v2 유사도를 계산하는 중입니다.",
+            percent=80,
+            detail=f"후보 {len(candidate_pool)}개를 계산합니다.",
+            current=0,
+            total=len(candidate_pool),
         )
         candidate_target_ids = [str(candidate.get("target_product_id", "") or "") for candidate in candidate_pool]
         if temp_upload_signature:
@@ -3423,7 +3578,19 @@ class UploadRecommendationService:
                     candidate_target_ids.insert(0, exact_target_id)
 
         rows: List[dict] = []
-        for candidate in candidate_pool:
+        total_candidates = len(candidate_pool)
+        progress_interval = max(1, total_candidates // 20) if total_candidates else 1
+        for index, candidate in enumerate(candidate_pool, start=1):
+            if index == 1 or index == total_candidates or index % progress_interval == 0:
+                update_request_progress(
+                    request_id,
+                    phase="candidate_scoring",
+                    message="후보 제품별 semantic weighted Jaccard v2 유사도를 계산하는 중입니다.",
+                    percent=80 + (12 * index / max(total_candidates, 1)),
+                    detail=f"{index}/{total_candidates} 후보 처리 중",
+                    current=index,
+                    total=total_candidates,
+                )
             target_product_id = candidate["target_product_id"]
             target_profile = service.profiles[target_product_id]
             target_vector = service.product_vectors[target_product_id]
@@ -3610,6 +3777,13 @@ class UploadRecommendationService:
             item["rank"] = index
             item["reason"] = self._override_recommendation_reason(temp_profile, item)
             item["explanation"]["reason"] = item["reason"]
+        update_request_progress(
+            request_id,
+            phase="recommendation_formatting",
+            message="추천 결과를 정렬하고 화면 응답을 구성하는 중입니다.",
+            percent=94,
+            detail=f"공식 추천 {len(rows)}개, 업로드 참고 {len(uploaded_rows)}개",
+        )
         return rows
 
     def _prepend_stored_exact_match_if_available(self, recommendations: List[dict], temp_profile: dict) -> List[dict]:
@@ -3856,9 +4030,17 @@ class UploadRecommendationService:
         candidate_limit: int = 1000,
         product_name_candidate: str = "",
         llm_rerank: bool = False,
+        request_id: str = "",
     ) -> dict:
         self._ensure_loaded()
         started = time.perf_counter()
+        update_request_progress(
+            request_id,
+            phase="ingredient_input",
+            message="수정한 원료 목록을 검증하는 중입니다.",
+            percent=10,
+            detail=f"입력 원료 {len(ingredients)}개",
+        )
         ingredient_objects = []
         for item in ingredients:
             canonical = canonicalize_ingredient_for_matching(item)
@@ -3890,7 +4072,14 @@ class UploadRecommendationService:
             "confidence": 0.95,
             "needs_user_review": False,
         }
-        matched = self.match_raw_ingredients_to_functional_ingredients(ingredient_objects)
+        matched = self.match_raw_ingredients_to_functional_ingredients(ingredient_objects, request_id=request_id)
+        update_request_progress(
+            request_id,
+            phase="profile_building",
+            message="임시 제품 프로필과 semantic vector를 구성하는 중입니다.",
+            percent=70,
+            detail=f"매칭 원료 {len(matched)}개",
+        )
         temp_vector = self.build_temp_product_vector_from_ingredients(ingredient_objects, matched)
         upload_signature = ""
         temp_hash = hashlib.sha1("|".join(sorted(parsed["normalized_ingredients"])).encode("utf-8")).hexdigest()[:16]
@@ -3900,7 +4089,7 @@ class UploadRecommendationService:
         temp_profile["profile_signature"] = build_profile_signature(temp_profile, temp_vector)
         temp_profile = self._apply_domain_category_overrides(parsed, temp_profile)
         temp_profile["profile_signature"] = build_profile_signature(temp_profile, temp_vector)
-        recommendations = self.calculate_similar_products_for_temp_vector(temp_vector, temp_profile, top_k, candidate_limit) if temp_vector else []
+        recommendations = self.calculate_similar_products_for_temp_vector(temp_vector, temp_profile, top_k, candidate_limit, request_id=request_id) if temp_vector else []
         recommendations = self._prepend_stored_exact_match_if_available(recommendations, temp_profile)
         candidate_state = determine_upload_candidate_state(parsed, temp_profile, False)
         temp_profile["status"] = candidate_state["status"]
@@ -3919,7 +4108,7 @@ class UploadRecommendationService:
             execution_seconds=execution_seconds,
             candidate_count=len(recommendations),
         )
-        return self._build_response(
+        response = self._build_response(
             "ingredients",
             None,
             parsed,
@@ -3932,12 +4121,36 @@ class UploadRecommendationService:
             profile_signature=str(temp_profile.get("profile_signature", "") or ""),
             llm_rerank=llm_rerank,
         )
+        update_request_progress(
+            request_id,
+            phase="complete",
+            message="원료 기준 재추천이 완료되었습니다.",
+            percent=100,
+            detail=f"추천 {len(response.get('recommendations', []))}개",
+            status="complete",
+        )
+        return response
 
-    def recommend_from_ocr_text(self, raw_text: str, top_k: int = 10, candidate_limit: int = 1000, llm_rerank: bool = False) -> dict:
+    def recommend_from_ocr_text(
+        self,
+        raw_text: str,
+        top_k: int = 10,
+        candidate_limit: int = 1000,
+        llm_rerank: bool = False,
+        request_id: str = "",
+    ) -> dict:
         self._ensure_loaded()
         started = time.perf_counter()
+        update_request_progress(request_id, phase="ocr_parse", message="OCR 텍스트에서 원료 후보를 파싱하는 중입니다.", percent=35)
         parsed = parse_ingredients_from_ocr_text(raw_text, self.recommendation_service.runtime["sqlite_path"])
-        matched = self.match_raw_ingredients_to_functional_ingredients(parsed.get("ingredient_objects", []))
+        matched = self.match_raw_ingredients_to_functional_ingredients(parsed.get("ingredient_objects", []), request_id=request_id)
+        update_request_progress(
+            request_id,
+            phase="profile_building",
+            message="임시 제품 프로필과 semantic vector를 구성하는 중입니다.",
+            percent=70,
+            detail=f"매칭 원료 {len(matched)}개",
+        )
         temp_vector = self.build_temp_product_vector_from_ingredients(parsed.get("ingredient_objects", []), matched)
         upload_signature = build_upload_signature("ocr_text", raw_text or "")
         ocr_text_hash = compute_ocr_text_hash(raw_text or "")
@@ -3949,7 +4162,7 @@ class UploadRecommendationService:
         temp_profile["profile_signature"] = build_profile_signature(temp_profile, temp_vector)
         temp_profile = self._apply_domain_category_overrides(parsed, temp_profile)
         temp_profile["profile_signature"] = build_profile_signature(temp_profile, temp_vector)
-        recommendations = self.calculate_similar_products_for_temp_vector(temp_vector, temp_profile, top_k, candidate_limit) if temp_vector else []
+        recommendations = self.calculate_similar_products_for_temp_vector(temp_vector, temp_profile, top_k, candidate_limit, request_id=request_id) if temp_vector else []
         recommendations = self._prepend_stored_exact_match_if_available(recommendations, temp_profile)
         ocr_payload = {
             "raw_text": raw_text,
@@ -4022,6 +4235,14 @@ class UploadRecommendationService:
             needs_user_review=bool(response.get("needs_user_review")),
             quality_warnings=response.get("quality_warnings", []),
         )
+        update_request_progress(
+            request_id,
+            phase="complete",
+            message="OCR 텍스트 추천이 완료되었습니다.",
+            percent=100,
+            detail=f"추천 {len(response.get('recommendations', []))}개",
+            status="complete",
+        )
         return response
 
     def recommend_from_uploaded_image(
@@ -4031,13 +4252,22 @@ class UploadRecommendationService:
         top_k: int = 10,
         candidate_limit: int = 1000,
         llm_rerank: bool = False,
+        request_id: str = "",
     ) -> dict:
         self._ensure_loaded()
         started = time.perf_counter()
+        update_request_progress(
+            request_id,
+            phase="image_prepare",
+            message="업로드 이미지를 확인하고 OCR 분석을 준비하는 중입니다.",
+            percent=5,
+            detail=str(filename or "upload.jpg"),
+        )
         image_hash = build_image_hash(image_bytes)
         upload_signature = build_upload_signature("ocr_image", image_hash)
         cached_ocr_payload = self.recommendation_service.find_cached_ocr_payload_by_upload_signature(upload_signature)
         if cached_ocr_payload:
+            update_request_progress(request_id, phase="ocr_cache", message="캐시된 OCR 결과를 불러오는 중입니다.", percent=20)
             ocr_result = {
                 "raw_text": str(cached_ocr_payload.get("raw_text", "") or ""),
                 "confidence": cached_ocr_payload.get("confidence"),
@@ -4050,6 +4280,7 @@ class UploadRecommendationService:
             ocr_result = None
         suffix = Path(filename or "upload.jpg").suffix.lower() or ".jpg"
         if ocr_result is None:
+            update_request_progress(request_id, phase="ocr_extract", message="이미지에서 OCR 텍스트를 추출하는 중입니다.", percent=20)
             temp_path = save_temp_upload(image_bytes, suffix)
             try:
                 ocr_result = extract_text_from_image(str(temp_path))
@@ -4060,6 +4291,14 @@ class UploadRecommendationService:
                     pass
 
         if ocr_result.get("error"):
+            update_request_progress(
+                request_id,
+                phase="error",
+                message="OCR 인식 중 오류가 발생했습니다.",
+                percent=100,
+                detail=str(ocr_result.get("error")),
+                status="error",
+            )
             return {
                 "input_type": "image",
                 "ocr": ocr_result,
@@ -4115,10 +4354,24 @@ class UploadRecommendationService:
             }
 
         raw_text = str(ocr_result.get("raw_text", "") or "")
+        update_request_progress(
+            request_id,
+            phase="ocr_parse",
+            message="OCR 텍스트에서 제품명과 원료 후보를 파싱하는 중입니다.",
+            percent=38,
+            detail=f"OCR 텍스트 {len(raw_text)}자",
+        )
         parsed = parse_ingredients_from_ocr_text(raw_text, self.recommendation_service.runtime["sqlite_path"])
         parsed["ocr_confidence"] = ocr_result.get("confidence")
         parsed["ocr_confidence_source"] = ocr_result.get("confidence_source", "unavailable")
-        matched = self.match_raw_ingredients_to_functional_ingredients(parsed.get("ingredient_objects", []))
+        matched = self.match_raw_ingredients_to_functional_ingredients(parsed.get("ingredient_objects", []), request_id=request_id)
+        update_request_progress(
+            request_id,
+            phase="profile_building",
+            message="임시 제품 프로필과 semantic vector를 구성하는 중입니다.",
+            percent=70,
+            detail=f"매칭 원료 {len(matched)}개",
+        )
         temp_vector = self.build_temp_product_vector_from_ingredients(parsed.get("ingredient_objects", []), matched)
         ocr_text_hash = compute_ocr_text_hash(raw_text)
         parsed_signature = str((parsed.get("parse_metadata") or {}).get("parsed_signature", "") or compute_parsed_signature(parsed))
@@ -4129,7 +4382,7 @@ class UploadRecommendationService:
         temp_profile["profile_signature"] = build_profile_signature(temp_profile, temp_vector)
         temp_profile = self._apply_domain_category_overrides(parsed, temp_profile)
         temp_profile["profile_signature"] = build_profile_signature(temp_profile, temp_vector)
-        recommendations = self.calculate_similar_products_for_temp_vector(temp_vector, temp_profile, top_k, candidate_limit) if temp_vector else []
+        recommendations = self.calculate_similar_products_for_temp_vector(temp_vector, temp_profile, top_k, candidate_limit, request_id=request_id) if temp_vector else []
         recommendations = self._prepend_stored_exact_match_if_available(recommendations, temp_profile)
         candidate_state = determine_upload_candidate_state(parsed, temp_profile, False)
         temp_profile["status"] = candidate_state["status"]
@@ -4199,6 +4452,14 @@ class UploadRecommendationService:
             notes=f"created from uploaded image: {filename}",
             needs_user_review=bool(response.get("needs_user_review")),
             quality_warnings=response.get("quality_warnings", []),
+        )
+        update_request_progress(
+            request_id,
+            phase="complete",
+            message="이미지 분석과 추천 생성이 완료되었습니다.",
+            percent=100,
+            detail=f"추천 {len(response.get('recommendations', []))}개",
+            status="complete",
         )
         return response
 
