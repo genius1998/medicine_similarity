@@ -713,7 +713,12 @@ def canonicalize_ingredient_for_matching(name: str) -> str:
         ("쏘팔메토", "쏘팔메토열매추출물"),
         ("sawpalmetto", "쏘팔메토열매추출물"),
         ("녹용", "녹용"),
+        ("l-arginine", "L-아르기닌"),
+        ("arginine", "L-아르기닌"),
+        ("l-아르지닌", "L-아르기닌"),
+        ("아르지닌", "L-아르기닌"),
         ("l-아르기닌", "L-아르기닌"),
+        ("아르기닌", "L-아르기닌"),
         ("l-글루타민", "L-글루타민"),
         ("dha", "DHA"),
     ]

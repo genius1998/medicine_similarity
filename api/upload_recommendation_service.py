@@ -138,6 +138,8 @@ ROLE_WEIGHT = {
     "support": 0.45,
 }
 
+NON_FUNCTIONAL_CACHE_RELATION_TYPES = {"excipient", "unrelated", "unknown", "error"}
+
 LOW_OCR_CONFIDENCE_THRESHOLD = 0.6
 LOW_PARSE_CONFIDENCE_THRESHOLD = 0.65
 LOW_TOP_SIMILARITY_THRESHOLD = 0.25
@@ -1570,7 +1572,7 @@ class UploadRecommendationService:
         if self._is_excipient_vector_excluded(raw_input, display_name, normalized_input, functional_name) and not functional_premix_input:
             return "excluded_from_vector_by_excipient_guard"
 
-        if relation_type in {"unrelated", "unknown", "error", "excipient"}:
+        if relation_type in NON_FUNCTIONAL_CACHE_RELATION_TYPES:
             return "excluded_from_vector_by_relation_guard"
 
         high_confidence_exact_match = (
@@ -1781,6 +1783,8 @@ class UploadRecommendationService:
         matched_raw = str(row["raw_ingredient"] or "").strip()
         relation_type = str(row["relation_type"] or "cache_match")
         confidence = float(row["confidence"] or 0.0)
+        if relation_type in NON_FUNCTIONAL_CACHE_RELATION_TYPES:
+            return None
 
         candidate_names = []
         if matched_standard:
@@ -2225,7 +2229,14 @@ class UploadRecommendationService:
         mapping_rule = resolve_runtime_mapping_rule(display_input, raw_input, normalized_input)
         direct_terms = self._resolve_match_terms(normalized_input, raw_input, display_input, input_family)
         safe_alias_terms = self._resolve_safe_alias_terms(normalized_input, raw_input, display_input, mapping_rule)
-        normalized_raw_exact = normalize_cache_exact_key(raw_input or display_input or normalized_input)
+        normalized_raw_exact = normalize_cache_exact_key(normalized_input or raw_input or display_input)
+        raw_normalized_exact = normalize_cache_exact_key(raw_input or display_input or normalized_input)
+        canonical_overrides_raw_cache = bool(
+            normalized_raw_exact
+            and raw_normalized_exact
+            and normalized_raw_exact != raw_normalized_exact
+            and self._lookup_category_row(normalized_input)
+        )
 
         def iter_unique_rows(rows: List[sqlite3.Row]) -> List[sqlite3.Row]:
             seen = set()
@@ -2258,7 +2269,7 @@ class UploadRecommendationService:
                 )
                 if match:
                     return match
-            if any(str(row["relation_type"] or "").strip() in {"excipient", "unrelated", "unknown", "error"} for row in normalized_exact_rows):
+            if any(str(row["relation_type"] or "").strip() in NON_FUNCTIONAL_CACHE_RELATION_TYPES for row in normalized_exact_rows):
                 logger.info(
                     "Stopping after normalized exact non-functional cache hit: input=%r raw=%r rows=%s",
                     normalized_input,
@@ -2266,6 +2277,43 @@ class UploadRecommendationService:
                     [str(row["relation_type"] or "").strip() for row in normalized_exact_rows],
                 )
                 return None
+
+            if raw_normalized_exact and raw_normalized_exact != normalized_raw_exact:
+                raw_normalized_exact_rows = iter_unique_rows(
+                    self._fetch_cache_rows_by_normalized_raw(conn, raw_normalized_exact)
+                )
+                for row in raw_normalized_exact_rows:
+                    match = self._resolve_cache_row_match(
+                        ingredient_name=normalized_input,
+                        raw_ingredient=raw_input,
+                        display_name=display_input,
+                        row=row,
+                        input_family=input_family,
+                        allow_like=False,
+                        mapping_rule=mapping_rule,
+                        source_override="cache_raw_normalized_exact",
+                    )
+                    if match:
+                        return match
+                if any(
+                    str(row["relation_type"] or "").strip() in NON_FUNCTIONAL_CACHE_RELATION_TYPES
+                    for row in raw_normalized_exact_rows
+                ):
+                    if canonical_overrides_raw_cache:
+                        logger.info(
+                            "Ignoring stale raw normalized non-functional cache because canonical input resolves directly: input=%r raw=%r rows=%s",
+                            normalized_input,
+                            raw_input,
+                            [str(row["relation_type"] or "").strip() for row in raw_normalized_exact_rows],
+                        )
+                    else:
+                        logger.info(
+                            "Stopping after raw normalized non-functional cache hit: input=%r raw=%r rows=%s",
+                            normalized_input,
+                            raw_input,
+                            [str(row["relation_type"] or "").strip() for row in raw_normalized_exact_rows],
+                        )
+                        return None
 
             raw_exact_rows = iter_unique_rows(self._fetch_cache_rows_by_raw(conn, raw_input))
             for row in raw_exact_rows:
@@ -2281,14 +2329,22 @@ class UploadRecommendationService:
                 )
                 if match:
                     return match
-            if any(str(row["relation_type"] or "").strip() in {"excipient", "unrelated", "unknown", "error"} for row in raw_exact_rows):
-                logger.info(
-                    "Stopping after raw exact non-functional cache hit: input=%r raw=%r rows=%s",
-                    normalized_input,
-                    raw_input,
-                    [str(row["relation_type"] or "").strip() for row in raw_exact_rows],
-                )
-                return None
+            if any(str(row["relation_type"] or "").strip() in NON_FUNCTIONAL_CACHE_RELATION_TYPES for row in raw_exact_rows):
+                if canonical_overrides_raw_cache:
+                    logger.info(
+                        "Ignoring stale raw exact non-functional cache because canonical input resolves directly: input=%r raw=%r rows=%s",
+                        normalized_input,
+                        raw_input,
+                        [str(row["relation_type"] or "").strip() for row in raw_exact_rows],
+                    )
+                else:
+                    logger.info(
+                        "Stopping after raw exact non-functional cache hit: input=%r raw=%r rows=%s",
+                        normalized_input,
+                        raw_input,
+                        [str(row["relation_type"] or "").strip() for row in raw_exact_rows],
+                    )
+                    return None
 
             for direct_name in direct_terms:
                 direct = self._lookup_category_row(direct_name)
