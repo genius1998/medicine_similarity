@@ -370,6 +370,11 @@ def extract_report_no(row: pd.Series) -> str:
     return product_id
 
 
+def clean_optional_cell(value: object) -> str:
+    text = str(value or "").strip()
+    return "" if text.lower() == "nan" else text
+
+
 def compute_profile_for_product(product_id: str, group: pd.DataFrame, main_category_overrides: dict | None = None) -> dict:
     group = group.sort_values(by=["weight", "matched_standard_name"], ascending=[False, True]).reset_index(drop=True)
     product_name = str(group.iloc[0]["product_name"] or "").strip()
@@ -387,12 +392,19 @@ def compute_profile_for_product(product_id: str, group: pd.DataFrame, main_categ
     top_weight = float(group["weight"].max()) if not group.empty else 0.0
 
     for row in group.itertuples(index=False):
+        row_data = row._asdict()
         ingredient = str(row.matched_standard_name or "").strip()
         category_main = str(row.category_main or "기타").strip() or "기타"
         category_sub = str(row.category_sub or "").strip()
         claim_text = str(row.claim_text or "").strip()
         map_confidence = float(row.map_confidence or 0.0)
         weight = float(row.weight)
+        relation_type = clean_optional_cell(row_data.get("best_relation_type", ""))
+        source_raw_ingredients = clean_optional_cell(row_data.get("source_raw_ingredients", ""))
+        source_match_methods = clean_optional_cell(row_data.get("source_match_methods", ""))
+        v2_decision = clean_optional_cell(row_data.get("v2_decision", ""))
+        family_signal_source_ingredient = clean_optional_cell(row_data.get("family_signal_source_ingredient", ""))
+        family_signal_matched_standard_name = clean_optional_cell(row_data.get("family_signal_matched_standard_name", ""))
         support_flag = is_support_ingredient(ingredient)
         excipient_flag = is_excipient(ingredient)
         core_pattern_match = ingredient_matches_patterns(ingredient, CATEGORY_KEYWORDS.get(category_main, []))
@@ -427,6 +439,12 @@ def compute_profile_for_product(product_id: str, group: pd.DataFrame, main_categ
                 "support_flag": support_flag,
                 "excipient_flag": excipient_flag,
                 "core_pattern_match": core_pattern_match,
+                "relation_type": relation_type,
+                "source_raw_ingredients": source_raw_ingredients,
+                "source_match_methods": source_match_methods,
+                "v2_decision": v2_decision,
+                "family_signal_source_ingredient": family_signal_source_ingredient,
+                "family_signal_matched_standard_name": family_signal_matched_standard_name,
             }
         )
 
@@ -579,6 +597,8 @@ def compute_profile_for_product(product_id: str, group: pd.DataFrame, main_categ
             [r"난소화성말토덱스트린"],
         ):
             role = "secondary"
+        if item.get("v2_decision") == "family_signal" and role == "primary":
+            role = "secondary"
 
         payload = {
             "ingredient": ingredient,
@@ -586,6 +606,12 @@ def compute_profile_for_product(product_id: str, group: pd.DataFrame, main_categ
             "role": role,
             "category_main": category_main,
             "category_sub": item["category_sub"],
+            "relation_type": item.get("relation_type", ""),
+            "source_raw_ingredients": item.get("source_raw_ingredients", ""),
+            "source_match_methods": item.get("source_match_methods", ""),
+            "v2_decision": item.get("v2_decision", ""),
+            "family_signal_source_ingredient": item.get("family_signal_source_ingredient", ""),
+            "family_signal_matched_standard_name": item.get("family_signal_matched_standard_name", ""),
         }
         ingredient_scores.append(payload)
         if role == "primary":
@@ -757,8 +783,37 @@ def main() -> None:
             "confidence": "map_confidence",
         }
     )
-    merged_df = vector_df.merge(category_df, on="matched_standard_name", how="left")
-    merged_df["category_main"] = merged_df["category_main"].fillna("기타")
+    merged_df = vector_df.merge(category_df, on="matched_standard_name", how="left", suffixes=("_vector", "_map"))
+    for column in ["category_main", "category_sub", "claim_text"]:
+        vector_column = f"{column}_vector"
+        map_column = f"{column}_map"
+        if vector_column in merged_df.columns and map_column in merged_df.columns:
+            vector_values = merged_df[vector_column].fillna("").astype(str).str.strip()
+            map_values = merged_df[map_column].fillna("").astype(str).str.strip()
+            merged_df[column] = vector_values.where(vector_values != "", map_values)
+        elif map_column in merged_df.columns:
+            merged_df[column] = merged_df[map_column]
+        elif vector_column in merged_df.columns:
+            merged_df[column] = merged_df[vector_column]
+    if "category_main" not in merged_df.columns:
+        merged_df["category_main"] = ""
+    if "category_sub" not in merged_df.columns:
+        merged_df["category_sub"] = ""
+    if "claim_text" not in merged_df.columns:
+        merged_df["claim_text"] = ""
+
+    if "map_confidence_vector" in merged_df.columns and "map_confidence_map" in merged_df.columns:
+        vector_confidence = pd.to_numeric(merged_df["map_confidence_vector"], errors="coerce").fillna(0.0)
+        map_confidence = pd.to_numeric(merged_df["map_confidence_map"], errors="coerce").fillna(0.0)
+        merged_df["map_confidence"] = vector_confidence.where(vector_confidence > 0, map_confidence)
+    elif "map_confidence_map" in merged_df.columns:
+        merged_df["map_confidence"] = merged_df["map_confidence_map"]
+    elif "map_confidence_vector" in merged_df.columns:
+        merged_df["map_confidence"] = merged_df["map_confidence_vector"]
+    elif "map_confidence" not in merged_df.columns:
+        merged_df["map_confidence"] = 0.0
+
+    merged_df["category_main"] = merged_df["category_main"].fillna("기타").replace("", "기타")
     merged_df["category_sub"] = merged_df["category_sub"].fillna("")
     merged_df["claim_text"] = merged_df["claim_text"].fillna("")
     merged_df["map_confidence"] = pd.to_numeric(merged_df["map_confidence"], errors="coerce").fillna(0.25)

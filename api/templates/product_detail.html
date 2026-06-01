@@ -468,7 +468,7 @@
 
         const [profile, similar] = await Promise.all([
           fetchJson(`/api/products/${encodeURIComponent(reportNo)}/profile`, 1),
-          fetchJson(`/api/products/${encodeURIComponent(reportNo)}/similar?top_k=10&candidate_limit=1000&llm_rerank=false`, 2),
+          fetchJson(`/api/products/${encodeURIComponent(reportNo)}/similar?top_k=10&candidate_limit=1000&llm_rerank=false&similarity_algorithm=v2`, 2),
         ]);
 
         setLoadingStep(3);
@@ -569,7 +569,7 @@
       startLoading();
       try {
         setLoadingStep(2);
-        const similar = await fetchJson(`/api/products/${encodeURIComponent(reportNo)}/similar?top_k=10&candidate_limit=1000&llm_rerank=true`, 2);
+        const similar = await fetchJson(`/api/products/${encodeURIComponent(reportNo)}/similar?top_k=10&candidate_limit=1000&llm_rerank=true&similarity_algorithm=v2`, 2);
         if (similar) {
           state.similar = similar;
         } else {

@@ -82,7 +82,27 @@ VECTOR_COLUMNS = [
     "소비기한",
     "성상",
     "섭취방법",
+    "category_main",
+    "category_sub",
+    "claim_text",
+    "map_confidence",
+    "v2_decision",
+    "family_signal_source_ingredient",
+    "family_signal_matched_standard_name",
 ]
+
+PRODUCT_ID_PREFIX = "\ud488\ubaa9\uc81c\uc870\ubc88\ud638::"
+REPORT_NO_COLUMN = VECTOR_COLUMNS[9]
+LICENSE_NO_COLUMN = VECTOR_COLUMNS[10]
+MAIN_FUNCTIONALITY_COLUMN = VECTOR_COLUMNS[11]
+CAUTIONS_COLUMN = VECTOR_COLUMNS[12]
+STANDARD_SPEC_COLUMN = VECTOR_COLUMNS[13]
+REPORT_DATE_COLUMN = VECTOR_COLUMNS[14]
+SHELF_LIFE_COLUMN = VECTOR_COLUMNS[15]
+APPEARANCE_COLUMN = VECTOR_COLUMNS[16]
+INTAKE_METHOD_COLUMN = VECTOR_COLUMNS[17]
+VECTOR_DECISIONS_TO_MATERIALIZE = {"existing_match", "family_signal"}
+VECTOR_EXACT_MATCH_METHODS = {"llm_rag_promoted_standard_v1", "llm_rag_conflict_resolved_existing_v1"}
 
 
 CONFLICT_EXISTING_OVERRIDES = {
@@ -455,12 +475,14 @@ def build_extended_vector_csv(
             base_df[column] = ""
     base_df = base_df[VECTOR_COLUMNS].copy()
 
-    cache_by_key = {
-        readable(row.get("normalized_raw")): row
-        for row in cache_rows
-        if row.get("decision") == "existing_match"
-        and row.get("match_method") in {"llm_rag_promoted_standard_v1", "llm_rag_conflict_resolved_existing_v1"}
-    }
+    cache_by_key = {}
+    for row in cache_rows:
+        decision = readable(row.get("decision"))
+        matched = readable(row.get("matched_standard_name"))
+        normalized_raw = readable(row.get("normalized_raw"))
+        if decision not in VECTOR_DECISIONS_TO_MATERIALIZE or not matched or not normalized_raw:
+            continue
+        cache_by_key[normalized_raw] = row
     if not cache_by_key:
         output_vector_csv.parent.mkdir(parents=True, exist_ok=True)
         base_df.to_csv(output_vector_csv, index=False, encoding="utf-8-sig")
@@ -480,17 +502,24 @@ def build_extended_vector_csv(
         matched = readable(cache.get("matched_standard_name"))
         if not matched:
             continue
-        if cache.get("match_method") == "llm_rag_conflict_resolved_existing_v1" and matched not in promoted_standard_names:
+        decision = readable(cache.get("decision"))
+        match_method = readable(cache.get("match_method"))
+        relation_type = readable(cache.get("relation_type")) or ("family_signal" if decision == "family_signal" else "same_ingredient")
+        if match_method == "llm_rag_conflict_resolved_existing_v1" and matched not in promoted_standard_names:
             continue
         report_no = readable(item.get("report_no"))
-        product_id = f"품목제조번호::{report_no}"
+        product_id = f"{PRODUCT_ID_PREFIX}{report_no}"
         key = (product_id, matched)
         try:
             confidence = float(cache.get("confidence") or 0.0)
         except ValueError:
             confidence = 0.0
-        weight = round(max(0.55, min(0.95, confidence or 0.65)), 4)
+        if decision == "family_signal":
+            weight = round(max(0.25, min(0.55, confidence or 0.45)), 4)
+        else:
+            weight = round(max(0.55, min(0.95, confidence or 0.65)), 4)
         catalog_row = catalog_by_report.get(report_no, {})
+        raw_ingredient = readable(item.get("raw_ingredient"))
         row = grouped.setdefault(
             key,
             {
@@ -499,27 +528,33 @@ def build_extended_vector_csv(
                 "product_name": readable(item.get("product_name")),
                 "matched_standard_name": matched,
                 "weight": weight,
-                "best_relation_type": readable(cache.get("relation_type")) or "same_ingredient",
+                "best_relation_type": relation_type,
                 "best_confidence": confidence,
                 "source_raw_ingredients": [],
                 "source_match_methods": set(),
-                "품목제조번호": report_no,
-                "인허가번호": readable(catalog_row.get("license_no")),
-                "주된기능성": readable(catalog_row.get("main_functionality")),
-                "섭취시주의사항": readable(catalog_row.get("cautions")),
-                "기준규격": readable(catalog_row.get("standard_spec")),
-                "보고일자": readable(catalog_row.get("report_date")),
-                "소비기한": readable(catalog_row.get("shelf_life")),
-                "성상": readable(catalog_row.get("appearance")),
-                "섭취방법": readable(catalog_row.get("intake_method")),
+                REPORT_NO_COLUMN: report_no,
+                LICENSE_NO_COLUMN: readable(catalog_row.get("license_no")),
+                MAIN_FUNCTIONALITY_COLUMN: readable(catalog_row.get("main_functionality")),
+                CAUTIONS_COLUMN: readable(catalog_row.get("cautions")),
+                STANDARD_SPEC_COLUMN: readable(catalog_row.get("standard_spec")),
+                REPORT_DATE_COLUMN: readable(catalog_row.get("report_date")),
+                SHELF_LIFE_COLUMN: readable(catalog_row.get("shelf_life")),
+                APPEARANCE_COLUMN: readable(catalog_row.get("appearance")),
+                INTAKE_METHOD_COLUMN: readable(catalog_row.get("intake_method")),
+                "category_main": readable(cache.get("category_main")),
+                "category_sub": readable(cache.get("category_sub")),
+                "claim_text": readable(cache.get("reason")),
+                "map_confidence": confidence,
+                "v2_decision": decision,
+                "family_signal_source_ingredient": raw_ingredient if decision == "family_signal" else "",
+                "family_signal_matched_standard_name": matched if decision == "family_signal" else "",
             },
         )
         row["weight"] = max(float(row["weight"]), weight)
         row["best_confidence"] = max(float(row["best_confidence"]), confidence)
-        raw = readable(item.get("raw_ingredient"))
-        if raw and raw not in row["source_raw_ingredients"]:
-            row["source_raw_ingredients"].append(raw)
-        row["source_match_methods"].add(readable(cache.get("match_method")))
+        if raw_ingredient and raw_ingredient not in row["source_raw_ingredients"]:
+            row["source_raw_ingredients"].append(raw_ingredient)
+        row["source_match_methods"].add(match_method)
 
     add_rows = []
     for row in grouped.values():
@@ -534,7 +569,9 @@ def build_extended_vector_csv(
         for column in VECTOR_COLUMNS:
             if column not in add_df.columns:
                 add_df[column] = ""
-        out_df = pd.concat([base_df, add_df[VECTOR_COLUMNS]], ignore_index=True)
+        materialized_product_ids = set(add_df["product_id"].astype(str))
+        base_keep_df = base_df[~base_df["product_id"].astype(str).isin(materialized_product_ids)].copy()
+        out_df = pd.concat([base_keep_df, add_df[VECTOR_COLUMNS]], ignore_index=True)
         out_df["weight"] = pd.to_numeric(out_df["weight"], errors="coerce").fillna(0.0)
         out_df = (
             out_df.sort_values(["product_id", "matched_standard_name", "weight"], ascending=[True, True, False])
@@ -548,6 +585,8 @@ def build_extended_vector_csv(
         "added_vector_rows": len(add_rows),
         "output_vector_rows": len(out_df),
         "products_with_added_vectors": int(add_df["product_id"].nunique()) if not add_df.empty else 0,
+        "base_rows_kept_for_unmaterialized_products": int(len(base_keep_df)) if not add_df.empty else len(base_df),
+        "family_signal_vector_rows": int((add_df["v2_decision"] == "family_signal").sum()) if not add_df.empty else 0,
     }
 
 

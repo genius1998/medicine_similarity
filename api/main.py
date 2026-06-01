@@ -599,7 +599,7 @@ def get_similar_products(
     candidate_limit: int = Query(settings.default_candidate_limit, ge=10, le=5000),
     force_refresh: bool = Query(False),
     llm_rerank: bool = Query(False),
-    similarity_algorithm: str = Query("v1"),
+    similarity_algorithm: str = Query("v2"),
 ) -> RecommendationResponse:
     user = require_api_user(request)
     try:

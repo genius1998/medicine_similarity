@@ -25,7 +25,7 @@ from config_loader import get_config_value, load_config
 TABLE_NAME = "product_similarity_explanation_cache"
 SIMILARITY_ALGORITHM_V1 = "role_component_v2"
 SIMILARITY_ALGORITHM_V2 = "semantic_weighted_jaccard_v2"
-SIMILARITY_ALGORITHM_VERSION = SIMILARITY_ALGORITHM_V1
+SIMILARITY_ALGORITHM_VERSION = SIMILARITY_ALGORITHM_V2
 SIMILARITY_ALGORITHM_ALIASES = {
     "v1": SIMILARITY_ALGORITHM_V1,
     SIMILARITY_ALGORITHM_V1: SIMILARITY_ALGORITHM_V1,
@@ -39,6 +39,15 @@ DEFAULT_TOP_K = 10
 DEFAULT_CANDIDATE_LIMIT = 1000
 DEFAULT_MAX_DF_FOR_SEED = 3000
 SEMANTIC_MATCH_CONFIDENCE_MIN = 0.45
+NUTRITION_MAIN_CATEGORY = "\uc601\uc591\ubcf4\ucda9"
+GENERIC_NUTRIENT_VECTOR_SHARE_CAP = 0.20
+FAMILY_SIGNAL_MAIN_CATEGORY_WEIGHT = 0.35
+FAMILY_SIGNAL_SUB_CATEGORY_WEIGHT = 0.30
+FAMILY_SIGNAL_WEAK_WEIGHT = 0.20
+PARTIAL_CORE_COVERAGE_FLOOR = 0.85
+NO_CORE_COVERAGE_MULTIPLIER = 0.72
+SPARSE_EXACT_SCORE_CAP = 0.97
+SPARSE_EXACT_EFFECTIVE_WEIGHT_MAX = 1.5
 CAUTION_TEXT = (
     "본 추천은 건강기능식품의 기능성원료, 표시 기능, 원재료 정보를 기준으로 한 비교 결과입니다. "
     "질병의 예방·치료 효과를 의미하지 않으며, 실제 섭취 전 제품 라벨의 함량, 1일 섭취량, 주의사항을 확인해야 합니다."
@@ -749,6 +758,17 @@ def semantic_weight_for_product_ingredient(
             return 0.3, "generic_nutrient_sub_category_overlap", ingredient_profile
         return 0.2, "generic_nutrient_weak_signal", ingredient_profile
 
+    relation_type = str(score_item.get("relation_type", "") or score_item.get("best_relation_type", "") or "").strip()
+    v2_decision = str(score_item.get("v2_decision", "") or "").strip()
+    if relation_type == "family_signal" or v2_decision == "family_signal":
+        if product_category_is_specific and product_main == ingredient_main:
+            return FAMILY_SIGNAL_MAIN_CATEGORY_WEIGHT, "family_signal_main_category_match", ingredient_profile
+        if product_category_is_specific and product_main in ingredient_subs:
+            return FAMILY_SIGNAL_SUB_CATEGORY_WEIGHT, "family_signal_product_main_in_sub_functions", ingredient_profile
+        if product_subs & ingredient_categories:
+            return FAMILY_SIGNAL_SUB_CATEGORY_WEIGHT, "family_signal_product_sub_function_overlap", ingredient_profile
+        return FAMILY_SIGNAL_WEAK_WEIGHT, "family_signal_weak", ingredient_profile
+
     if product_category_is_specific and product_main == ingredient_main:
         return 1.0, "main_category_match", ingredient_profile
     if product_category_is_specific and product_main in ingredient_subs:
@@ -767,6 +787,46 @@ def semantic_ingredient_key(ingredient: str) -> str:
     return ingredient
 
 
+def apply_generic_nutrient_total_cap(
+    product_profile: dict,
+    vector: dict[str, float],
+    generic_nutrient_keys: set[str],
+    details: dict[str, dict] | None = None,
+) -> dict:
+    product_main = str(product_profile.get("product_main_category", "") or "").strip()
+    if product_main == NUTRITION_MAIN_CATEGORY or not generic_nutrient_keys:
+        return {}
+    active_nutrient_keys = {key for key in generic_nutrient_keys if vector.get(key, 0.0) > 0}
+    if not active_nutrient_keys:
+        return {}
+    nutrient_total = sum(float(vector.get(key, 0.0) or 0.0) for key in active_nutrient_keys)
+    non_nutrient_total = sum(
+        float(weight or 0.0)
+        for key, weight in vector.items()
+        if key not in active_nutrient_keys
+    )
+    if nutrient_total <= 0 or non_nutrient_total <= 0:
+        return {}
+    max_nutrient_total = non_nutrient_total * GENERIC_NUTRIENT_VECTOR_SHARE_CAP / (1.0 - GENERIC_NUTRIENT_VECTOR_SHARE_CAP)
+    if nutrient_total <= max_nutrient_total:
+        return {}
+
+    scale = max_nutrient_total / nutrient_total
+    for key in active_nutrient_keys:
+        vector[key] = round(float(vector.get(key, 0.0) or 0.0) * scale, 6)
+        if details is not None and key in details:
+            details[key]["weight"] = vector[key]
+            details[key]["reason"] = f"{details[key].get('reason', '')}|generic_nutrient_total_cap"
+    return {
+        "cap": GENERIC_NUTRIENT_VECTOR_SHARE_CAP,
+        "original_nutrient_total": round(float(nutrient_total), 6),
+        "capped_nutrient_total": round(float(max_nutrient_total), 6),
+        "non_nutrient_total": round(float(non_nutrient_total), 6),
+        "scale": round(float(scale), 6),
+        "keys": sorted(active_nutrient_keys),
+    }
+
+
 def build_semantic_weight_vector(
     product_profile: dict,
     ingredient_category_profiles: dict[str, dict] | None = None,
@@ -774,6 +834,7 @@ def build_semantic_weight_vector(
 ):
     vector: dict[str, float] = {}
     details: dict[str, dict] = {}
+    generic_nutrient_keys: set[str] = set()
     for score_item in ingredient_score_items(product_profile):
         ingredient = str(score_item.get("ingredient", "") or "").strip()
         weight, reason, ingredient_profile = semantic_weight_for_product_ingredient(
@@ -795,6 +856,11 @@ def build_semantic_weight_vector(
                     "ingredient_type": str(ingredient_profile.get("ingredient_type", "") or ""),
                     "vector_include": coerce_bool(ingredient_profile.get("vector_include", True), True),
                     "is_excipient": coerce_bool(ingredient_profile.get("is_excipient", False), False),
+                    "relation_type": str(score_item.get("relation_type", "") or score_item.get("best_relation_type", "") or ""),
+                    "v2_decision": str(score_item.get("v2_decision", "") or ""),
+                    "source_raw_ingredients": str(score_item.get("source_raw_ingredients", "") or ""),
+                    "family_signal_source_ingredient": str(score_item.get("family_signal_source_ingredient", "") or ""),
+                    "family_signal_matched_standard_name": str(score_item.get("family_signal_matched_standard_name", "") or ""),
                 },
             )
             details[key]["ingredients"].append(ingredient)
@@ -803,10 +869,75 @@ def build_semantic_weight_vector(
                 details[key]["reason"] = reason
         if weight <= 0:
             continue
+        if str(ingredient_profile.get("ingredient_type", "") or "").strip() in {"nutrient", "generic_nutrient"}:
+            generic_nutrient_keys.add(key)
         vector[key] = max(vector.get(key, 0.0), float(weight))
+    cap_detail = apply_generic_nutrient_total_cap(
+        product_profile,
+        vector,
+        generic_nutrient_keys,
+        details if include_details else None,
+    )
+    if include_details and cap_detail:
+        details["__generic_nutrient_total_cap__"] = {
+            "semantic_key": "__generic_nutrient_total_cap__",
+            "ingredients": [],
+            "weight": 0.0,
+            "reason": "generic_nutrient_total_cap_summary",
+            "cap_detail": cap_detail,
+        }
     if include_details:
         return vector, details
     return vector
+
+
+def primary_semantic_keys(profile: dict, active_vector: dict[str, float]) -> set[str]:
+    keys = set()
+    for score_item in ingredient_score_items(profile):
+        if str(score_item.get("role", "") or "").strip() != "primary":
+            continue
+        ingredient = str(score_item.get("ingredient", "") or "").strip()
+        if not ingredient:
+            continue
+        key = semantic_ingredient_key(ingredient)
+        if active_vector.get(key, 0.0) > 0:
+            keys.add(key)
+    return keys
+
+
+def semantic_core_coverage_detail(
+    base_profile: dict,
+    target_profile: dict,
+    base_vector: dict[str, float],
+    target_vector: dict[str, float],
+) -> dict:
+    base_primary_keys = primary_semantic_keys(base_profile, base_vector)
+    target_primary_keys = primary_semantic_keys(target_profile, target_vector)
+    shared_primary_keys = sorted(base_primary_keys & target_primary_keys)
+    base_coverage = 1.0 if not base_primary_keys else len(shared_primary_keys) / len(base_primary_keys)
+    target_coverage = 1.0 if not target_primary_keys else len(shared_primary_keys) / len(target_primary_keys)
+    coverage = min(base_coverage, target_coverage)
+    if not base_primary_keys and not target_primary_keys:
+        coverage = 1.0
+    multiplier = 1.0
+    reason = "full_core_coverage"
+    if base_primary_keys or target_primary_keys:
+        if coverage <= 0:
+            multiplier = NO_CORE_COVERAGE_MULTIPLIER
+            reason = "no_primary_core_overlap"
+        elif coverage < 1.0:
+            multiplier = PARTIAL_CORE_COVERAGE_FLOOR + ((1.0 - PARTIAL_CORE_COVERAGE_FLOOR) * coverage)
+            reason = "partial_primary_core_overlap"
+    return {
+        "base_primary_semantic_keys": sorted(base_primary_keys),
+        "target_primary_semantic_keys": sorted(target_primary_keys),
+        "shared_primary_semantic_keys": shared_primary_keys,
+        "base_primary_coverage": round(float(base_coverage), 6),
+        "target_primary_coverage": round(float(target_coverage), 6),
+        "core_coverage": round(float(coverage), 6),
+        "multiplier": round(float(multiplier), 6),
+        "reason": reason,
+    }
 
 
 def calculate_semantic_weighted_jaccard_v2(
@@ -839,7 +970,36 @@ def calculate_semantic_weighted_jaccard_v2(
         }
     numerator = sum(min(base_vector.get(key, 0.0), target_vector.get(key, 0.0)) for key in union_keys)
     denominator = sum(max(base_vector.get(key, 0.0), target_vector.get(key, 0.0)) for key in union_keys)
-    score = 0.0 if denominator <= 0 else float(numerator / denominator)
+    raw_score = 0.0 if denominator <= 0 else float(numerator / denominator)
+    core_coverage = semantic_core_coverage_detail(base_profile, target_profile, base_vector, target_vector)
+    score = raw_score * float(core_coverage.get("multiplier", 1.0) or 1.0)
+    score_adjustments = []
+    if float(core_coverage.get("multiplier", 1.0) or 1.0) < 1.0:
+        score_adjustments.append(
+            {
+                "type": "primary_core_coverage_multiplier",
+                "multiplier": core_coverage.get("multiplier"),
+                "reason": core_coverage.get("reason"),
+            }
+        )
+    effective_base_total = sum(float(value or 0.0) for value in base_vector.values())
+    effective_target_total = sum(float(value or 0.0) for value in target_vector.values())
+    base_name_key = normalize_token(base_profile.get("product_name", ""))
+    target_name_key = normalize_token(target_profile.get("product_name", ""))
+    if (
+        score >= 0.999999
+        and min(effective_base_total, effective_target_total) <= SPARSE_EXACT_EFFECTIVE_WEIGHT_MAX
+        and base_name_key != target_name_key
+    ):
+        score = min(score, SPARSE_EXACT_SCORE_CAP)
+        score_adjustments.append(
+            {
+                "type": "sparse_exact_score_cap",
+                "cap": SPARSE_EXACT_SCORE_CAP,
+                "effective_base_total": round(float(effective_base_total), 6),
+                "effective_target_total": round(float(effective_target_total), 6),
+            }
+        )
 
     shared_labels = []
     shared_details = []
@@ -861,6 +1021,14 @@ def calculate_semantic_weighted_jaccard_v2(
                 "target_weight": target_vector.get(key, 0.0),
                 "base_ingredients": base_names,
                 "target_ingredients": target_names,
+                "base_relation_type": str(base_details.get(key, {}).get("relation_type", "") or ""),
+                "target_relation_type": str(target_details.get(key, {}).get("relation_type", "") or ""),
+                "base_v2_decision": str(base_details.get(key, {}).get("v2_decision", "") or ""),
+                "target_v2_decision": str(target_details.get(key, {}).get("v2_decision", "") or ""),
+                "base_source_raw_ingredients": str(base_details.get(key, {}).get("source_raw_ingredients", "") or ""),
+                "target_source_raw_ingredients": str(target_details.get(key, {}).get("source_raw_ingredients", "") or ""),
+                "base_family_signal_source_ingredient": str(base_details.get(key, {}).get("family_signal_source_ingredient", "") or ""),
+                "target_family_signal_source_ingredient": str(target_details.get(key, {}).get("family_signal_source_ingredient", "") or ""),
             }
         )
 
@@ -868,6 +1036,11 @@ def calculate_semantic_weighted_jaccard_v2(
         "algorithm": SIMILARITY_ALGORITHM_V2,
         "numerator": round(float(numerator), 6),
         "denominator": round(float(denominator), 6),
+        "raw_jaccard_score": round(float(raw_score), 6),
+        "score_adjustments": score_adjustments,
+        "core_coverage": core_coverage,
+        "effective_base_total": round(float(effective_base_total), 6),
+        "effective_target_total": round(float(effective_target_total), 6),
         "base_semantic_ingredient_count": len(base_vector),
         "target_semantic_ingredient_count": len(target_vector),
         "shared_semantic_keys": shared_details,
@@ -1392,7 +1565,7 @@ def refresh_cache_rows(
     algorithm_version: str = SIMILARITY_ALGORITHM_VERSION,
 ) -> None:
     if algorithm_version != SIMILARITY_ALGORITHM_VERSION:
-        raise ValueError("현재 캐시 테이블 기본키는 v1 전용입니다. v2 비교 결과는 캐시에 저장하지 않습니다.")
+        raise ValueError("Only the current default similarity algorithm can be cached.")
     now_text = datetime.now().isoformat()
     conn.execute(f"DELETE FROM {TABLE_NAME} WHERE base_product_id = ?", (base_product_id,))
     conn.executemany(

@@ -7,12 +7,16 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from scripts.enhance_similarity_with_explanation import (
+    SIMILARITY_ALGORITHM_V1,
+    SIMILARITY_ALGORITHM_V2,
+    SIMILARITY_ALGORITHM_VERSION,
     calculate_semantic_weighted_jaccard_v2,
     calculate_weighted_jaccard_with_idf,
     build_semantic_weight_vector,
     effective_ingredient_weight,
     ensure_cache_table,
     load_cached_rows,
+    normalize_similarity_algorithm,
     refresh_cache_rows,
 )
 
@@ -45,6 +49,13 @@ def profile(main_category, primary=None, secondary=None, support=None, ingredien
             for name, role in role_by_ingredient.items()
         ],
     }
+
+
+def test_similarity_algorithm_default_is_semantic_v2_but_v1_is_still_selectable():
+    assert SIMILARITY_ALGORITHM_VERSION == SIMILARITY_ALGORITHM_V2
+    assert normalize_similarity_algorithm("") == SIMILARITY_ALGORITHM_V2
+    assert normalize_similarity_algorithm("v2") == SIMILARITY_ALGORITHM_V2
+    assert normalize_similarity_algorithm("v1") == SIMILARITY_ALGORITHM_V1
 
 
 def test_same_category_without_shared_ingredients_scores_zero():
@@ -223,3 +234,121 @@ def test_semantic_v2_caps_generic_nutrient_weight():
     vector = build_semantic_weight_vector(nutrient_profile, ingredient_profiles)
 
     assert vector["비타민 C"] == 0.4
+
+
+def test_semantic_v2_caps_generic_nutrient_total_for_specific_products():
+    body_fat = "\uccb4\uc9c0\ubc29"
+    nutrition = "\uc601\uc591\ubcf4\ucda9"
+    base = profile(
+        body_fat,
+        primary=["\uac00\ub974\uc2dc\ub2c8\uc544"],
+        secondary=["\ube44\ud0c0\ubbfc C", "\uc544\uc5f0"],
+        ingredient_categories={
+            "\uac00\ub974\uc2dc\ub2c8\uc544": body_fat,
+            "\ube44\ud0c0\ubbfc C": nutrition,
+            "\uc544\uc5f0": nutrition,
+        },
+    )
+    ingredient_profiles = {
+        "\uac00\ub974\uc2dc\ub2c8\uc544": {
+            "ingredient_main_category": body_fat,
+            "ingredient_sub_function_categories": [],
+            "ingredient_type": "functional",
+            "vector_include": True,
+            "is_excipient": False,
+        },
+        "\ube44\ud0c0\ubbfc C": {
+            "ingredient_main_category": nutrition,
+            "ingredient_sub_function_categories": ["\ud56d\uc0b0\ud654"],
+            "ingredient_type": "nutrient",
+            "vector_include": True,
+            "is_excipient": False,
+        },
+        "\uc544\uc5f0": {
+            "ingredient_main_category": nutrition,
+            "ingredient_sub_function_categories": ["\uba74\uc5ed"],
+            "ingredient_type": "nutrient",
+            "vector_include": True,
+            "is_excipient": False,
+        },
+    }
+
+    vector = build_semantic_weight_vector(base, ingredient_profiles)
+    nutrient_total = vector["\ube44\ud0c0\ubbfc C"] + vector["\uc544\uc5f0"]
+
+    assert vector["\uac00\ub974\uc2dc\ub2c8\uc544"] == 1.0
+    assert nutrient_total <= 0.250001
+
+
+def test_semantic_v2_family_signal_is_weak_not_exact():
+    joint = "\uad00\uc808/\uc5f0\uace8"
+    mucoprotein = "\ubba4\ucf54\ub2e4\ub2f9.\ub2e8\ubc31"
+    base = profile(joint, support=[mucoprotein], ingredient_categories={mucoprotein: joint})
+    base["ingredient_scores"][0]["relation_type"] = "family_signal"
+    base["ingredient_scores"][0]["v2_decision"] = "family_signal"
+    target = profile(joint, primary=[mucoprotein], ingredient_categories={mucoprotein: joint})
+    ingredient_profiles = {
+        mucoprotein: {
+            "ingredient_main_category": joint,
+            "ingredient_sub_function_categories": [],
+            "ingredient_type": "functional",
+            "vector_include": True,
+            "is_excipient": False,
+        }
+    }
+
+    base_vector = build_semantic_weight_vector(base, ingredient_profiles)
+    score, shared, detail = calculate_semantic_weighted_jaccard_v2(base, target, ingredient_profiles)
+
+    assert base_vector["family::shark_cartilage"] == 0.35
+    assert shared == [mucoprotein]
+    assert score < 0.4
+    assert detail["shared_semantic_keys"][0]["base_relation_type"] == "family_signal"
+
+
+def test_semantic_v2_primary_core_overlap_beats_support_overlap():
+    eye = "\ub208 \uac74\uac15"
+    lipid = "\ud608\uc911\uc9c0\uc9c8"
+    lutein = "\ub8e8\ud14c\uc778"
+    astaxanthin = "\ud5e4\ub9c8\ud1a0\ucf54\ucfe0\uc2a4 \ucd94\ucd9c\ubb3c"
+    omega = "EPA \ubc0f DHA \ud568\uc720 \uc720\uc9c0"
+    minor = "\ube44\uc218\ub9ac\ucd94\ucd9c\ubd84\ub9d0"
+    base = profile(eye, primary=[lutein, astaxanthin], secondary=[omega, minor])
+    target_exact = profile(eye, primary=[lutein, astaxanthin])
+    target_support_heavy = profile(eye, primary=[astaxanthin], secondary=[omega, minor])
+    ingredient_profiles = {
+        lutein: {"ingredient_main_category": eye, "ingredient_sub_function_categories": [], "ingredient_type": "functional", "vector_include": True, "is_excipient": False},
+        astaxanthin: {"ingredient_main_category": eye, "ingredient_sub_function_categories": [], "ingredient_type": "functional", "vector_include": True, "is_excipient": False},
+        omega: {"ingredient_main_category": lipid, "ingredient_sub_function_categories": [eye], "ingredient_type": "functional", "vector_include": True, "is_excipient": False},
+        minor: {"ingredient_main_category": "\ub0a8\uc131 \uac74\uac15", "ingredient_sub_function_categories": [], "ingredient_type": "functional", "vector_include": True, "is_excipient": False},
+    }
+
+    exact_score, _, _ = calculate_semantic_weighted_jaccard_v2(base, target_exact, ingredient_profiles)
+    support_score, _, support_detail = calculate_semantic_weighted_jaccard_v2(base, target_support_heavy, ingredient_profiles)
+
+    assert exact_score > support_score
+    assert support_detail["core_coverage"]["reason"] == "partial_primary_core_overlap"
+
+
+def test_semantic_v2_caps_sparse_exact_one_point_zero():
+    blood_flow = "\ud608\ud589"
+    omega = "EPA \ubc0f DHA \ud568\uc720 \uc720\uc9c0"
+    base = profile(blood_flow, primary=[omega])
+    base["product_name"] = "base omega"
+    target = profile(blood_flow, primary=[omega])
+    target["product_name"] = "other omega"
+    ingredient_profiles = {
+        omega: {
+            "ingredient_main_category": "\ud608\uc911\uc9c0\uc9c8",
+            "ingredient_sub_function_categories": [blood_flow],
+            "ingredient_type": "functional",
+            "vector_include": True,
+            "is_excipient": False,
+        },
+    }
+
+    score, _, detail = calculate_semantic_weighted_jaccard_v2(base, target, ingredient_profiles)
+
+    assert score == 0.97
+    assert detail["raw_jaccard_score"] == 1.0
+    assert detail["score_adjustments"][0]["type"] == "sparse_exact_score_cap"
