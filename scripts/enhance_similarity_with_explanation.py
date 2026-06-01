@@ -46,6 +46,7 @@ FAMILY_SIGNAL_SUB_CATEGORY_WEIGHT = 0.30
 FAMILY_SIGNAL_WEAK_WEIGHT = 0.20
 PARTIAL_CORE_COVERAGE_FLOOR = 0.85
 NO_CORE_COVERAGE_MULTIPLIER = 0.72
+SEMANTIC_CORE_WEIGHT_MIN = 0.7
 SPARSE_EXACT_SCORE_CAP = 0.97
 SPARSE_EXACT_EFFECTIVE_WEIGHT_MAX = 1.5
 CAUTION_TEXT = (
@@ -729,7 +730,13 @@ def semantic_weight_for_product_ingredient(
     ingredient = str(score_item.get("ingredient", "") or "").strip()
     if not ingredient:
         return 0.0, "empty_ingredient", {}
-    match_confidence = float(score_item.get("weight", 0.0) or 0.0)
+    match_confidence = float(
+        score_item.get(
+            "match_confidence",
+            score_item.get("confidence", score_item.get("weight", 0.0)),
+        )
+        or 0.0
+    )
     if match_confidence > 0 and match_confidence < min_match_confidence:
         return 0.0, "low_match_confidence", {}
 
@@ -891,17 +898,18 @@ def build_semantic_weight_vector(
     return vector
 
 
-def primary_semantic_keys(profile: dict, active_vector: dict[str, float]) -> set[str]:
+def semantic_core_keys_from_details(active_vector: dict[str, float], details: dict[str, dict] | None = None) -> set[str]:
     keys = set()
-    for score_item in ingredient_score_items(profile):
-        if str(score_item.get("role", "") or "").strip() != "primary":
+    for key, weight in active_vector.items():
+        if key.startswith("__") or float(weight or 0.0) < SEMANTIC_CORE_WEIGHT_MIN:
             continue
-        ingredient = str(score_item.get("ingredient", "") or "").strip()
-        if not ingredient:
+        detail = dict((details or {}).get(key, {}) or {})
+        ingredient_type = str(detail.get("ingredient_type", "") or "").strip()
+        vector_include = coerce_bool(detail.get("vector_include", True), True)
+        is_excipient_value = coerce_bool(detail.get("is_excipient", False), False)
+        if is_excipient_value or ingredient_type in {"excipient", "additive", "formulation_aid"} or not vector_include:
             continue
-        key = semantic_ingredient_key(ingredient)
-        if active_vector.get(key, 0.0) > 0:
-            keys.add(key)
+        keys.add(key)
     return keys
 
 
@@ -910,33 +918,41 @@ def semantic_core_coverage_detail(
     target_profile: dict,
     base_vector: dict[str, float],
     target_vector: dict[str, float],
+    base_details: dict[str, dict] | None = None,
+    target_details: dict[str, dict] | None = None,
 ) -> dict:
-    base_primary_keys = primary_semantic_keys(base_profile, base_vector)
-    target_primary_keys = primary_semantic_keys(target_profile, target_vector)
-    shared_primary_keys = sorted(base_primary_keys & target_primary_keys)
-    base_coverage = 1.0 if not base_primary_keys else len(shared_primary_keys) / len(base_primary_keys)
-    target_coverage = 1.0 if not target_primary_keys else len(shared_primary_keys) / len(target_primary_keys)
+    base_core_keys = semantic_core_keys_from_details(base_vector, base_details)
+    target_core_keys = semantic_core_keys_from_details(target_vector, target_details)
+    shared_core_keys = sorted(base_core_keys & target_core_keys)
+    base_coverage = 1.0 if not base_core_keys else len(shared_core_keys) / len(base_core_keys)
+    target_coverage = 1.0 if not target_core_keys else len(shared_core_keys) / len(target_core_keys)
     coverage = min(base_coverage, target_coverage)
-    if not base_primary_keys and not target_primary_keys:
+    if not base_core_keys and not target_core_keys:
         coverage = 1.0
     multiplier = 1.0
-    reason = "full_core_coverage"
-    if base_primary_keys or target_primary_keys:
+    reason = "full_semantic_core_coverage"
+    if base_core_keys or target_core_keys:
         if coverage <= 0:
             multiplier = NO_CORE_COVERAGE_MULTIPLIER
-            reason = "no_primary_core_overlap"
+            reason = "no_semantic_core_overlap"
         elif coverage < 1.0:
             multiplier = PARTIAL_CORE_COVERAGE_FLOOR + ((1.0 - PARTIAL_CORE_COVERAGE_FLOOR) * coverage)
-            reason = "partial_primary_core_overlap"
+            reason = "partial_semantic_core_overlap"
     return {
-        "base_primary_semantic_keys": sorted(base_primary_keys),
-        "target_primary_semantic_keys": sorted(target_primary_keys),
-        "shared_primary_semantic_keys": shared_primary_keys,
+        "base_core_semantic_keys": sorted(base_core_keys),
+        "target_core_semantic_keys": sorted(target_core_keys),
+        "shared_core_semantic_keys": shared_core_keys,
+        "base_core_coverage": round(float(base_coverage), 6),
+        "target_core_coverage": round(float(target_coverage), 6),
+        "base_primary_semantic_keys": sorted(base_core_keys),
+        "target_primary_semantic_keys": sorted(target_core_keys),
+        "shared_primary_semantic_keys": shared_core_keys,
         "base_primary_coverage": round(float(base_coverage), 6),
         "target_primary_coverage": round(float(target_coverage), 6),
         "core_coverage": round(float(coverage), 6),
         "multiplier": round(float(multiplier), 6),
         "reason": reason,
+        "basis": f"semantic_weight>={SEMANTIC_CORE_WEIGHT_MIN}",
     }
 
 
@@ -950,11 +966,13 @@ def calculate_semantic_weighted_jaccard_v2(
     union_keys = set(base_vector) | set(target_vector)
     shared_keys = sorted(set(base_vector) & set(target_vector))
     if not shared_keys:
+        core_coverage = semantic_core_coverage_detail(base_profile, target_profile, base_vector, target_vector, base_details, target_details)
         return 0.0, [], {
             "algorithm": SIMILARITY_ALGORITHM_V2,
             "base_semantic_ingredient_count": len(base_vector),
             "target_semantic_ingredient_count": len(target_vector),
             "shared_semantic_keys": [],
+            "core_coverage": core_coverage,
             "excluded_base_ingredients": [
                 name
                 for detail in base_details.values()
@@ -971,13 +989,13 @@ def calculate_semantic_weighted_jaccard_v2(
     numerator = sum(min(base_vector.get(key, 0.0), target_vector.get(key, 0.0)) for key in union_keys)
     denominator = sum(max(base_vector.get(key, 0.0), target_vector.get(key, 0.0)) for key in union_keys)
     raw_score = 0.0 if denominator <= 0 else float(numerator / denominator)
-    core_coverage = semantic_core_coverage_detail(base_profile, target_profile, base_vector, target_vector)
+    core_coverage = semantic_core_coverage_detail(base_profile, target_profile, base_vector, target_vector, base_details, target_details)
     score = raw_score * float(core_coverage.get("multiplier", 1.0) or 1.0)
     score_adjustments = []
     if float(core_coverage.get("multiplier", 1.0) or 1.0) < 1.0:
         score_adjustments.append(
             {
-                "type": "primary_core_coverage_multiplier",
+                "type": "semantic_core_coverage_multiplier",
                 "multiplier": core_coverage.get("multiplier"),
                 "reason": core_coverage.get("reason"),
             }
@@ -1058,7 +1076,25 @@ def calculate_function_similarity(base_profile: dict, target_profile: dict) -> f
     return 0.0 if denominator <= 0 else round(float(numerator / denominator), 6)
 
 
-def calculate_core_match_score(base_profile: dict, target_profile: dict) -> float:
+def semantic_core_overlap_score(semantic_explanation: dict | None) -> float | None:
+    if not semantic_explanation:
+        return None
+    core_coverage = dict(semantic_explanation.get("core_coverage", {}) or {})
+    base_core = set(core_coverage.get("base_core_semantic_keys", []) or core_coverage.get("base_primary_semantic_keys", []) or [])
+    target_core = set(core_coverage.get("target_core_semantic_keys", []) or core_coverage.get("target_primary_semantic_keys", []) or [])
+    if not base_core and not target_core:
+        return 0.0
+    union = base_core | target_core
+    if not union:
+        return 0.0
+    shared_core = set(core_coverage.get("shared_core_semantic_keys", []) or core_coverage.get("shared_primary_semantic_keys", []) or [])
+    return round(float(len(shared_core) / len(union)), 6)
+
+
+def calculate_core_match_score(base_profile: dict, target_profile: dict, semantic_explanation: dict | None = None) -> float:
+    semantic_score = semantic_core_overlap_score(semantic_explanation)
+    if semantic_score is not None:
+        return semantic_score
     base_primary = set(base_profile.get("primary_ingredients", []))
     target_primary = set(target_profile.get("primary_ingredients", []))
     union = base_primary | target_primary
@@ -1094,6 +1130,29 @@ def shared_joint_families(base_profile: dict, target_profile: dict) -> set[str]:
     return focus_joint_families(base_profile) & focus_joint_families(target_profile)
 
 
+def semantic_shared_name_priority(semantic_explanation: dict | None) -> dict[str, dict]:
+    priority: dict[str, dict] = {}
+    if not semantic_explanation:
+        return priority
+    core_coverage = dict(semantic_explanation.get("core_coverage", {}) or {})
+    core_keys = set(core_coverage.get("shared_core_semantic_keys", []) or core_coverage.get("shared_primary_semantic_keys", []) or [])
+    for detail in semantic_explanation.get("shared_semantic_keys", []) or []:
+        key = str(detail.get("semantic_key", "") or "")
+        weight = min(float(detail.get("base_weight", 0.0) or 0.0), float(detail.get("target_weight", 0.0) or 0.0))
+        is_core = int(key in core_keys)
+        names = [str(detail.get("label", "") or "")]
+        names.extend(str(name) for name in detail.get("base_ingredients", []) or [])
+        names.extend(str(name) for name in detail.get("target_ingredients", []) or [])
+        for name in names:
+            name = name.strip()
+            if not name:
+                continue
+            existing = priority.get(name, {})
+            if is_core > int(existing.get("is_core", 0) or 0) or weight > float(existing.get("weight", 0.0) or 0.0):
+                priority[name] = {"is_core": is_core, "weight": weight, "semantic_key": key}
+    return priority
+
+
 def compare_product_profiles(base_profile: dict, target_profile: dict, base_vector: dict[str, float], target_vector: dict[str, float]) -> dict:
     shared_ingredients_raw = sorted(set(base_vector) & set(target_vector))
     shared_ingredients_for_display = [name for name in shared_ingredients_raw if not is_excipient(name)]
@@ -1122,14 +1181,28 @@ def compare_product_profiles(base_profile: dict, target_profile: dict, base_vect
     }
 
 
-def classify_substitutability(similarity_score: float, base_profile: dict, target_profile: dict) -> str:
+def has_semantic_core_overlap(semantic_explanation: dict | None) -> bool | None:
+    if not semantic_explanation:
+        return None
+    core_coverage = dict(semantic_explanation.get("core_coverage", {}) or {})
+    return bool(core_coverage.get("shared_core_semantic_keys") or core_coverage.get("shared_primary_semantic_keys"))
+
+
+def classify_substitutability(
+    similarity_score: float,
+    base_profile: dict,
+    target_profile: dict,
+    semantic_explanation: dict | None = None,
+) -> str:
     same_main = base_profile.get("product_main_category") == target_profile.get("product_main_category")
-    shared_primary = set(base_profile.get("primary_ingredients", [])) & set(target_profile.get("primary_ingredients", []))
-    shared_primary_families = collect_joint_ingredient_families(base_profile.get("primary_ingredients", [])) & collect_joint_ingredient_families(
-        target_profile.get("primary_ingredients", [])
-    )
-    shared_focus_family_values = shared_joint_families(base_profile, target_profile)
-    has_core_overlap = bool(shared_primary or shared_primary_families or shared_focus_family_values)
+    has_core_overlap = has_semantic_core_overlap(semantic_explanation)
+    if has_core_overlap is None:
+        shared_primary = set(base_profile.get("primary_ingredients", [])) & set(target_profile.get("primary_ingredients", []))
+        shared_primary_families = collect_joint_ingredient_families(base_profile.get("primary_ingredients", [])) & collect_joint_ingredient_families(
+            target_profile.get("primary_ingredients", [])
+        )
+        shared_focus_family_values = shared_joint_families(base_profile, target_profile)
+        has_core_overlap = bool(shared_primary or shared_primary_families or shared_focus_family_values)
     if similarity_score >= 0.75 and same_main and has_core_overlap:
         return "높음"
     if similarity_score >= 0.45 and has_core_overlap:
@@ -1174,25 +1247,32 @@ def product_is_male_related(profile: dict) -> bool:
     return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in MALE_KEYWORDS)
 
 
-def choose_reason_ingredients(base_profile: dict, target_profile: dict, comparison: dict, ingredient_frequency: dict[str, int]) -> tuple[list[str], list[str]]:
+def choose_reason_ingredients(
+    base_profile: dict,
+    target_profile: dict,
+    comparison: dict,
+    ingredient_frequency: dict[str, int],
+    semantic_explanation: dict | None = None,
+) -> tuple[list[str], list[str]]:
     shared = [name for name in comparison["shared_ingredients"] if not is_excipient(name)]
     if not shared:
         return [], []
 
-    base_primary = set(base_profile.get("primary_ingredients", []))
-    target_primary = set(target_profile.get("primary_ingredients", []))
-    base_secondary = set(base_profile.get("secondary_ingredients", []))
-    target_secondary = set(target_profile.get("secondary_ingredients", []))
-    base_support = set(base_profile.get("support_ingredients", []))
-    target_support = set(target_profile.get("support_ingredients", []))
     category = str(base_profile.get("product_main_category") or "기타")
+
+    semantic_priority = semantic_shared_name_priority(semantic_explanation)
 
     joint_related = product_is_joint_related(base_profile) or product_is_joint_related(target_profile)
     bone_related = product_is_bone_related(base_profile) or product_is_bone_related(target_profile)
     memory_related = product_is_memory_related(base_profile) or product_is_memory_related(target_profile)
     skin_related = product_is_skin_related(base_profile) or product_is_skin_related(target_profile)
     male_related = product_is_male_related(base_profile) or product_is_male_related(target_profile)
-    joint_family_overlap = shared_joint_families(base_profile, target_profile)
+    if semantic_explanation:
+        joint_family_overlap = collect_joint_ingredient_families(
+            [name for name, info in semantic_priority.items() if int(info.get("is_core", 0) or 0) > 0]
+        )
+    else:
+        joint_family_overlap = shared_joint_families(base_profile, target_profile)
 
     if category == "관절/연골":
         category_patterns = JOINT_KEYWORDS
@@ -1210,26 +1290,25 @@ def choose_reason_ingredients(base_profile: dict, target_profile: dict, comparis
         category_patterns = []
 
     def ingredient_priority(name: str) -> tuple:
-        shared_primary = int(name in base_primary and name in target_primary)
+        semantic_info = semantic_priority.get(name, {})
+        semantic_core = int(semantic_info.get("is_core", 0) or 0)
+        semantic_weight = float(semantic_info.get("weight", 0.0) or 0.0)
         direct_category = int(ingredient_matches_patterns(name, category_patterns))
         joint_core = int(joint_related and ingredient_matches_patterns(name, JOINT_KEYWORDS))
         memory_core = int(memory_related and ingredient_matches_patterns(name, MEMORY_KEYWORDS))
         skin_core = int(skin_related and ingredient_matches_patterns(name, SKIN_KEYWORDS))
         male_core = int(male_related and ingredient_matches_patterns(name, MALE_KEYWORDS))
-        secondary_shared = int(name in base_secondary and name in target_secondary)
-        support_shared = int(name in base_support and name in target_support)
         low_priority = int(is_low_priority_reason_ingredient(name, category))
         rarity = ingredient_frequency.get(name, 999999)
         return (
+            semantic_core,
+            semantic_weight,
             joint_core,
             memory_core,
             skin_core,
             male_core,
-            shared_primary,
             direct_category,
             -low_priority,
-            secondary_shared,
-            -support_shared,
             -min(rarity, 999999),
             len(name),
         )
@@ -1261,11 +1340,25 @@ def render_reason_ingredient_phrase(ingredients: list[str]) -> str:
     return f"{ingredients[0]}, {ingredients[1]}, {ingredients[2]} 등이"
 
 
-def generate_recommendation_reason(base_profile: dict, target_profile: dict, comparison: dict, ingredient_frequency: dict[str, int]) -> str:
+def generate_recommendation_reason(
+    base_profile: dict,
+    target_profile: dict,
+    comparison: dict,
+    ingredient_frequency: dict[str, int],
+    semantic_explanation: dict | None = None,
+) -> str:
     main_category = str(base_profile.get("product_main_category") or "기타")
-    top_reason_ingredients, highlighted = choose_reason_ingredients(base_profile, target_profile, comparison, ingredient_frequency)
+    top_reason_ingredients, highlighted = choose_reason_ingredients(
+        base_profile,
+        target_profile,
+        comparison,
+        ingredient_frequency,
+        semantic_explanation,
+    )
     phrase = render_reason_ingredient_phrase(top_reason_ingredients)
-    shared_primary = set(base_profile.get("primary_ingredients", [])) & set(target_profile.get("primary_ingredients", []))
+    semantic_core_overlap = has_semantic_core_overlap(semantic_explanation)
+    if semantic_core_overlap is None:
+        semantic_core_overlap = bool(set(base_profile.get("primary_ingredients", [])) & set(target_profile.get("primary_ingredients", [])))
     same_main = base_profile.get("product_main_category") == target_profile.get("product_main_category")
     joint_related = product_is_joint_related(base_profile) or product_is_joint_related(target_profile)
     bone_related = product_is_bone_related(base_profile) or product_is_bone_related(target_profile)
@@ -1305,7 +1398,7 @@ def generate_recommendation_reason(base_profile: dict, target_profile: dict, com
             return f"{first_sentence} {second_sentence}"
         return first_sentence
 
-    if shared_primary and main_category != "기타":
+    if semantic_core_overlap and main_category != "기타":
         return f"{phrase} 공통으로 포함되어 {main_category} 기능성 측면에서 유사합니다."
     if same_main and main_category != "기타":
         return f"두 제품 모두 {main_category} 계열이지만, 핵심 기능성원료 구성에는 차이가 있습니다."
@@ -1716,9 +1809,9 @@ def compute_topk_for_single_product(
                     name for name in comparison["target_only_ingredients"] if not is_semantic_excipient_name(name)
                 ]
             function_similarity_score = calculate_function_similarity(base_profile, target_profile)
-            core_match_score = calculate_core_match_score(base_profile, target_profile)
-            substitutability = classify_substitutability(similarity_score, base_profile, target_profile)
-            reason = generate_recommendation_reason(base_profile, target_profile, comparison, ingredient_frequency)
+            core_match_score = calculate_core_match_score(base_profile, target_profile, semantic_explanation)
+            substitutability = classify_substitutability(similarity_score, base_profile, target_profile, semantic_explanation)
+            reason = generate_recommendation_reason(base_profile, target_profile, comparison, ingredient_frequency, semantic_explanation)
             explanation_json = build_explanation_json(reason, comparison, substitutability)
             explanation_json["similarity_algorithm"] = similarity_algorithm
             if semantic_explanation:

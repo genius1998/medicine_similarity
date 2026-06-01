@@ -967,16 +967,25 @@
       if (!rows.length) {
         return '<div class="empty-panel">원료별 기능성원료 DB 매칭 상태가 없습니다.</div>';
       }
+      const renderList = (value) => safeArray(value).length ? safeArray(value).map((item) => escapeHtml(item)).join(", ") : "-";
+      const renderWeight = (value) => {
+        const num = Number(value);
+        return Number.isFinite(num) ? num.toFixed(2) : "-";
+      };
       return `
         <div class="table-wrap">
           <table class="data-table">
             <thead>
               <tr>
                 <th>원료</th>
-                <th>정규화</th>
-                <th>역할</th>
-                <th>DB 기능성원료 여부</th>
-                <th>매칭 원료</th>
+                <th>functional match</th>
+                <th>matched ingredient</th>
+                <th>ingredient_type</th>
+                <th>vector_include</th>
+                <th>ingredient_main_category</th>
+                <th>sub_function_categories</th>
+                <th>semantic_weight</th>
+                <th>semantic_weight_reason</th>
                 <th>relation</th>
               </tr>
             </thead>
@@ -984,10 +993,14 @@
               ${rows.map((item) => `
                 <tr>
                   <td>${escapeHtml(item.display_name || item.raw_ingredient || "-")}</td>
-                  <td>${escapeHtml(item.normalized_for_matching || "-")}</td>
-                  <td>${escapeHtml(item.input_role || "-")}</td>
-                  <td>${item.is_functional_match ? '<span class="sub-badge high">매칭됨</span>' : '<span class="sub-badge low">비매칭</span>'}</td>
+                  <td>${item.is_functional_match ? '<span class="sub-badge high">matched</span>' : '<span class="sub-badge low">unmatched</span>'}</td>
                   <td>${escapeHtml(item.functional_ingredient_name || "-")}</td>
+                  <td>${escapeHtml(item.ingredient_type || "-")}</td>
+                  <td>${item.vector_include ? '<span class="sub-badge high">true</span>' : '<span class="sub-badge low">false</span>'}</td>
+                  <td>${escapeHtml(item.ingredient_main_category || item.category_main || "-")}</td>
+                  <td>${renderList(item.sub_function_categories)}</td>
+                  <td>${renderWeight(item.semantic_weight)}</td>
+                  <td>${escapeHtml(item.semantic_weight_reason || "-")}</td>
                   <td>${escapeHtml(item.relation_type || "-")}</td>
                 </tr>
               `).join("")}
@@ -1040,6 +1053,9 @@
       const ocr = response.ocr || {};
       const quality = response.quality || {};
       const debug = response.debug || {};
+      const matchStatuses = safeArray(response.ingredient_db_match_statuses);
+      const functionalMatchCount = matchStatuses.filter((item) => item.is_functional_match).length;
+      const vectorIncludeCount = matchStatuses.filter((item) => item.vector_include).length;
 
       const html = [];
       html.push('<div class="stack">');
@@ -1058,8 +1074,8 @@
       html.push('</tbody></table>');
 
       html.push('<div class="detail-grid">');
-      html.push(`<div class="detail-block"><div class="label">주요 원료</div><div class="value chip-row">${renderChips(safeArray(estimated.primary_ingredients), "small")}</div></div>`);
-      html.push(`<div class="detail-block"><div class="label">정규화 주요 원료</div><div class="value chip-row">${renderChips(safeArray(parsed.primary_ingredients_normalized), "small")}</div></div>`);
+      html.push(`<div class="detail-block"><div class="label">functional matches</div><div class="value">${functionalMatchCount} / ${matchStatuses.length}</div></div>`);
+      html.push(`<div class="detail-block"><div class="label">vector included</div><div class="value">${vectorIncludeCount} / ${matchStatuses.length}</div></div>`);
       html.push(`<div class="detail-block"><div class="label">추출 원료 목록</div><div class="value chip-row">${renderChips(safeArray(parsed.normalized_ingredients), "small")}</div></div>`);
       html.push('</div>');
       html.push('<div class="detail-block" style="margin-top:8px;">');

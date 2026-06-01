@@ -366,7 +366,7 @@ def test_semantic_v2_family_signal_is_weak_not_exact():
     assert detail["shared_semantic_keys"][0]["base_relation_type"] == "family_signal"
 
 
-def test_semantic_v2_primary_core_overlap_beats_support_overlap():
+def test_semantic_v2_core_overlap_uses_semantic_weight_not_legacy_role():
     eye = "\ub208 \uac74\uac15"
     lipid = "\ud608\uc911\uc9c0\uc9c8"
     lutein = "\ub8e8\ud14c\uc778"
@@ -386,8 +386,31 @@ def test_semantic_v2_primary_core_overlap_beats_support_overlap():
     exact_score, _, _ = calculate_semantic_weighted_jaccard_v2(base, target_exact, ingredient_profiles)
     support_score, _, support_detail = calculate_semantic_weighted_jaccard_v2(base, target_support_heavy, ingredient_profiles)
 
-    assert exact_score > support_score
-    assert support_detail["core_coverage"]["reason"] == "partial_primary_core_overlap"
+    assert exact_score == support_score
+    assert omega in support_detail["core_coverage"]["base_core_semantic_keys"]
+    assert omega in support_detail["core_coverage"]["target_core_semantic_keys"]
+    assert support_detail["core_coverage"]["reason"] == "partial_semantic_core_overlap"
+
+
+def test_semantic_v2_match_confidence_is_not_legacy_role_weight():
+    male = "\ub0a8\uc131 \uac74\uac15"
+    arginine = "L-\uc544\ub974\uae30\ub2cc"
+    base = profile(male, support=[arginine], ingredient_categories={arginine: male})
+    base["ingredient_scores"][0]["weight"] = 0.25
+    base["ingredient_scores"][0]["match_confidence"] = 0.99
+    ingredient_profiles = {
+        arginine: {
+            "ingredient_main_category": male,
+            "ingredient_sub_function_categories": [],
+            "ingredient_type": "functional",
+            "vector_include": True,
+            "is_excipient": False,
+        },
+    }
+
+    vector = build_semantic_weight_vector(base, ingredient_profiles)
+
+    assert vector[arginine] == 1.0
 
 
 def test_semantic_v2_caps_sparse_exact_one_point_zero():

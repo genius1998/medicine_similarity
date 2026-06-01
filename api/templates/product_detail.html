@@ -389,15 +389,25 @@
       if (!rows.length) {
         return '<div class="empty-panel">기준 원료별 DB 매칭 상태 정보가 없습니다.</div>';
       }
+      const renderList = (value) => Array.isArray(value) && value.length ? value.map((item) => escapeHtml(item)).join(", ") : "-";
+      const renderWeight = (value) => {
+        const num = Number(value);
+        return Number.isFinite(num) ? num.toFixed(2) : "-";
+      };
       return `
         <div class="table-wrap">
           <table class="data-table">
             <thead>
               <tr>
                 <th>원료</th>
-                <th>역할</th>
-                <th>DB 기능성원료 여부</th>
-                <th>매칭 원료</th>
+                <th>functional match</th>
+                <th>matched ingredient</th>
+                <th>ingredient_type</th>
+                <th>vector_include</th>
+                <th>ingredient_main_category</th>
+                <th>sub_function_categories</th>
+                <th>semantic_weight</th>
+                <th>semantic_weight_reason</th>
                 <th>relation</th>
               </tr>
             </thead>
@@ -405,9 +415,14 @@
               ${rows.map((item) => `
                 <tr>
                   <td>${escapeHtml(item.display_name || item.raw_ingredient || "-")}</td>
-                  <td>${escapeHtml(item.input_role || "-")}</td>
-                  <td>${item.is_functional_match ? '<span class="sub-badge high">매칭됨</span>' : '<span class="sub-badge low">비매칭</span>'}</td>
+                  <td>${item.is_functional_match ? '<span class="sub-badge high">matched</span>' : '<span class="sub-badge low">unmatched</span>'}</td>
                   <td>${escapeHtml(item.functional_ingredient_name || "-")}</td>
+                  <td>${escapeHtml(item.ingredient_type || "-")}</td>
+                  <td>${item.vector_include ? '<span class="sub-badge high">true</span>' : '<span class="sub-badge low">false</span>'}</td>
+                  <td>${escapeHtml(item.ingredient_main_category || item.category_main || "-")}</td>
+                  <td>${renderList(item.sub_function_categories)}</td>
+                  <td>${renderWeight(item.semantic_weight)}</td>
+                  <td>${escapeHtml(item.semantic_weight_reason || "-")}</td>
                   <td>${escapeHtml(item.relation_type || "-")}</td>
                 </tr>
               `).join("")}

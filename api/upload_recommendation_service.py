@@ -38,6 +38,7 @@ from api.recommendation_service import RecommendationService
 from scripts.enhance_similarity_with_explanation import (
     build_candidate_pool_v2,
     build_explanation_json,
+    build_semantic_weight_vector,
     calculate_core_match_score,
     calculate_function_similarity,
     calculate_semantic_weighted_jaccard_v2,
@@ -2943,12 +2944,49 @@ class UploadRecommendationService:
             results.append(match)
         return results
 
+    def _semantic_detail_by_ingredient(self, estimated_profile: Optional[dict]) -> Dict[str, dict]:
+        if not estimated_profile:
+            return {}
+        try:
+            _, details = build_semantic_weight_vector(
+                estimated_profile,
+                self.recommendation_service.ingredient_category_profiles,
+                include_details=True,
+            )
+        except Exception:  # noqa: BLE001
+            return {}
+        by_ingredient: Dict[str, dict] = {}
+        for detail in details.values():
+            if str(detail.get("semantic_key", "") or "").startswith("__"):
+                continue
+            sub_categories = detail.get("ingredient_sub_function_categories", []) or []
+            if isinstance(sub_categories, str):
+                sub_categories = [sub_categories] if sub_categories.strip() else []
+            semantic_payload = {
+                "semantic_key": str(detail.get("semantic_key", "") or ""),
+                "ingredient_type": str(detail.get("ingredient_type", "") or ""),
+                "profile_vector_include": bool(detail.get("vector_include", True)),
+                "vector_include": bool(detail.get("vector_include", True)) and float(detail.get("weight", 0.0) or 0.0) > 0,
+                "is_excipient": bool(detail.get("is_excipient", False)),
+                "ingredient_main_category": str(detail.get("ingredient_main_category", "") or ""),
+                "sub_function_categories": [str(item).strip() for item in sub_categories if str(item).strip()],
+                "semantic_weight": float(detail.get("weight", 0.0) or 0.0),
+                "semantic_weight_reason": str(detail.get("reason", "") or ""),
+            }
+            for ingredient in detail.get("ingredients", []) or []:
+                ingredient_name = str(ingredient or "").strip()
+                if ingredient_name:
+                    by_ingredient[ingredient_name] = semantic_payload
+        return by_ingredient
+
     def build_ingredient_db_match_statuses(
         self,
         ingredient_objects: List[dict],
         matched_ingredients: Optional[List[dict]] = None,
+        estimated_profile: Optional[dict] = None,
     ) -> List[dict]:
         matches = matched_ingredients if matched_ingredients is not None else self.match_raw_ingredients_to_functional_ingredients(ingredient_objects)
+        semantic_by_ingredient = self._semantic_detail_by_ingredient(estimated_profile)
         best_match_by_key: Dict[str, dict] = {}
         for match in matches:
             candidate_keys = {
@@ -2977,6 +3015,35 @@ class UploadRecommendationService:
             ]
             match = next((best_match_by_key[key] for key in keys if key and key in best_match_by_key), None)
             category_row = dict(match.get("category_row", {}) or {}) if match else {}
+            functional_name = str(match.get("functional_ingredient_name", "") or "") if match else ""
+            profile_name = str(match.get("profile_ingredient_name", "") or functional_name) if match else ""
+            semantic_detail = (
+                semantic_by_ingredient.get(profile_name)
+                or semantic_by_ingredient.get(functional_name)
+                or semantic_by_ingredient.get(display_value)
+                or semantic_by_ingredient.get(normalized_value)
+                or {}
+            )
+            if semantic_detail:
+                ingredient_type = str(semantic_detail.get("ingredient_type", "") or "")
+                vector_include = bool(semantic_detail.get("vector_include", True))
+                is_excipient_value = bool(semantic_detail.get("is_excipient", False))
+                ingredient_main_category = str(semantic_detail.get("ingredient_main_category", "") or "")
+                sub_function_categories = list(semantic_detail.get("sub_function_categories", []) or [])
+                semantic_weight = float(semantic_detail.get("semantic_weight", 0.0) or 0.0)
+                semantic_weight_reason = str(semantic_detail.get("semantic_weight_reason", "") or "")
+                semantic_key = str(semantic_detail.get("semantic_key", "") or "")
+            else:
+                is_excipient_value = input_role == "excipient" or is_excipient(display_value) or is_excipient(normalized_value)
+                ingredient_type = "excipient" if is_excipient_value else ("functional" if match else "unmatched")
+                vector_include = False
+                ingredient_main_category = str(category_row.get("category_main", "") or "")
+                sub_function_categories = []
+                semantic_weight = 0.0
+                semantic_weight_reason = "unmatched_ingredient" if not match else "semantic_detail_unavailable"
+                if is_excipient_value:
+                    semantic_weight_reason = "excluded_non_functional"
+                semantic_key = profile_name or functional_name or normalized_value or display_value
             statuses.append(
                 {
                     "display_name": display_value or raw_value or normalized_value,
@@ -2985,11 +3052,20 @@ class UploadRecommendationService:
                     "input_role": input_role,
                     "category_hint": category_hint,
                     "is_functional_match": bool(match),
-                    "functional_ingredient_name": str(match.get("functional_ingredient_name", "") or "") if match else "",
+                    "functional_match": bool(match),
+                    "functional_ingredient_name": functional_name,
                     "relation_type": str(match.get("relation_type", "") or "") if match else "",
                     "confidence": float(match.get("confidence", 0.0) or 0.0) if match else 0.0,
                     "category_main": str(category_row.get("category_main", "") or ""),
                     "category_sub": str(category_row.get("category_sub", "") or ""),
+                    "ingredient_type": ingredient_type,
+                    "vector_include": vector_include,
+                    "is_excipient": is_excipient_value,
+                    "ingredient_main_category": ingredient_main_category,
+                    "sub_function_categories": sub_function_categories,
+                    "semantic_key": semantic_key,
+                    "semantic_weight": semantic_weight,
+                    "semantic_weight_reason": semantic_weight_reason,
                     "function_text": str(category_row.get("function_text", "") or ""),
                     "claim_text": str(category_row.get("claim_text", "") or ""),
                     "match_source": str(match.get("match_source", "") or "") if match else "",
@@ -3046,6 +3122,7 @@ class UploadRecommendationService:
                     "display_name": display_name,
                     "normalized_for_matching": str(item.get("normalized_for_matching", functional_name)),
                     "weight": round(weight, 4),
+                    "match_confidence": round(confidence, 4),
                     "role": role,
                     "category_main": category_main,
                     "category_sub": category_sub,
@@ -3425,9 +3502,9 @@ class UploadRecommendationService:
                         name for name in comparison["target_only_ingredients"] if not is_semantic_excipient_name(name)
                     ]
                 function_similarity_score = calculate_function_similarity(temp_profile, target_profile)
-                core_match_score = calculate_core_match_score(temp_profile, target_profile)
-                substitutability = classify_substitutability(similarity_score, temp_profile, target_profile)
-                reason = generate_recommendation_reason(temp_profile, target_profile, comparison, service.ingredient_frequency)
+                core_match_score = calculate_core_match_score(temp_profile, target_profile, semantic_explanation)
+                substitutability = classify_substitutability(similarity_score, temp_profile, target_profile, semantic_explanation)
+                reason = generate_recommendation_reason(temp_profile, target_profile, comparison, service.ingredient_frequency, semantic_explanation)
             explanation = build_explanation_json(reason, comparison, substitutability)
             explanation["similarity_algorithm"] = SIMILARITY_ALGORITHM_VERSION
             if semantic_explanation:
@@ -3734,6 +3811,7 @@ class UploadRecommendationService:
             "ingredient_db_match_statuses": self.build_ingredient_db_match_statuses(
                 corrected["parsed_result"].get("ingredient_objects", []),
                 matched_ingredients,
+                corrected["estimated_profile"],
             ),
             "estimated_profile": {
                 "product_main_category": corrected["estimated_profile"].get("product_main_category", ""),
