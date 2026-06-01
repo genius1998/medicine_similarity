@@ -2490,18 +2490,19 @@ class UploadRecommendationService:
 
     def debug_ingredient_match(self, ingredient_text: str) -> dict:
         self._ensure_loaded()
-        normalized_input = str(ingredient_text or "").strip()
-        raw_input = normalized_input
-        display_input = normalized_input
+        raw_input = str(ingredient_text or "").strip()
+        normalized_input = canonicalize_ingredient_for_matching(raw_input)
+        display_input = raw_input
         input_family = resolve_joint_input_family(display_input, raw_input, normalized_input)
         mapping_rule = resolve_runtime_mapping_rule(display_input, raw_input, normalized_input)
         direct_terms = self._resolve_match_terms(normalized_input, raw_input, display_input, input_family)
         safe_alias_terms = self._resolve_safe_alias_terms(normalized_input, raw_input, display_input, mapping_rule)
-        normalized_raw_exact = normalize_cache_exact_key(raw_input or display_input or normalized_input)
+        normalized_raw_exact = normalize_cache_exact_key(normalized_input or raw_input or display_input)
 
         debug = {
             "input": {
                 "ingredient_text": normalized_input,
+                "raw_input": raw_input,
                 "normalized_input": normalized_input,
                 "normalized_exact_key": normalized_raw_exact,
                 "input_family": input_family,
