@@ -206,6 +206,7 @@ def load_product_function_profiles(path: Path) -> dict[str, dict]:
             "product_name": str(row.product_name or ""),
             "product_main_category": str(row.product_main_category or "기타"),
             "product_sub_categories": safe_json_loads(getattr(row, "product_sub_categories_json", "[]"), []),
+            "llm_sub_function_categories": safe_json_loads(getattr(row, "llm_sub_function_categories_json", "[]"), []),
             "primary_ingredients": safe_json_loads(getattr(row, "primary_ingredients_json", "[]"), []),
             "secondary_ingredients": safe_json_loads(getattr(row, "secondary_ingredients_json", "[]"), []),
             "support_ingredients": safe_json_loads(getattr(row, "support_ingredients_json", "[]"), []),
@@ -340,6 +341,15 @@ def calculate_core_match_score(base_profile: dict, target_profile: dict) -> floa
     return round(max(exact_score, family_score), 6)
 
 
+def sub_function_categories(profile: dict) -> list[str]:
+    """Batch API sub-function labels used for category-level recommendation signals."""
+    return [
+        str(item).strip()
+        for item in profile.get("llm_sub_function_categories", [])
+        if str(item).strip()
+    ]
+
+
 def focus_ingredients(profile: dict) -> list[str]:
     primary = [str(value or "") for value in profile.get("primary_ingredients", []) if str(value or "")]
     if primary:
@@ -363,7 +373,7 @@ def compare_product_profiles(base_profile: dict, target_profile: dict, base_vect
 
     def profile_categories(profile: dict) -> set[str]:
         categories = {str(profile.get("product_main_category", "기타"))}
-        categories.update([str(item) for item in profile.get("product_sub_categories", []) if str(item).strip()])
+        categories.update(sub_function_categories(profile))
         for item in profile.get("ingredient_scores", []):
             if str(item.get("role", "")) != "support" and not is_excipient(str(item.get("ingredient", ""))):
                 category = str(item.get("category_main", "")).strip()
@@ -604,7 +614,7 @@ def build_candidate_pool(
 ) -> list[dict]:
     candidate_stats: dict[str, dict] = {}
     base_categories = {str(base_profile.get("product_main_category", "기타"))}
-    base_categories.update([str(item) for item in base_profile.get("product_sub_categories", []) if str(item).strip()])
+    base_categories.update(sub_function_categories(base_profile))
     base_focus_families = focus_joint_families(base_profile)
     base_joint_related = product_is_joint_related(base_profile)
 
@@ -612,7 +622,7 @@ def build_candidate_pool(
         if candidate_id not in candidate_stats:
             candidate_profile = profiles[candidate_id]
             candidate_categories = {str(candidate_profile.get("product_main_category", "기타"))}
-            candidate_categories.update([str(item) for item in candidate_profile.get("product_sub_categories", []) if str(item).strip()])
+            candidate_categories.update(sub_function_categories(candidate_profile))
             candidate_focus_families = focus_joint_families(candidate_profile)
             shared_focus_family_count = len(base_focus_families & candidate_focus_families)
             candidate_joint_related = product_is_joint_related(candidate_profile)

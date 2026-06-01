@@ -103,6 +103,33 @@
       font-size: 17px;
       font-weight: 700;
     }
+    .recommendation-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    button {
+      border: 1px solid #aab7b0;
+      border-radius: 4px;
+      padding: 7px 12px;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      background: #f8f8f8;
+      color: #222;
+    }
+    button[disabled] {
+      background: #e3e3e3;
+      color: #7a7a7a;
+      border-color: #cccccc;
+      cursor: not-allowed;
+    }
+    .ghost-button {
+      background: #ffffff;
+      color: var(--accent);
+    }
     .hint-text,
     .muted,
     .inline-note {
@@ -324,8 +351,15 @@
       { label: "STEP 1 / 4", percent: 12, message: "기준 제품 기본 정보를 조회하는 중입니다.", subtext: "공식 카탈로그 상세 정보 로드" },
       { label: "STEP 2 / 4", percent: 38, message: "제품 프로필과 카테고리 정보를 조회하는 중입니다.", subtext: "기능성 원료 프로필 로드" },
       { label: "STEP 3 / 4", percent: 72, message: "유사 제품 후보군을 계산하는 중입니다.", subtext: "기존 제품 DB 후보군 계산" },
-      { label: "STEP 4 / 4", percent: 94, message: "추천 결과를 정리하는 중입니다.", subtext: "LLM 재정렬 및 화면 렌더링 준비" },
+      { label: "STEP 4 / 4", percent: 94, message: "추천 결과를 정리하는 중입니다.", subtext: "화면 렌더링 준비" },
     ];
+
+    const state = {
+      detail: null,
+      profile: null,
+      similar: null,
+      llmReranking: false,
+    };
 
     function escapeHtml(value) {
       return String(value || "").replace(/[&<>\"']/g, (s) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "\"":"&quot;", "'":"&#39;" }[s]));
@@ -434,10 +468,13 @@
 
         const [profile, similar] = await Promise.all([
           fetchJson(`/api/products/${encodeURIComponent(reportNo)}/profile`, 1),
-          fetchJson(`/api/products/${encodeURIComponent(reportNo)}/similar?top_k=10&candidate_limit=1000&llm_rerank=true`, 2),
+          fetchJson(`/api/products/${encodeURIComponent(reportNo)}/similar?top_k=10&candidate_limit=1000&llm_rerank=false`, 2),
         ]);
 
         setLoadingStep(3);
+        state.detail = detail;
+        state.profile = profile;
+        state.similar = similar;
         renderDetail(detail, profile, similar);
       } catch (error) {
         root.className = "empty-panel";
@@ -455,7 +492,7 @@
         ? '<div class="helper-note"><strong>LLM 2차 재정렬 적용됨</strong><br>공식 후보군 계산 후 GPT OSS가 최종 순서를 다시 검토했습니다.</div>'
         : llmRerankError
           ? `<div class="helper-note"><strong>LLM 재정렬 미적용</strong><br>${escapeHtml(llmRerankError)}</div>`
-          : '<div class="helper-note"><strong>기본 유사도 순서</strong><br>정량 유사도 기준 순서를 그대로 표시합니다.</div>';
+          : '<div class="helper-note"><strong>기본 유사도 순서</strong><br>LLM 2차 재정렬은 버튼을 눌렀을 때만 별도로 적용됩니다.</div>';
 
       const html = [];
       html.push('<section class="layout">');
@@ -491,7 +528,7 @@
 
       html.push('<div class="stack">');
       html.push('<section class="section-box">');
-      html.push('<div class="section-caption"><div><h2>유사 제품 추천 TOP10</h2><div class="hint-text">기존 제품 DB 기준 유사도 계산 결과입니다.</div></div></div>');
+      html.push('<div class="section-caption"><div><h2>유사 제품 추천 TOP10</h2><div class="hint-text">기존 제품 DB 기준 유사도 계산 결과입니다.</div></div><div class="recommendation-actions"><button type="button" class="ghost-button" id="llmRerankButton" ' + ((!recommendations.length || llmRerankApplied || state.llmReranking) ? "disabled" : "") + '>' + (state.llmReranking ? "재정렬 중..." : llmRerankApplied ? "LLM 재정렬 적용됨" : "LLM 2차 재정렬") + '</button></div></div>');
       html.push(helperNote);
 
       if (!recommendations.length) {
@@ -524,6 +561,44 @@
       root.className = "";
       root.innerHTML = html.join("");
     }
+
+    async function applyLlmRerank() {
+      if (!state.detail || !state.profile || !state.similar || state.llmReranking) return;
+      state.llmReranking = true;
+      renderDetail(state.detail, state.profile, state.similar);
+      startLoading();
+      try {
+        setLoadingStep(2);
+        const similar = await fetchJson(`/api/products/${encodeURIComponent(reportNo)}/similar?top_k=10&candidate_limit=1000&llm_rerank=true`, 2);
+        if (similar) {
+          state.similar = similar;
+        } else {
+          state.similar = {
+            ...(state.similar || {}),
+            llm_rerank_applied: false,
+            llm_rerank_error: "LLM 재정렬 결과를 불러오지 못했습니다.",
+          };
+        }
+        setLoadingStep(3);
+        renderDetail(state.detail, state.profile, state.similar);
+      } catch (error) {
+        state.similar = {
+          ...(state.similar || {}),
+          llm_rerank_applied: false,
+          llm_rerank_error: error && error.message ? error.message : String(error || ""),
+        };
+      } finally {
+        state.llmReranking = false;
+        renderDetail(state.detail, state.profile, state.similar);
+        finishLoading();
+      }
+    }
+
+    root.addEventListener("click", (event) => {
+      if (event.target && event.target.id === "llmRerankButton") {
+        applyLlmRerank();
+      }
+    });
 
     loadDetail();
   </script>

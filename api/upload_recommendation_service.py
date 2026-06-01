@@ -2895,6 +2895,7 @@ class UploadRecommendationService:
             "product_name": product_name,
             "product_main_category": main_category,
             "product_sub_categories": sub_categories,
+            "llm_sub_function_categories": sub_categories,
             "primary_ingredients": primary[:3],
             "secondary_ingredients": secondary[:8],
             "support_ingredients": support[:10],

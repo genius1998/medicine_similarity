@@ -388,6 +388,13 @@
       gap: 8px;
       margin-bottom: 8px;
     }
+    .recommendation-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
     .tab-strip button {
       background: #f5f5f5;
       color: #444;
@@ -626,7 +633,10 @@
               <h2>추천 결과 TOP10</h2>
               <div class="hint-text" id="recommendationModeText">이미지를 분석하면 추천 결과가 표시됩니다.</div>
             </div>
-            <span class="section-step">STEP 4</span>
+            <div class="recommendation-actions">
+              <button type="button" class="ghost-button" id="llmRerankButton" disabled>LLM 2차 재정렬</button>
+              <span class="section-step">STEP 4</span>
+            </div>
           </div>
           <div id="recommendationList" class="empty-panel">추천 결과가 아직 없습니다.</div>
         </section>
@@ -652,6 +662,7 @@
       baseUrl: defaultApiBase || window.location.origin,
       dirty: false,
       latestMode: "image",
+      llmReranking: false,
     };
 
     const fileInput = document.getElementById("fileInput");
@@ -676,6 +687,7 @@
     const recommendationModeText = document.getElementById("recommendationModeText");
     const dirtyChip = document.getElementById("dirtyChip");
     const apiBaseInput = document.getElementById("apiBaseInput");
+    const llmRerankButton = document.getElementById("llmRerankButton");
 
     apiBaseInput.value = state.baseUrl;
 
@@ -807,6 +819,15 @@
           { label: "STEP 4 / 4", message: "Formatting the recommendation results.", percent: 92, delay: 2600 },
         ],
       },
+      rerank: {
+        title: "LLM Re-ranking Running",
+        subtext: "Keeping the current ingredient profile and asking the LLM to review the final order.",
+        steps: [
+          { label: "STEP 1 / 3", message: "Preparing the current recommendation candidates.", percent: 18, delay: 150 },
+          { label: "STEP 2 / 3", message: "Running the LLM second-pass ordering.", percent: 58, delay: 900 },
+          { label: "STEP 3 / 3", message: "Rendering the re-ranked result.", percent: 90, delay: 1800 },
+        ],
+      },
     };
 
     let loadingTimers = [];
@@ -917,6 +938,28 @@
         return '<span class="chip gray">없음</span>';
       }
       return items.map((item) => `<span class="chip ${className}">${escapeHtml(item)}</span>`).join("");
+    }
+
+    function hasRecommendationRows(response) {
+      return Boolean(
+        response
+        && (
+          safeArray(response.recommendations).length
+          || safeArray(response.official_recommendations).length
+          || safeArray(response.uploaded_similar_cases).length
+        )
+      );
+    }
+
+    function updateLlmRerankButton(response) {
+      if (!llmRerankButton) return;
+      const applied = Boolean(response && response.llm_rerank_applied);
+      llmRerankButton.disabled = state.llmReranking || !hasRecommendationRows(response) || applied;
+      llmRerankButton.textContent = state.llmReranking
+        ? "재정렬 중..."
+        : applied
+          ? "LLM 재정렬 적용됨"
+          : "LLM 2차 재정렬";
     }
 
     function renderIngredientDbMatchStatusTable(items) {
@@ -1119,7 +1162,7 @@
         renderIngredientEditor(response);
       });
 
-      document.getElementById("rerunButton").addEventListener("click", rerunWithEditedIngredients);
+      document.getElementById("rerunButton").addEventListener("click", () => rerunWithEditedIngredients(false));
     }
 
     function cleanIngredients() {
@@ -1250,8 +1293,13 @@
       const quality = (response && response.quality) || {};
       const llmRerankApplied = Boolean(response && response.llm_rerank_applied);
       const llmRerankError = String((response && response.llm_rerank_error) || "");
-      const modeLabel = state.latestMode === "ingredients" ? "수정된 원료 기준 추천 결과입니다." : "OCR 추출 결과 기준 추천 결과입니다.";
+      const modeLabel = llmRerankApplied
+        ? "LLM 2차 재정렬 결과입니다."
+        : state.latestMode === "ingredients"
+          ? "수정된 원료 기준 추천 결과입니다."
+          : "OCR 추출 결과 기준 추천 결과입니다.";
       recommendationModeText.textContent = response ? modeLabel : "이미지를 분석하면 추천 결과가 표시됩니다.";
+      updateLlmRerankButton(response);
 
       if (!recommendations.length && !officialRecommendations.length && !uploadedSimilarCases.length) {
         recommendationList.className = "empty-panel";
@@ -1267,6 +1315,8 @@
         html.push('<div class="helper-note"><strong>LLM 2차 재정렬 적용됨</strong><br>공식 후보군을 먼저 계산한 뒤 GPT OSS가 최종 순서를 다시 검토했습니다. 순서가 그대로일 수도 있습니다.</div>');
       } else if (llmRerankError) {
         html.push(`<div class="helper-note"><strong>LLM 재정렬 미적용</strong><br>${escapeHtml(llmRerankError)}</div>`);
+      } else {
+        html.push('<div class="helper-note"><strong>기본 유사도 순서</strong><br>LLM 2차 재정렬은 우측 상단 버튼을 눌렀을 때만 별도로 적용됩니다.</div>');
       }
       html.push('<div class="helper-note"><strong>조회 기준</strong><br>공식 카탈로그 추천을 우선 표시하며, 업로드 기반 유사 사례는 별도 구역으로 분리해 참고용으로 제공합니다.</div>');
       html.push(buildRecommendationSection(officialRecommendations, "공식 카탈로그 추천", "공식 카탈로그 추천 결과가 없습니다."));
@@ -1326,7 +1376,7 @@
       return false;
     }
 
-    async function recommendByImage() {
+    async function recommendByImage(llmRerank = false) {
       if (!state.file) return;
       setError("");
       setSuccess("");
@@ -1336,84 +1386,7 @@
         formData.append("file", state.file);
         formData.append("top_k", String(defaultTopK));
         formData.append("candidate_limit", String(defaultCandidateLimit));
-        formData.append("llm_rerank", "true");
-
-        const response = await fetch(`${getApiBase()}/api/recommend/by-image`, {
-          method: "POST",
-          body: formData,
-        });
-        if (!response.ok) {
-          throw new Error(`이미지 분석 실패 (${response.status})`);
-        }
-        const data = await response.json();
-        state.imageResponse = data;
-        state.ingredientResponse = null;
-        state.originalIngredients = buildEditorIngredientSource(data);
-        state.editableIngredients = [...state.originalIngredients];
-        cleanIngredients();
-        syncDirtyState();
-        state.latestMode = "image";
-        showResponsePanels(data);
-        setSuccess("이미지 분석이 완료되었습니다. 추출된 원료를 확인한 뒤 필요하면 수정해서 다시 추천받으세요.");
-      } catch (error) {
-        cancelLoading();
-        setError(buildErrorMessage(error));
-      } finally {
-        finishLoading("이미지 분석이 완료되었습니다.");
-      }
-    }
-
-    async function rerunWithEditedIngredients() {
-      cleanIngredients();
-      syncDirtyState();
-      if (!state.editableIngredients.length) {
-        setError("최소 1개 이상의 원료가 필요합니다.");
-        return;
-      }
-      setError("");
-      setSuccess("");
-      startLoadingProgress("ingredients", "수정한 원료 기준으로 추천 재생성 중...");
-      try {
-        const response = await fetch(`${getApiBase()}/api/recommend/by-ingredients`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            ingredients: state.editableIngredients,
-            product_name_candidate: (((state.imageResponse || {}).parsed || {}).product_name_candidate || ((state.ingredientResponse || {}).parsed || {}).product_name_candidate || ""),
-            base_trace_id: (((state.imageResponse || {}).trace_id) || ((state.ingredientResponse || {}).trace_id) || ""),
-            top_k: defaultTopK,
-            candidate_limit: defaultCandidateLimit,
-            llm_rerank: true,
-          }),
-        });
-        if (!response.ok) {
-          throw new Error(`재추천 실패 (${response.status})`);
-        }
-        const data = await response.json();
-        state.ingredientResponse = data;
-        state.latestMode = "ingredients";
-        renderResultPanel(data);
-        renderRecommendations(data);
-        setSuccess("수정된 원료 기준 추천 결과입니다.");
-      } catch (error) {
-        cancelLoading();
-        setError(buildErrorMessage(error));
-      } finally {
-        finishLoading("원료 기준 재추천이 완료되었습니다.");
-      }
-    }
-
-    async function recommendByImage() {
-      if (!state.file) return;
-      setError("");
-      setSuccess("");
-      startLoadingProgress("image", "OCR 분석 및 추천 생성 중...");
-      try {
-        const formData = new FormData();
-        formData.append("file", state.file);
-        formData.append("top_k", String(defaultTopK));
-        formData.append("candidate_limit", String(defaultCandidateLimit));
-        formData.append("llm_rerank", "true");
+        formData.append("llm_rerank", llmRerank ? "true" : "false");
 
         const response = await fetch(`${getApiBase()}/api/recommend/by-image`, {
           method: "POST",
@@ -1439,7 +1412,7 @@
       }
     }
 
-    async function rerunWithEditedIngredients() {
+    async function rerunWithEditedIngredients(llmRerank = false) {
       cleanIngredients();
       syncDirtyState();
       if (!state.editableIngredients.length) {
@@ -1459,7 +1432,7 @@
             base_trace_id: (((state.imageResponse || {}).trace_id) || ((state.ingredientResponse || {}).trace_id) || ""),
             top_k: defaultTopK,
             candidate_limit: defaultCandidateLimit,
-            llm_rerank: true,
+            llm_rerank: Boolean(llmRerank),
           }),
         });
         if (!response.ok) {
@@ -1475,6 +1448,55 @@
       } catch (error) {
         cancelLoading();
         setError(buildErrorMessage(error));
+      }
+    }
+
+    async function rerankCurrentRecommendations() {
+      const currentResponse = state.latestMode === "ingredients" ? state.ingredientResponse : state.imageResponse;
+      if (!hasRecommendationRows(currentResponse)) {
+        setError("먼저 기본 추천 결과를 생성해야 LLM 2차 재정렬을 적용할 수 있습니다.");
+        return;
+      }
+      cleanIngredients();
+      if (!state.editableIngredients.length) {
+        setError("LLM 재정렬에 사용할 원료 목록이 없습니다.");
+        return;
+      }
+      state.llmReranking = true;
+      updateLlmRerankButton(currentResponse);
+      setError("");
+      setSuccess("");
+      startLoadingProgress("rerank", "LLM 2차 재정렬 실행 중...");
+      try {
+        const response = await fetch(`${getApiBase()}/api/recommend/by-ingredients`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ingredients: state.editableIngredients,
+            product_name_candidate: (((state.imageResponse || {}).parsed || {}).product_name_candidate || ((state.ingredientResponse || {}).parsed || {}).product_name_candidate || ""),
+            base_trace_id: (((state.imageResponse || {}).trace_id) || ((state.ingredientResponse || {}).trace_id) || ""),
+            top_k: defaultTopK,
+            candidate_limit: defaultCandidateLimit,
+            llm_rerank: true,
+          }),
+        });
+        if (!response.ok) {
+          throw new Error(`LLM 재정렬 실패 (${response.status})`);
+        }
+        const data = await response.json();
+        state.ingredientResponse = data;
+        state.latestMode = "ingredients";
+        renderResultPanel(data);
+        renderRecommendations(data);
+        finishLoading("LLM 2차 재정렬이 완료되었습니다.");
+        setSuccess("LLM 2차 재정렬 결과입니다.");
+      } catch (error) {
+        cancelLoading();
+        setError(buildErrorMessage(error));
+        updateLlmRerankButton(currentResponse);
+      } finally {
+        state.llmReranking = false;
+        updateLlmRerankButton(state.ingredientResponse || state.imageResponse);
       }
     }
 
@@ -1495,6 +1517,7 @@
       state.originalIngredients = [];
       state.editableIngredients = [];
       state.dirty = false;
+      state.llmReranking = false;
       dirtyChip.hidden = true;
       if (state.previewUrl) URL.revokeObjectURL(state.previewUrl);
       state.previewUrl = "";
@@ -1532,7 +1555,8 @@
         event.preventDefault();
       }
     });
-    analyzeButton.addEventListener("click", recommendByImage);
+    analyzeButton.addEventListener("click", () => recommendByImage(false));
+    llmRerankButton.addEventListener("click", rerankCurrentRecommendations);
     resetButton.addEventListener("click", resetAll);
   </script>
 </body>

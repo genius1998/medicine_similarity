@@ -575,11 +575,13 @@ def get_product_profile(request: Request, report_no: str) -> ProductProfileRespo
                 }
             )
     ingredient_db_match_statuses = upload_service.build_ingredient_db_match_statuses(ingredient_objects)
+    sub_function_categories = list(profile.get("llm_sub_function_categories", []))
     return ProductProfileResponse(
         report_no=str(profile.get("report_no", "")),
         product_name=str(profile.get("product_name", "")),
         product_main_category=str(profile.get("product_main_category", "")),
-        product_sub_categories=list(profile.get("product_sub_categories", [])),
+        product_sub_categories=sub_function_categories,
+        llm_sub_function_categories=sub_function_categories,
         primary_ingredients=list(profile.get("primary_ingredients", [])),
         secondary_ingredients=list(profile.get("secondary_ingredients", [])),
         support_ingredients=list(profile.get("support_ingredients", [])),

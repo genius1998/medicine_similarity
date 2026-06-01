@@ -32,6 +32,7 @@ class ProductProfileResponse(BaseModel):
     product_name: str
     product_main_category: str
     product_sub_categories: List[str]
+    llm_sub_function_categories: List[str] = Field(default_factory=list)
     primary_ingredients: List[str]
     secondary_ingredients: List[str]
     support_ingredients: List[str]

@@ -119,6 +119,8 @@ class RecommendationService:
         profile_df = pd.read_csv(self.runtime["product_profile_csv_path"], encoding="utf-8-sig", low_memory=False)
         self.profile_records = []
         for row in profile_df.to_dict(orient="records"):
+            legacy_sub_categories = safe_json_loads(row.get("product_sub_categories_json", "[]"), [])
+            llm_sub_function_categories = safe_json_loads(row.get("llm_sub_function_categories_json", "[]"), [])
             item = {
                 "report_no": str(row.get("report_no", "") or ""),
                 "product_id": str(row.get("product_id", "") or ""),
@@ -127,7 +129,9 @@ class RecommendationService:
                 "primary_ingredients": safe_json_loads(row.get("primary_ingredients_json", "[]"), []),
                 "secondary_ingredients": safe_json_loads(row.get("secondary_ingredients_json", "[]"), []),
                 "support_ingredients": safe_json_loads(row.get("support_ingredients_json", "[]"), []),
-                "product_sub_categories": safe_json_loads(row.get("product_sub_categories_json", "[]"), []),
+                "product_sub_categories": list(llm_sub_function_categories),
+                "legacy_product_sub_categories": list(legacy_sub_categories),
+                "llm_sub_function_categories": list(llm_sub_function_categories),
                 "confidence": float(row.get("confidence", 0.0) or 0.0),
                 "notes": str(row.get("notes", "") or ""),
             }
@@ -441,6 +445,7 @@ class RecommendationService:
             "is_candidate_enabled": bool(int(row.get("is_candidate_enabled", 1) or 0)),
             "product_main_category": str(row.get("product_main_category", "") or "기타"),
             "product_sub_categories": safe_json_loads(row.get("product_sub_categories_json", "[]"), []),
+            "llm_sub_function_categories": safe_json_loads(row.get("product_sub_categories_json", "[]"), []),
             "primary_ingredients": safe_json_loads(row.get("primary_ingredients_json", "[]"), []),
             "secondary_ingredients": safe_json_loads(row.get("secondary_ingredients_json", "[]"), []),
             "support_ingredients": safe_json_loads(row.get("support_ingredients_json", "[]"), []),
@@ -467,6 +472,7 @@ class RecommendationService:
             "primary_ingredients": list(profile["primary_ingredients"]),
             "secondary_ingredients": list(profile["secondary_ingredients"]),
             "support_ingredients": list(profile["support_ingredients"]),
+            "llm_sub_function_categories": list(profile.get("llm_sub_function_categories", [])),
             "confidence": profile["confidence"],
             "notes": profile["notes"],
         }
@@ -518,7 +524,8 @@ class RecommendationService:
                 "primary_ingredients": list(profile.get("primary_ingredients", [])),
                 "secondary_ingredients": list(profile.get("secondary_ingredients", [])),
                 "support_ingredients": list(profile.get("support_ingredients", [])),
-                "product_sub_categories": list(profile.get("product_sub_categories", [])),
+                "product_sub_categories": list(profile.get("llm_sub_function_categories", [])),
+                "llm_sub_function_categories": list(profile.get("llm_sub_function_categories", [])),
                 "confidence": float(profile.get("confidence", 0.0) or 0.0),
                 "notes": str(profile.get("notes", "") or ""),
             }
@@ -696,6 +703,9 @@ class RecommendationService:
             "is_candidate_enabled": bool(is_candidate_enabled),
             "product_main_category": str(estimated_profile.get("product_main_category", "") or "기타"),
             "product_sub_categories": list(estimated_profile.get("product_sub_categories", [])),
+            "llm_sub_function_categories": list(
+                estimated_profile.get("llm_sub_function_categories", estimated_profile.get("product_sub_categories", []))
+            ),
             "primary_ingredients": list(estimated_profile.get("primary_ingredients", [])),
             "secondary_ingredients": list(estimated_profile.get("secondary_ingredients", [])),
             "support_ingredients": list(estimated_profile.get("support_ingredients", [])),
@@ -909,6 +919,7 @@ class RecommendationService:
             "is_candidate_enabled": bool(row["is_candidate_enabled"]),
             "product_main_category": str(row["product_main_category"] or ""),
             "product_sub_categories": safe_json_loads(row["product_sub_categories_json"], []) if row["product_sub_categories_json"] else [],
+            "llm_sub_function_categories": safe_json_loads(row["product_sub_categories_json"], []) if row["product_sub_categories_json"] else [],
             "primary_ingredients": safe_json_loads(row["primary_ingredients_json"], []) if row["primary_ingredients_json"] else [],
             "secondary_ingredients": safe_json_loads(row["secondary_ingredients_json"], []) if row["secondary_ingredients_json"] else [],
             "support_ingredients": safe_json_loads(row["support_ingredients_json"], []) if row["support_ingredients_json"] else [],
@@ -1007,11 +1018,12 @@ class RecommendationService:
     def _candidate_summary_for_llm(self, recommendation: dict) -> dict:
         target_report_no = str(recommendation.get("target_report_no", "") or "")
         target_profile = self.get_profile_by_report_no(target_report_no) or {}
+        sub_function_categories = list(target_profile.get("llm_sub_function_categories", []) or [])
         return {
             "report_no": target_report_no,
             "product_name": str(recommendation.get("target_product_name", "") or ""),
             "product_main_category": str(target_profile.get("product_main_category", "") or ""),
-            "product_sub_categories": list(target_profile.get("product_sub_categories", []) or []),
+            "sub_function_categories": sub_function_categories,
             "primary_ingredients": list(target_profile.get("primary_ingredients", []) or []),
             "secondary_ingredients": list(target_profile.get("secondary_ingredients", []) or []),
             "support_ingredients": list(target_profile.get("support_ingredients", []) or []),
@@ -1025,7 +1037,7 @@ class RecommendationService:
                 "이 작업은 추천이 아니라 재정렬이다.",
                 "제품이 더 좋아 보인다는 이유로 순위를 올리지 마라.",
                 "추가 영양성분이 더 많다는 이유로 순위를 올리지 마라.",
-                "우선순위는 primary_ingredients exact match, secondary_ingredients overlap, support_ingredients overlap, product_main_category/product_sub_categories 일치, extra ingredients penalty 순서다.",
+                "우선순위는 primary_ingredients exact match, secondary_ingredients overlap, support_ingredients overlap, product_main_category/sub_function_categories 일치, extra ingredients penalty 순서다.",
                 "반드시 주어진 후보를 모두 정확히 한 번씩 사용해 1위부터 끝까지 정렬하라.",
                 "반드시 JSON만 출력하라.",
             ],
@@ -1038,7 +1050,7 @@ class RecommendationService:
                 "report_no": str(base_profile.get("report_no", "") or ""),
                 "product_name": str(base_profile.get("product_name", "") or ""),
                 "product_main_category": str(base_profile.get("product_main_category", "") or ""),
-                "product_sub_categories": list(base_profile.get("product_sub_categories", []) or []),
+                "sub_function_categories": list(base_profile.get("llm_sub_function_categories", []) or []),
                 "primary_ingredients": list(base_profile.get("primary_ingredients", []) or []),
                 "secondary_ingredients": list(base_profile.get("secondary_ingredients", []) or []),
                 "support_ingredients": list(base_profile.get("support_ingredients", []) or []),
