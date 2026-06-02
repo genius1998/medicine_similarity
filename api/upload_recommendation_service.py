@@ -30,6 +30,7 @@ from api.ingredient_parse_service import (
     compute_ocr_text_hash,
     compute_parsed_signature,
     is_excipient,
+    normalize_product_category_label,
     parse_ingredients_from_ocr_text,
     split_ingredients,
 )
@@ -2265,8 +2266,51 @@ class UploadRecommendationService:
         name = str(product_name or "").strip()
         for category, rule in CATEGORY_HINT_RULES.items():
             if contains_keyword(name, rule["product_keywords"]):
-                return {"category_main": category, "confidence": 0.95, "matched_keywords": rule["product_keywords"]}
+                normalized_category = normalize_product_category_label(category) or category
+                return {"category_main": normalized_category, "confidence": 0.95, "matched_keywords": rule["product_keywords"]}
         return {"category_main": "", "confidence": 0.0, "matched_keywords": []}
+
+    def _infer_upload_category_hint(self, parsed_result: dict, fallback_product_name: str = "") -> dict:
+        product_name = str(parsed_result.get("product_name_candidate") or fallback_product_name or "")
+        product_name_hint = self.infer_category_from_product_name(product_name)
+        name_category = normalize_product_category_label(product_name_hint.get("category_main", ""))
+        if name_category:
+            product_name_hint["category_main"] = name_category
+
+        llm_category = normalize_product_category_label(parsed_result.get("product_main_category", ""))
+        try:
+            llm_confidence = max(0.0, min(1.0, float(parsed_result.get("product_category_confidence", 0.0) or 0.0)))
+        except Exception:
+            llm_confidence = 0.0
+
+        if llm_category and llm_confidence >= 0.65 and (not name_category or name_category == llm_category):
+            return {
+                "category_main": llm_category,
+                "confidence": max(float(product_name_hint.get("confidence", 0.0) or 0.0), llm_confidence),
+                "matched_keywords": list(product_name_hint.get("matched_keywords", []) or []),
+                "source": "llm_parse_category",
+            }
+        return product_name_hint
+
+    def _has_non_joint_category_protection(self, parsed_result: dict, normalized_ingredients: List[str]) -> bool:
+        llm_category = normalize_product_category_label(parsed_result.get("product_main_category", ""))
+        try:
+            llm_confidence = max(0.0, min(1.0, float(parsed_result.get("product_category_confidence", 0.0) or 0.0)))
+        except Exception:
+            llm_confidence = 0.0
+        product_name = str(parsed_result.get("product_name_candidate", "") or "")
+        name_category = normalize_product_category_label(self.infer_category_from_product_name(product_name).get("category_main", ""))
+        nutrient_count = count_keyword_matches(normalized_ingredients, NUTRITION_SUPPLEMENT_INGREDIENT_KEYWORDS)
+        protected_category = llm_category or name_category
+        if not protected_category or protected_category == "관절/연골":
+            if name_category == "뼈 건강" and nutrient_count >= 2:
+                return True
+            return False
+        if llm_category and name_category and llm_category == name_category and llm_confidence >= 0.65:
+            return True
+        if protected_category == "뼈 건강" and nutrient_count >= 2 and name_category == "뼈 건강":
+            return True
+        return False
 
     def _collect_category_diversity(self, estimated_profile: dict) -> int:
         categories = {
@@ -2359,6 +2403,7 @@ class UploadRecommendationService:
     def _apply_domain_category_overrides(self, parsed_result: dict, estimated_profile: dict) -> dict:
         product_name_candidate = str(parsed_result.get("product_name_candidate", "") or "")
         normalized_ingredients = list(parsed_result.get("normalized_ingredients", []))
+        protect_non_joint_category = self._has_non_joint_category_protection(parsed_result, normalized_ingredients)
 
         if self._is_liver_health_candidate(product_name_candidate, normalized_ingredients):
             estimated_profile = self._reprioritize_primary_ingredients(
@@ -2374,7 +2419,7 @@ class UploadRecommendationService:
                 "눈 건강",
             )
 
-        if self._is_joint_candidate(product_name_candidate, normalized_ingredients):
+        if self._is_joint_candidate(product_name_candidate, normalized_ingredients) and not protect_non_joint_category:
             estimated_profile = self._reprioritize_primary_ingredients(
                 estimated_profile,
                 CATEGORY_HINT_RULES["관절/연골"]["ingredient_keywords"],
@@ -3413,7 +3458,7 @@ class UploadRecommendationService:
         quality_warnings = list(base_warnings)
         excluded_ingredients = list(dict.fromkeys(parsed_result.get("excluded_ingredients", []) + estimated_profile.get("excipient_ingredients", [])))
         product_name_candidate = str(parsed_result.get("product_name_candidate", "") or "")
-        product_name_hint = self.infer_category_from_product_name(product_name_candidate)
+        product_name_hint = self._infer_upload_category_hint(parsed_result, product_name_candidate)
         product_name_category = str(product_name_hint.get("category_main", "") or "")
 
         estimated_main_category = str(estimated_profile.get("product_main_category", "") or "")
@@ -4147,7 +4192,7 @@ class UploadRecommendationService:
         temp_vector = self.build_temp_product_vector_from_ingredients(ingredient_objects, matched)
         upload_signature = ""
         temp_hash = hashlib.sha1("|".join(sorted(parsed["normalized_ingredients"])).encode("utf-8")).hexdigest()[:16]
-        name_hint = self.infer_category_from_product_name(product_name_candidate)
+        name_hint = self._infer_upload_category_hint(parsed, product_name_candidate)
         temp_profile = self._build_temp_profile(f"uploaded::{temp_hash}", product_name_candidate or "업로드 입력 제품", matched, name_hint)
         temp_profile["upload_signature"] = upload_signature
         temp_profile["profile_signature"] = build_profile_signature(temp_profile, temp_vector)
@@ -4227,7 +4272,7 @@ class UploadRecommendationService:
         ocr_text_hash = compute_ocr_text_hash(raw_text or "")
         parsed_signature = str((parsed.get("parse_metadata") or {}).get("parsed_signature", "") or compute_parsed_signature(parsed))
         temp_hash = hashlib.sha1(upload_signature.encode("utf-8")).hexdigest()[:16]
-        name_hint = self.infer_category_from_product_name(parsed.get("product_name_candidate", ""))
+        name_hint = self._infer_upload_category_hint(parsed)
         temp_profile = self._build_temp_profile(f"uploaded::{temp_hash}", parsed.get("product_name_candidate") or "OCR 입력 제품", matched, name_hint)
         temp_profile["upload_signature"] = upload_signature
         temp_profile["profile_signature"] = build_profile_signature(temp_profile, temp_vector)
@@ -4454,7 +4499,7 @@ class UploadRecommendationService:
         ocr_text_hash = compute_ocr_text_hash(raw_text)
         parsed_signature = str((parsed.get("parse_metadata") or {}).get("parsed_signature", "") or compute_parsed_signature(parsed))
         temp_hash = hashlib.sha1(upload_signature.encode("utf-8")).hexdigest()[:16]
-        name_hint = self.infer_category_from_product_name(parsed.get("product_name_candidate", filename))
+        name_hint = self._infer_upload_category_hint(parsed, filename)
         temp_profile = self._build_temp_profile(f"uploaded::{temp_hash}", parsed.get("product_name_candidate") or filename, matched, name_hint)
         temp_profile["upload_signature"] = upload_signature
         temp_profile["profile_signature"] = build_profile_signature(temp_profile, temp_vector)

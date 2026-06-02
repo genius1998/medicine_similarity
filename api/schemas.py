@@ -108,6 +108,10 @@ class OCRTextRecommendationRequest(BaseModel):
 
 class ParsedOCRPayload(BaseModel):
     product_name_candidate: str = ""
+    product_main_category: str = ""
+    product_sub_categories: List[str] = Field(default_factory=list)
+    product_category_confidence: float = 0.0
+    product_category_reason: str = ""
     ingredient_section_text: str = ""
     functional_ingredient_candidates: List[str] = Field(default_factory=list)
     raw_ingredients: List[str] = Field(default_factory=list)

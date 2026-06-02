@@ -11,11 +11,39 @@ from api.local_llm_client import call_local_llm, extract_json_from_llm_content
 from api.ocr_text_sectionizer import sectionize_ocr_text
 
 
-PARSE_PROMPT_VERSION = "ingredient_parse_v2_sectionized"
-PARSE_SCHEMA_VERSION = "ingredient_parse_schema_v1"
+PARSE_PROMPT_VERSION = "ingredient_parse_v3_sectionized_category"
+PARSE_SCHEMA_VERSION = "ingredient_parse_schema_v2_category"
 PARSE_NORMALIZER_VERSION = "ingredient_normalizer_v6"
 PARSE_SECTIONIZER_VERSION = "ocr_text_sectionizer_v4"
 LLM_PARSE_CACHE_TABLE_NAME = "llm_parse_cache"
+
+PRODUCT_CATEGORY_LABELS = [
+    "영양보충",
+    "장 건강",
+    "뼈 건강",
+    "면역",
+    "기타",
+    "관절/연골",
+    "혈중지질",
+    "눈 건강",
+    "혈당",
+    "남성 건강",
+    "체지방",
+    "구강 건강",
+    "피부 건강",
+    "기억력",
+    "여성 건강",
+    "피로개선",
+    "운동/근력",
+    "수면/긴장완화",
+    "간 건강",
+    "항산화",
+    "혈행",
+    "인지력",
+    "혈압",
+]
+
+PRODUCT_CATEGORY_LABEL_SET = set(PRODUCT_CATEGORY_LABELS)
 
 
 EXCIPIENT_KEYWORDS = [
@@ -593,6 +621,48 @@ def classify_warning_message(message: str, default_code: str = "llm_warning") ->
     if any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in CRITICAL_WARNING_PATTERNS):
         return {"code": "critical_warning", "message": text, "severity": "critical"}
     return {"code": default_code, "message": text, "severity": "warning"}
+
+
+def normalize_product_category_label(value: Any) -> str:
+    label = normalize_spacing(str(value or ""))
+    if label in PRODUCT_CATEGORY_LABEL_SET:
+        return label
+    aliases = {
+        "기억력/인지력": "인지력",
+        "혈중 지질": "혈중지질",
+        "혈중지질 건강": "혈중지질",
+        "뼈건강": "뼈 건강",
+        "골 건강": "뼈 건강",
+        "장건강": "장 건강",
+        "눈건강": "눈 건강",
+        "남성건강": "남성 건강",
+        "여성건강": "여성 건강",
+        "피부건강": "피부 건강",
+        "구강건강": "구강 건강",
+        "간건강": "간 건강",
+        "수면": "수면/긴장완화",
+        "긴장완화": "수면/긴장완화",
+        "근력": "운동/근력",
+    }
+    return aliases.get(label, "")
+
+
+def normalize_product_category_labels(values: Any) -> List[str]:
+    if not isinstance(values, list):
+        return []
+    labels: List[str] = []
+    for value in values:
+        label = normalize_product_category_label(value)
+        if label and label not in labels:
+            labels.append(label)
+    return labels
+
+
+def coerce_confidence(value: Any) -> float:
+    try:
+        return max(0.0, min(1.0, float(value or 0.0)))
+    except Exception:
+        return 0.0
 
 
 def canonicalize_ingredient_for_matching(name: str) -> str:
@@ -1394,6 +1464,10 @@ def _validate_and_repair_parsed_result(parsed: Dict[str, Any]) -> Dict[str, Any]
                 ]
             )
         )
+        parsed["product_main_category"] = normalize_product_category_label(parsed.get("product_main_category", ""))
+        parsed["product_sub_categories"] = normalize_product_category_labels(parsed.get("product_sub_categories", []))
+        parsed["product_category_confidence"] = coerce_confidence(parsed.get("product_category_confidence", 0.0))
+        parsed["product_category_reason"] = normalize_spacing(parsed.get("product_category_reason", ""))
 
         found_primary = bool(parsed.get("primary_ingredients_normalized"))
         if not found_primary and parsed.get("normalized_ingredients"):
@@ -1630,6 +1704,8 @@ def compute_parsed_signature(parsed: Dict[str, Any]) -> str:
         )
     payload = {
         "product_name_candidate": normalize_spacing(parsed.get("product_name_candidate", "")),
+        "product_main_category": normalize_product_category_label(parsed.get("product_main_category", "")),
+        "product_sub_categories": sorted(normalize_product_category_labels(parsed.get("product_sub_categories", []))),
         "normalized_ingredients": sorted(
             normalize_spacing(item)
             for item in parsed.get("normalized_ingredients", []) or []
@@ -1800,6 +1876,10 @@ def rule_based_extract_ingredient_section(raw_text: str, section_context: Dict[s
     primary_fields = _collect_primary_fields(ingredient_objects)
     return {
         "product_name_candidate": product_name_candidate,
+        "product_main_category": "",
+        "product_sub_categories": [],
+        "product_category_confidence": 0.0,
+        "product_category_reason": "",
         "ingredient_section_text": ingredient_section_text,
         "functional_ingredient_candidates": list(dict.fromkeys(functional_candidates)),
         "raw_ingredients": raw_ingredients,
@@ -1845,11 +1925,18 @@ def normalize_ingredients_with_llm(raw_text: str, ocr_lines: List[str], section_
         "warning_area, company_area, unknown_area 성격의 문구는 원료로 추출하지 마라.\n"
         "긴 원료명은 display_name과 normalized_for_matching을 분리하라.\n"
         "예: DW2009 프로바이오틱스 복합물 -> normalized_for_matching=프로바이오틱스.\n"
+        "제품명과 원료 구성을 함께 보고 product_main_category를 하나 선택하라.\n"
+        "product_main_category는 반드시 allowed_product_categories 중 하나여야 한다.\n"
+        "trace 수준의 보조 원료 하나가 제품명과 핵심 영양소 조합을 뒤집지 않게 하라.\n"
+        "예: 칼슘+마그네슘+비타민D 중심 제품은 상어연골분말이 일부 있어도 보통 뼈 건강으로 본다.\n"
         "반드시 JSON만 출력하라."
     )
     user_prompt = (
         "아래 OCR 텍스트에서 건강기능식품 추천에 사용할 원료 정보를 추출하라.\n"
         "우선 SECTIONED_OCR_TEXT를 기준으로 판단하고, 필요할 때만 RAW_OCR_TEXT를 참고하라.\n\n"
+        "allowed_product_categories:\n"
+        + json.dumps(PRODUCT_CATEGORY_LABELS, ensure_ascii=False)
+        + "\n\n"
         f"SECTIONED_OCR_TEXT:\n{sectioned_payload}\n\n"
         f"RAW_OCR_TEXT:\n{llm_text}\n\n"
         "OCR_LINES:\n"
@@ -1858,6 +1945,10 @@ def normalize_ingredients_with_llm(raw_text: str, ocr_lines: List[str], section_
         "출력 JSON 스키마:\n"
         "{\n"
         '  "product_name_candidate": "",\n'
+        '  "product_main_category": "",\n'
+        '  "product_sub_categories": [],\n'
+        '  "product_category_confidence": 0.0,\n'
+        '  "product_category_reason": "",\n'
         '  "ingredient_section_text": "",\n'
         '  "functional_ingredient_candidates": [],\n'
         '  "raw_ingredients": [],\n'
@@ -1930,6 +2021,14 @@ def parse_ingredients_from_ocr_text(raw_text: str, sqlite_path: Path | None = No
     ingredient_source = llm_result if _ingredient_payload_score(llm_result) >= _ingredient_payload_score(fallback) else fallback
     merged = {
         "product_name_candidate": str(llm_result.get("product_name_candidate") or fallback.get("product_name_candidate") or ""),
+        "product_main_category": normalize_product_category_label(llm_result.get("product_main_category") or fallback.get("product_main_category") or ""),
+        "product_sub_categories": normalize_product_category_labels(
+            llm_result.get("product_sub_categories") or fallback.get("product_sub_categories") or []
+        ),
+        "product_category_confidence": coerce_confidence(
+            llm_result.get("product_category_confidence") or fallback.get("product_category_confidence") or 0.0
+        ),
+        "product_category_reason": str(llm_result.get("product_category_reason") or fallback.get("product_category_reason") or ""),
         "raw_text": str(raw_text or ""),
         "source_text": str(raw_text or ""),
         "ingredient_section_text": str(ingredient_source.get("ingredient_section_text") or fallback.get("ingredient_section_text") or ""),

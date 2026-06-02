@@ -1309,6 +1309,16 @@
 
       html.push('<table class="summary-table"><tbody>');
       html.push(`<tr><th>제품명 후보</th><td>${escapeHtml(parsed.product_name_candidate || "-")}</td></tr>`);
+      const llmCategory = parsed.product_main_category || "";
+      const llmCategoryConfidence = Number(parsed.product_category_confidence);
+      const llmCategoryReason = parsed.product_category_reason || "";
+      const llmCategoryText = llmCategory
+        ? `${escapeHtml(llmCategory)}${Number.isFinite(llmCategoryConfidence) && llmCategoryConfidence > 0 ? ` (${llmCategoryConfidence.toFixed(2)})` : ""}${llmCategoryReason ? `<br><span class="inline-note">${escapeHtml(llmCategoryReason)}</span>` : ""}`
+        : "-";
+      html.push(`<tr><th>LLM 추정 카테고리</th><td>${llmCategoryText}</td></tr>`);
+      if (safeArray(parsed.product_sub_categories).length) {
+        html.push(`<tr><th>LLM 보조 카테고리</th><td>${escapeHtml(safeArray(parsed.product_sub_categories).join(", "))}</td></tr>`);
+      }
       html.push(`<tr><th>추정 메인 카테고리</th><td>${escapeHtml(estimated.product_main_category || "-")}</td></tr>`);
       html.push(`<tr><th>품질 등급</th><td>${escapeHtml(quality.quality_grade || estimated.quality_grade || "-")}</td></tr>`);
       html.push(`<tr><th>프로필 신뢰도</th><td>${formatScore(quality.profile_confidence ?? estimated.confidence)}</td></tr>`);
