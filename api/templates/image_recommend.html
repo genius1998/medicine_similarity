@@ -908,20 +908,84 @@
     };
 
     let loadingTimers = [];
+    let loadingPollTimer = null;
+    let loadingProgressRequestId = "";
 
     function clearLoadingTimers() {
       loadingTimers.forEach((timerId) => window.clearTimeout(timerId));
       loadingTimers = [];
     }
 
-    function updateLoadingState({ title = "", label = "", message = "", percent = 0, subtext = "" } = {}) {
+    function stopProgressPolling() {
+      if (loadingPollTimer) {
+        window.clearInterval(loadingPollTimer);
+        loadingPollTimer = null;
+      }
+      loadingProgressRequestId = "";
+    }
+
+    function makeRequestId(prefix = "ocr") {
+      if (window.crypto && typeof window.crypto.randomUUID === "function") {
+        return `${prefix}-${window.crypto.randomUUID()}`;
+      }
+      return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    }
+
+    function buildProgressDetail(data) {
+      const parts = [];
+      const detail = String((data && data.detail) || "").trim();
+      const currentIngredient = String((data && data.current_ingredient) || "").trim();
+      if (detail) parts.push(detail);
+      if (currentIngredient && !detail.includes(currentIngredient)) parts.push(`현재 원료: ${currentIngredient}`);
+      if (Number.isFinite(Number(data && data.current)) && Number.isFinite(Number(data && data.total)) && Number(data.total) > 0) {
+        parts.push(`진행: ${Number(data.current)} / ${Number(data.total)}`);
+      }
+      return parts.join(" · ");
+    }
+
+    function updateLoadingState({ title = "", label = "", message = "", percent = 0, subtext = "", detail = undefined } = {}) {
       if (title) loadingTitle.textContent = title;
       if (label) loadingStepLabel.textContent = label;
       if (message) loadingMessage.textContent = message;
       if (subtext) loadingSubtext.textContent = subtext;
+      if (detail !== undefined && loadingDetail) {
+        loadingDetail.textContent = detail || "";
+        loadingDetail.hidden = !detail;
+      }
       const safePercent = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
       loadingPercent.textContent = `${safePercent}%`;
       loadingBarFill.style.width = `${safePercent}%`;
+    }
+
+    function startProgressPolling(requestId, mode) {
+      stopProgressPolling();
+      if (!requestId) return;
+      loadingProgressRequestId = requestId;
+      const preset = loadingPresets[mode] || {};
+      const poll = async () => {
+        try {
+          const response = await fetch(`${getApiBase()}/api/recommend/progress/${encodeURIComponent(requestId)}`);
+          if (!response.ok) return;
+          const data = await response.json();
+          if (!data || data.status === "unknown" || data.status === "missing") return;
+          clearLoadingTimers();
+          updateLoadingState({
+            title: preset.title || "Analysis Running",
+            label: data.phase || "SERVER",
+            message: data.message || "서버에서 처리 중입니다.",
+            percent: data.percent ?? 15,
+            subtext: preset.subtext || "서버 진행상황을 확인하는 중입니다.",
+            detail: buildProgressDetail(data),
+          });
+          if (data.status === "complete" || data.status === "error") {
+            stopProgressPolling();
+          }
+        } catch (error) {
+          // Progress polling is best-effort; the main request still controls success/failure.
+        }
+      };
+      poll();
+      loadingPollTimer = window.setInterval(poll, 800);
     }
 
     function startLoadingProgress(mode, fallbackMessage = "Processing...") {
@@ -944,6 +1008,7 @@
         message: preset.steps[0].message,
         percent: 0,
         subtext: preset.subtext,
+        detail: "",
       });
       preset.steps.forEach((step) => {
         const timerId = window.setTimeout(() => {

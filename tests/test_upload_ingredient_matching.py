@@ -253,3 +253,85 @@ def test_unrelated_cache_revalidation_does_not_create_new_standard(tmp_path, mon
     match = service._find_match_in_cache(raw, raw_ingredient=raw, display_name=raw)
 
     assert match is None
+
+
+def test_runtime_rag_fallback_skips_llm_when_no_candidates(tmp_path):
+    raw = "\ubbf8\uc0c1\uc6d0\ub8cc"
+    service = _service_with_cache(tmp_path, rows=[], category_names=[])
+    service._load_runtime_rag_documents = lambda: []
+    service._classify_runtime_rag_candidates_with_llm = lambda **kwargs: (_ for _ in ()).throw(
+        AssertionError("RAG LLM should not run without candidates")
+    )
+    service._save_runtime_cache_match = lambda **kwargs: (_ for _ in ()).throw(
+        AssertionError("no-candidate fallback must not create cache")
+    )
+    service._save_runtime_custom_functional_ingredient = lambda **kwargs: (_ for _ in ()).throw(
+        AssertionError("no-candidate fallback must not create a standard ingredient")
+    )
+
+    match = service._try_runtime_rag_fallback(
+        ingredient_name=raw,
+        raw_ingredient=raw,
+        display_name=raw,
+        input_family="",
+        mapping_rule=None,
+        allow_new_standard=True,
+    )
+
+    assert match is None
+
+
+def test_runtime_rag_fallback_skips_low_signal_upload_terms(tmp_path):
+    raw = "\uc720\ub2f9"
+    service = _service_with_cache(tmp_path, rows=[], category_names=[])
+    service._search_runtime_embedding_candidates = lambda **kwargs: (_ for _ in ()).throw(
+        AssertionError("low-signal upload terms should skip embedding retrieval")
+    )
+    service._search_runtime_rag_candidates = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("low-signal upload terms should skip lexical retrieval")
+    )
+    service._classify_runtime_rag_candidates_with_llm = lambda **kwargs: (_ for _ in ()).throw(
+        AssertionError("low-signal upload terms should skip RAG LLM")
+    )
+
+    match = service._try_runtime_rag_fallback(
+        ingredient_name=raw,
+        raw_ingredient=raw,
+        display_name=raw,
+        input_family="",
+        mapping_rule=None,
+        allow_new_standard=True,
+    )
+
+    assert match is None
+
+
+def test_low_signal_cache_match_is_excluded_from_upload_vector(tmp_path):
+    raw = "\ucc44\uc18c\ud638\ud569\ubd84\ub9d0"
+    service = _service_with_cache(
+        tmp_path,
+        rows=[
+            (raw, normalize_cache_exact_key(raw), raw, "same_ingredient", 0.95, "old_cache"),
+        ],
+        category_names=[raw],
+    )
+    ingredient_objects = [
+        {
+            "raw": raw,
+            "display_name": raw,
+            "normalized_for_matching": raw,
+            "role": "secondary",
+            "category_hint": "",
+        }
+    ]
+
+    matched = service.match_raw_ingredients_to_functional_ingredients(ingredient_objects)
+    vector = service.build_temp_product_vector_from_ingredients(ingredient_objects, matched)
+    statuses = service.build_ingredient_db_match_statuses(ingredient_objects, matched, estimated_profile=None)
+
+    assert matched
+    assert matched[0]["vector_exclusion_reason"] == "excluded_from_vector_by_low_signal_upload_guard"
+    assert vector == {}
+    assert statuses[0]["is_functional_match"] is True
+    assert statuses[0]["vector_include"] is False
+    assert statuses[0]["ingredient_type"] == "low_signal_food_base"

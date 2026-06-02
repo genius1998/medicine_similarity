@@ -256,8 +256,8 @@ def update_request_progress(
     phase: str = "",
     message: str = "",
     percent: Optional[float] = None,
-    detail: str = "",
-    current_ingredient: str = "",
+    detail: Optional[str] = None,
+    current_ingredient: Optional[str] = None,
     current: Optional[int] = None,
     total: Optional[int] = None,
     status: str = "running",
@@ -276,13 +276,15 @@ def update_request_progress(
         for key in stale_ids:
             _REQUEST_PROGRESS.pop(key, None)
         previous = dict(_REQUEST_PROGRESS.get(request_id, {}) or {})
+        previous_phase = str(previous.get("phase", "") or "")
+        next_phase = phase or previous_phase
         payload = {
             **previous,
             "request_id": request_id,
-            "phase": phase or previous.get("phase", ""),
+            "phase": next_phase,
             "message": message or previous.get("message", ""),
-            "detail": detail if detail else previous.get("detail", ""),
-            "current_ingredient": current_ingredient if current_ingredient else previous.get("current_ingredient", ""),
+            "detail": detail if detail is not None else ("" if phase and phase != previous_phase else previous.get("detail", "")),
+            "current_ingredient": current_ingredient if current_ingredient is not None else ("" if phase and phase != previous_phase else previous.get("current_ingredient", "")),
             "status": status or previous.get("status", "running"),
             "updated_at_epoch": now,
         }
@@ -398,9 +400,32 @@ RUNTIME_EXCIPIENT_VECTOR_EXCLUDED_TERMS = {
     "\uac10\ubbf8\ub8cc",
 }
 
+RUNTIME_RAG_FALLBACK_SKIP_TERMS = RUNTIME_EXCIPIENT_VECTOR_EXCLUDED_TERMS | {
+    "\uac00\uacf5\uc720\uc9c0",
+    "\uc720\ub2f9",
+    "\uc720\ub2f9\ud63c\ud569\ubd84\ub9d0",
+    "\uac74\uc870\ud6a8\ubaa8",
+    "\ucc44\uc18c\ud63c\ud569\ubd84\ub9d0",
+    "\ucc44\uc18c\ud638\ud569\ubd84\ub9d0",
+    "\uc57c\ucc44\ud63c\ud569\ubd84\ub9d0",
+    "\uc804\ubd84",
+}
+
+RUNTIME_LOW_SIGNAL_UPLOAD_VECTOR_EXACT_TERMS = {
+    "\uac00\uacf5\uc720\uc9c0",
+    "\uc720\ub2f9",
+    "\uc720\ub2f9\ud63c\ud569\ubd84\ub9d0",
+    "\uac74\uc870\ud6a8\ubaa8",
+    "\ucc44\uc18c\ud63c\ud569\ubd84\ub9d0",
+    "\ucc44\uc18c\ud638\ud569\ubd84\ub9d0",
+    "\uc57c\ucc44\ud63c\ud569\ubd84\ub9d0",
+    "\uc804\ubd84",
+}
+
 RUNTIME_VECTOR_EXCLUSION_REASON_MESSAGES = {
     "excluded_from_vector_by_cache_like_guard": "cache_like guard excluded this match from the upload vector",
     "excluded_from_vector_by_excipient_guard": "excipient guard excluded this match from the upload vector",
+    "excluded_from_vector_by_low_signal_upload_guard": "low-signal upload ingredient excluded from the upload vector",
     "excluded_from_vector_by_relation_guard": "relation type guard excluded this match from the upload vector",
 }
 
@@ -539,6 +564,21 @@ def contains_guarded_runtime_term(value: str, guarded_terms: set[str]) -> bool:
         if normalized_value == normalized_term or normalized_term in normalized_value:
             return True
     return False
+
+
+def contains_exact_guarded_runtime_term(value: str, guarded_terms: set[str]) -> bool:
+    normalized_value = normalize_cache_exact_key(value)
+    if not normalized_value:
+        return False
+    for term in guarded_terms:
+        normalized_term = normalize_cache_exact_key(term)
+        if normalized_term and normalized_value == normalized_term:
+            return True
+    return False
+
+
+def is_low_signal_upload_vector_term(*values: str) -> bool:
+    return any(contains_exact_guarded_runtime_term(value, RUNTIME_LOW_SIGNAL_UPLOAD_VECTOR_EXACT_TERMS) for value in values)
 
 
 def looks_like_runtime_measurement_or_symbol(value: str) -> bool:
@@ -1685,6 +1725,9 @@ class UploadRecommendationService:
         confidence = float(item.get("confidence", 0.0) or 0.0)
         functional_premix_input = _looks_like_functional_premix(raw_input) or _looks_like_functional_premix(display_name)
 
+        if is_low_signal_upload_vector_term(raw_input, display_name, normalized_input):
+            return "excluded_from_vector_by_low_signal_upload_guard"
+
         if self._is_excipient_vector_excluded(raw_input, display_name, normalized_input, functional_name) and not functional_premix_input:
             return "excluded_from_vector_by_excipient_guard"
 
@@ -2027,7 +2070,7 @@ class UploadRecommendationService:
             return None
         if contains_guarded_runtime_term(query, RUNTIME_CACHE_LIKE_VECTOR_EXCLUDED_TERMS):
             return None
-        if contains_guarded_runtime_term(query, RUNTIME_EXCIPIENT_VECTOR_EXCLUDED_TERMS):
+        if contains_guarded_runtime_term(query, RUNTIME_RAG_FALLBACK_SKIP_TERMS):
             return None
 
         update_request_progress(
@@ -2054,6 +2097,16 @@ class UploadRecommendationService:
         results = self._merge_runtime_candidate_lists(embedding_results, lexical_results, top_k=max(RUNTIME_RAG_TOP_K, 8))
         if results and not self._has_strong_runtime_rag_signal(results):
             results = []
+        if not results:
+            update_request_progress(
+                request_id,
+                phase="ingredient_rag_no_candidate",
+                message="RAG 후보가 없어 LLM 판정을 생략했습니다.",
+                detail=f"원료: {display_name or raw_ingredient or ingredient_name}",
+                current_ingredient=display_name or raw_ingredient or ingredient_name,
+                extra={"rag_candidates": []},
+            )
+            return None
 
         candidate_names = [str(item.get("standard_name", "") or "") for item in results[:5]]
         update_request_progress(
@@ -3166,15 +3219,19 @@ class UploadRecommendationService:
                 semantic_weight_reason = str(semantic_detail.get("semantic_weight_reason", "") or "")
                 semantic_key = str(semantic_detail.get("semantic_key", "") or "")
             else:
+                vector_exclusion_reason = str(match.get("vector_exclusion_reason", "") or "") if match else ""
                 is_excipient_value = input_role == "excipient" or is_excipient(display_value) or is_excipient(normalized_value)
-                ingredient_type = "excipient" if is_excipient_value else ("functional" if match else "unmatched")
+                if vector_exclusion_reason == "excluded_from_vector_by_low_signal_upload_guard":
+                    ingredient_type = "low_signal_food_base"
+                else:
+                    ingredient_type = "excipient" if is_excipient_value else ("functional" if match else "unmatched")
                 vector_include = False
                 ingredient_main_category = str(category_row.get("category_main", "") or "")
                 sub_function_categories = []
                 semantic_weight = 0.0
-                semantic_weight_reason = "unmatched_ingredient" if not match else "semantic_detail_unavailable"
+                semantic_weight_reason = "unmatched_ingredient" if not match else (vector_exclusion_reason or "semantic_detail_unavailable")
                 if is_excipient_value:
-                    semantic_weight_reason = "excluded_non_functional"
+                    semantic_weight_reason = vector_exclusion_reason or "excluded_non_functional"
                 semantic_key = profile_name or functional_name or normalized_value or display_value
             statuses.append(
                 {
@@ -4032,8 +4089,15 @@ class UploadRecommendationService:
         llm_rerank: bool = False,
         request_id: str = "",
     ) -> dict:
-        self._ensure_loaded()
         started = time.perf_counter()
+        update_request_progress(
+            request_id,
+            phase="service_loading",
+            message="추천 DB와 원료 프로필을 로딩하는 중입니다.",
+            percent=3,
+            detail="초기 요청에서는 이 단계가 오래 걸릴 수 있습니다.",
+        )
+        self._ensure_loaded()
         update_request_progress(
             request_id,
             phase="ingredient_input",
@@ -4139,8 +4203,15 @@ class UploadRecommendationService:
         llm_rerank: bool = False,
         request_id: str = "",
     ) -> dict:
-        self._ensure_loaded()
         started = time.perf_counter()
+        update_request_progress(
+            request_id,
+            phase="service_loading",
+            message="추천 DB와 원료 프로필을 로딩하는 중입니다.",
+            percent=3,
+            detail="초기 요청에서는 이 단계가 오래 걸릴 수 있습니다.",
+        )
+        self._ensure_loaded()
         update_request_progress(request_id, phase="ocr_parse", message="OCR 텍스트에서 원료 후보를 파싱하는 중입니다.", percent=35)
         parsed = parse_ingredients_from_ocr_text(raw_text, self.recommendation_service.runtime["sqlite_path"])
         matched = self.match_raw_ingredients_to_functional_ingredients(parsed.get("ingredient_objects", []), request_id=request_id)
@@ -4254,8 +4325,15 @@ class UploadRecommendationService:
         llm_rerank: bool = False,
         request_id: str = "",
     ) -> dict:
-        self._ensure_loaded()
         started = time.perf_counter()
+        update_request_progress(
+            request_id,
+            phase="service_loading",
+            message="추천 DB와 원료 프로필을 로딩하는 중입니다.",
+            percent=3,
+            detail="초기 요청에서는 이 단계가 오래 걸릴 수 있습니다.",
+        )
+        self._ensure_loaded()
         update_request_progress(
             request_id,
             phase="image_prepare",
