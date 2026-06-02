@@ -8,6 +8,7 @@ from typing import Optional
 from urllib.parse import quote_plus
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
@@ -713,24 +714,28 @@ async def recommend_by_image(
     if len(image_bytes) > max_size:
         raise HTTPException(status_code=400, detail=f"file too large: max {settings.upload_max_file_size_mb}MB")
 
-    payload = upload_service.recommend_from_uploaded_image(
-        image_bytes,
-        filename,
-        top_k,
-        candidate_limit,
-        llm_rerank=llm_rerank,
-        request_id=request_id,
-    )
-    ops_service.save_ocr_review(user_id=user.user_id, source_type="image", response_payload=payload)
-    ops_service.log_event(
-        event_type="ocr_recommend",
-        level="info",
-        user_id=user.user_id,
-        request_path="/api/recommend/by-image",
-        request_method="POST",
-        message=f"image recommend:{filename}",
-        payload={"trace_id": payload.get("trace_id", ""), "filename": filename},
-    )
+    def _run_image_recommendation() -> dict:
+        payload = upload_service.recommend_from_uploaded_image(
+            image_bytes,
+            filename,
+            top_k,
+            candidate_limit,
+            llm_rerank=llm_rerank,
+            request_id=request_id,
+        )
+        ops_service.save_ocr_review(user_id=user.user_id, source_type="image", response_payload=payload)
+        ops_service.log_event(
+            event_type="ocr_recommend",
+            level="info",
+            user_id=user.user_id,
+            request_path="/api/recommend/by-image",
+            request_method="POST",
+            message=f"image recommend:{filename}",
+            payload={"trace_id": payload.get("trace_id", ""), "filename": filename},
+        )
+        return payload
+
+    payload = await run_in_threadpool(_run_image_recommendation)
     return UploadRecommendationResponse(**payload)
 
 
