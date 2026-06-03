@@ -24,28 +24,104 @@ from config_loader import get_config_value, load_config
 
 TABLE_NAME = "product_similarity_explanation_cache"
 SIMILARITY_ALGORITHM_V1 = "role_component_v2"
-SIMILARITY_ALGORITHM_V2 = "semantic_weighted_jaccard_v2"
+SIMILARITY_ALGORITHM_V2_LEGACY = "semantic_weighted_jaccard_v2"
+SIMILARITY_ALGORITHM_V2_1 = "semantic_weighted_jaccard_v2_1"
+SIMILARITY_ALGORITHM_V2_2 = "semantic_weighted_jaccard_v2_2"
+SIMILARITY_ALGORITHM_V2_3 = "semantic_weighted_jaccard_v2_3"
+SIMILARITY_ALGORITHM_V2_4 = "semantic_weighted_jaccard_v2_4"
+SIMILARITY_ALGORITHM_V2_5 = "semantic_weighted_jaccard_v2_5"
+SIMILARITY_ALGORITHM_V2_6 = "semantic_weighted_jaccard_v2_6"
+SIMILARITY_ALGORITHM_V2 = "semantic_weighted_jaccard_v2_7"
 SIMILARITY_ALGORITHM_VERSION = SIMILARITY_ALGORITHM_V2
 SIMILARITY_ALGORITHM_ALIASES = {
     "v1": SIMILARITY_ALGORITHM_V1,
     SIMILARITY_ALGORITHM_V1: SIMILARITY_ALGORITHM_V1,
     "role_component": SIMILARITY_ALGORITHM_V1,
     "v2": SIMILARITY_ALGORITHM_V2,
+    "v2.1": SIMILARITY_ALGORITHM_V2,
+    "v2_1": SIMILARITY_ALGORITHM_V2,
+    "v2.2": SIMILARITY_ALGORITHM_V2,
+    "v2_2": SIMILARITY_ALGORITHM_V2,
+    "v2.3": SIMILARITY_ALGORITHM_V2,
+    "v2_3": SIMILARITY_ALGORITHM_V2,
+    "v2.4": SIMILARITY_ALGORITHM_V2,
+    "v2_4": SIMILARITY_ALGORITHM_V2,
+    "v2.5": SIMILARITY_ALGORITHM_V2,
+    "v2_5": SIMILARITY_ALGORITHM_V2,
+    "v2.6": SIMILARITY_ALGORITHM_V2,
+    "v2_6": SIMILARITY_ALGORITHM_V2,
+    "v2.7": SIMILARITY_ALGORITHM_V2,
+    "v2_7": SIMILARITY_ALGORITHM_V2,
+    SIMILARITY_ALGORITHM_V2_LEGACY: SIMILARITY_ALGORITHM_V2,
+    SIMILARITY_ALGORITHM_V2_1: SIMILARITY_ALGORITHM_V2,
+    SIMILARITY_ALGORITHM_V2_2: SIMILARITY_ALGORITHM_V2,
+    SIMILARITY_ALGORITHM_V2_3: SIMILARITY_ALGORITHM_V2,
+    SIMILARITY_ALGORITHM_V2_4: SIMILARITY_ALGORITHM_V2,
+    SIMILARITY_ALGORITHM_V2_5: SIMILARITY_ALGORITHM_V2,
+    SIMILARITY_ALGORITHM_V2_6: SIMILARITY_ALGORITHM_V2,
     SIMILARITY_ALGORITHM_V2: SIMILARITY_ALGORITHM_V2,
     "semantic": SIMILARITY_ALGORITHM_V2,
     "semantic_jaccard": SIMILARITY_ALGORITHM_V2,
+    "semantic_v2_1": SIMILARITY_ALGORITHM_V2,
+    "semantic_v2_2": SIMILARITY_ALGORITHM_V2,
+    "semantic_v2_3": SIMILARITY_ALGORITHM_V2,
+    "semantic_v2_4": SIMILARITY_ALGORITHM_V2,
+    "semantic_v2_5": SIMILARITY_ALGORITHM_V2,
+    "semantic_v2_6": SIMILARITY_ALGORITHM_V2,
+    "semantic_v2_7": SIMILARITY_ALGORITHM_V2,
 }
 DEFAULT_TOP_K = 10
 DEFAULT_CANDIDATE_LIMIT = 1000
 DEFAULT_MAX_DF_FOR_SEED = 3000
 SEMANTIC_MATCH_CONFIDENCE_MIN = 0.45
 NUTRITION_MAIN_CATEGORY = "\uc601\uc591\ubcf4\ucda9"
+BONE_HEALTH_MAIN_CATEGORY = "\ubf08 \uac74\uac15"
 GENERIC_NUTRIENT_VECTOR_SHARE_CAP = 0.20
+GENERIC_NUTRIENT_ONLY_CROSS_MAIN_SCORE_CAP = 0.45
+GENERIC_NUTRIENT_ONLY_NUTRITION_MAIN_SCORE_CAP = 0.64
+GENERIC_NUTRIENT_ONLY_SAME_MAIN_SCORE_CAP = 0.55
+GENERIC_NUTRIENT_DOMINANT_SHARED_RATIO = 0.75
+GENERIC_NUTRIENT_DOMINANT_MIN_GENERIC_KEYS = 3
+GENERIC_NUTRIENT_DOMINANT_MAX_NON_GENERIC_KEYS = 2
+GENERIC_NUTRIENT_DOMINANT_MAX_WEAK_ADJUNCT_KEYS = 3
+WEAK_SIGNAL_ONLY_CROSS_MAIN_SCORE_CAP = 0.45
+WEAK_SIGNAL_ONLY_SCORE_CAP = 0.64
+SINGLE_CORE_LOW_SHARED_SCORE_CAP = 0.64
+SINGLE_CORE_LOW_SHARED_MAX_SHARED_KEYS = 2
+SINGLE_CORE_LOW_SHARED_MIN_BASE_ONLY_KEYS = 3
+NO_CORE_LOW_SHARED_SCORE_CAP = 0.64
+NO_CORE_LOW_SHARED_MAX_SHARED_KEYS = 2
+NO_CORE_LOW_SHARED_MAX_WEAK_SHARED_KEYS = 3
+NO_CORE_LOW_SHARED_MIN_BASE_ONLY_KEYS = 3
+CROSS_MAIN_SHARED_SUBCATEGORY_ONLY_SCORE_CAP = 0.64
+NUTRITION_SUBTYPE_MISMATCH_SCORE_CAP = 0.52
+NUTRITION_GENERIC_LOW_CORE_COVERAGE_SCORE_CAP = 0.64
+NUTRITION_GENERIC_LOW_CORE_COVERAGE_MAX_BASE_CORE_COVERAGE = 0.35
+NUTRITION_GENERIC_LOW_CORE_COVERAGE_MIN_GENERIC_RATIO = 0.60
+RECOMMENDATION_DISPLAY_SCORE_MIN = 0.65
+RECOMMENDATION_REVIEW_SCORE_MIN = 0.45
+RECOMMENDATION_REVIEW_FUNCTION_MIN = 0.40
+RECOMMENDATION_LOW_SCORE_CORE_MIN = 0.50
+RECOMMENDATION_LOW_SCORE_CORE_MATCH_MIN = 0.60
+RECOMMENDATION_RISKY_ADJUSTMENT_MARKERS = (
+    "generic_nutrient",
+    "nutrition_subtype_mismatch",
+    "weak_signal_only",
+)
+REVIEW_SIGNAL_MARKERS = (
+    "claim_text_category_fallback",
+    "\uac80\ud1a0\ud544\uc694",
+)
+GENERIC_NUTRIENT_ONLY_MAIN_CATEGORY_ALLOWLIST = {
+    "\uae30\ud0c0",
+    "\ud608\uc555",
+}
 FAMILY_SIGNAL_MAIN_CATEGORY_WEIGHT = 0.35
 FAMILY_SIGNAL_SUB_CATEGORY_WEIGHT = 0.30
 FAMILY_SIGNAL_WEAK_WEIGHT = 0.20
+REVIEW_FALLBACK_SIGNAL_WEIGHT = 0.30
 PARTIAL_CORE_COVERAGE_FLOOR = 0.85
-NO_CORE_COVERAGE_MULTIPLIER = 0.72
+NO_CORE_COVERAGE_MULTIPLIER = 0.68
 SEMANTIC_CORE_WEIGHT_MIN = 0.7
 SPARSE_EXACT_SCORE_CAP = 0.97
 SPARSE_EXACT_EFFECTIVE_WEIGHT_MAX = 1.5
@@ -70,6 +146,70 @@ LOW_PRIORITY_PATTERNS = [
     r"히드록시프로필메틸셀룰로오스",
     r"\bhpmc\b",
     r"난소화성말토덱스트린",
+]
+
+GENERIC_NUTRIENT_NAME_PATTERNS = [
+    r"^비타민\s*[a-z]?\d*",
+    r"비타민\s*[a-z]?\d*",
+    r"나이아신",
+    r"니아신",
+    r"비오틴",
+    r"판토텐산",
+    r"엽산",
+    r"아연",
+    r"셀렌",
+    r"셀레늄",
+    r"마그네슘",
+    r"칼슘",
+    r"철",
+    r"망간",
+    r"구리",
+    r"크롬",
+    r"몰리브덴",
+    r"요오드",
+    r"칼륨",
+    r"베타카로틴",
+]
+
+BONE_CORE_NUTRIENT_NAME_PATTERNS = [
+    r"칼슘",
+    r"마그네슘",
+    r"비타민\s*d",
+    r"비타민\s*k",
+    r"\bk2\b",
+]
+
+NUTRITION_ADJUNCT_NAME_PATTERNS = [
+    r"농축분말",
+    r"과즙분말",
+    r"향분말",
+    r"맛분말",
+    r"자일리톨",
+]
+
+NUTRITION_SUBTYPE_NAME_RULES = [
+    ("folate", [r"엽산", r"folate", r"테트라히드로엽산"]),
+    ("iron", [r"철분", r"\bfe\b", r"\biron\b", r"제일철"]),
+    ("zinc", [r"아연", r"\bzinc\b"]),
+    ("selenium", [r"셀렌", r"셀레늄", r"selen"]),
+    ("calcium_magnesium_d", [r"칼슘", r"마그네슘", r"비타민\s*d", r"\bcalcium\b", r"\bmagnesium\b"]),
+    ("vitamin_c", [r"비타민\s*c", r"\bvitamin\s*c\b", r"\bvita\s*c\b"]),
+    ("vitamin_d", [r"비타민\s*d", r"\bvitamin\s*d\b"]),
+    ("b_complex", [r"비타민\s*b", r"비타민b", r"\bb\s*complex\b", r"b컴플렉스"]),
+    ("biotin", [r"비오틴", r"biotin"]),
+    ("multivitamin", [r"멀티비타민", r"종합비타민", r"multi\s*vitamin", r"multivitamin"]),
+]
+
+NUTRITION_SUBTYPE_INGREDIENT_RULES = [
+    ("folate", [r"엽산", r"테트라히드로엽산"]),
+    ("iron", [r"철", r"제일철"]),
+    ("zinc", [r"아연"]),
+    ("selenium", [r"셀렌", r"셀레늄"]),
+    ("calcium_magnesium_d", [r"칼슘", r"마그네슘", r"비타민\s*d", r"비타민\s*k"]),
+    ("vitamin_c", [r"비타민\s*c"]),
+    ("vitamin_d", [r"비타민\s*d"]),
+    ("b_complex", [r"비타민\s*b", r"나이아신", r"판토텐산", r"비오틴"]),
+    ("biotin", [r"비오틴"]),
 ]
 
 EXCIPIENT_PATTERNS = [
@@ -274,6 +414,59 @@ def is_low_priority_reason_ingredient(name: str, category: str) -> bool:
     return ingredient_matches_patterns(name, LOW_PRIORITY_PATTERNS)
 
 
+def is_generic_nutrient_name(name: str) -> bool:
+    return ingredient_matches_patterns(name, GENERIC_NUTRIENT_NAME_PATTERNS)
+
+
+def is_bone_core_nutrient_name(name: str) -> bool:
+    return ingredient_matches_patterns(name, BONE_CORE_NUTRIENT_NAME_PATTERNS)
+
+
+def is_nutrition_adjunct_name(name: str) -> bool:
+    return ingredient_matches_patterns(name, NUTRITION_ADJUNCT_NAME_PATTERNS)
+
+
+def nutrition_subtype_from_profile(profile: dict, details: dict[str, dict] | None = None) -> str:
+    if str(profile.get("product_main_category", "") or "").strip() != NUTRITION_MAIN_CATEGORY:
+        return ""
+
+    product_name = str(profile.get("product_name", "") or "")
+    for subtype, patterns in NUTRITION_SUBTYPE_NAME_RULES:
+        if ingredient_matches_patterns(product_name, patterns):
+            return subtype
+
+    ingredient_names: list[str] = []
+    for detail in (details or {}).values():
+        if str(detail.get("semantic_key", "") or "").startswith("__"):
+            continue
+        ingredient_names.extend(
+            str(name or "").strip()
+            for name in detail.get("ingredients", []) or []
+            if str(name or "").strip()
+        )
+    if not ingredient_names:
+        for item in ingredient_score_items(profile):
+            name = str(item.get("ingredient", "") or "").strip()
+            if name:
+                ingredient_names.append(name)
+
+    subtype_counts: dict[str, int] = defaultdict(int)
+    for ingredient in ingredient_names:
+        for subtype, patterns in NUTRITION_SUBTYPE_INGREDIENT_RULES:
+            if ingredient_matches_patterns(ingredient, patterns):
+                subtype_counts[subtype] += 1
+
+    if len(ingredient_names) >= 6 and sum(subtype_counts.values()) >= 4:
+        return "multivitamin"
+    if not subtype_counts:
+        return ""
+
+    ranked = sorted(subtype_counts.items(), key=lambda item: (-item[1], item[0]))
+    if len(ranked) == 1 or ranked[0][1] > ranked[1][1]:
+        return ranked[0][0]
+    return "multivitamin" if sum(subtype_counts.values()) >= 4 else ranked[0][0]
+
+
 def save_jsonl(path: Path, rows: list[dict]) -> None:
     with path.open("w", encoding="utf-8") as file:
         for row in rows:
@@ -390,6 +583,8 @@ def load_ingredient_category_profiles(path=None) -> dict[str, dict]:
             "confidence": float(row.get("confidence", 0.0) or 0.0),
             "reason": str(row.get("reason", "") or "").strip(),
             "source": str(row.get("source", "") or "").strip(),
+            "legacy_category_main": str(row.get("legacy_category_main", "") or "").strip(),
+            "legacy_category_sub": str(row.get("legacy_category_sub", "") or "").strip(),
         }
     return profiles
 
@@ -721,6 +916,18 @@ def product_semantic_category_set(profile: dict) -> set[str]:
     return {category for category in categories if category}
 
 
+def ingredient_profile_has_review_marker(ingredient_profile: dict) -> bool:
+    values = [
+        str(ingredient_profile.get("reason", "") or ""),
+        str(ingredient_profile.get("source", "") or ""),
+        str(ingredient_profile.get("legacy_category_main", "") or ""),
+        str(ingredient_profile.get("legacy_category_sub", "") or ""),
+    ]
+    values.extend(str(item or "") for item in ingredient_profile.get("ingredient_sub_function_categories", []) or [])
+    text = " ".join(values)
+    return any(marker in text for marker in REVIEW_SIGNAL_MARKERS)
+
+
 def semantic_weight_for_product_ingredient(
     product_profile: dict,
     score_item: dict,
@@ -757,6 +964,10 @@ def semantic_weight_for_product_ingredient(
     }
     ingredient_categories = ({ingredient_main} if ingredient_main else set()) | ingredient_subs
     product_category_is_specific = product_main not in NON_SPECIFIC_CATEGORY_LABELS
+    review_fallback_signal = ingredient_profile_has_review_marker(ingredient_profile)
+
+    if product_main == NUTRITION_MAIN_CATEGORY and is_nutrition_adjunct_name(ingredient):
+        return 0.2, "nutrition_adjunct_weak_signal", ingredient_profile
 
     if ingredient_type in {"nutrient", "generic_nutrient"}:
         if product_category_is_specific and product_main in ingredient_categories:
@@ -777,10 +988,16 @@ def semantic_weight_for_product_ingredient(
         return FAMILY_SIGNAL_WEAK_WEIGHT, "family_signal_weak", ingredient_profile
 
     if product_category_is_specific and product_main == ingredient_main:
+        if review_fallback_signal:
+            return REVIEW_FALLBACK_SIGNAL_WEIGHT, "review_fallback_main_category_weak_signal", ingredient_profile
         return 1.0, "main_category_match", ingredient_profile
     if product_category_is_specific and product_main in ingredient_subs:
+        if review_fallback_signal:
+            return REVIEW_FALLBACK_SIGNAL_WEIGHT, "review_fallback_sub_category_weak_signal", ingredient_profile
         return 0.7, "product_main_in_ingredient_sub_functions", ingredient_profile
     if product_subs & ingredient_categories:
+        if review_fallback_signal:
+            return REVIEW_FALLBACK_SIGNAL_WEIGHT, "review_fallback_sub_category_weak_signal", ingredient_profile
         return 0.7, "product_sub_function_overlap", ingredient_profile
     if ingredient_type == "functional":
         return 0.3, "functional_weak_signal", ingredient_profile
@@ -861,6 +1078,11 @@ def build_semantic_weight_vector(
                     "ingredient_main_category": str(ingredient_profile.get("ingredient_main_category", "") or ""),
                     "ingredient_sub_function_categories": list(ingredient_profile.get("ingredient_sub_function_categories", []) or []),
                     "ingredient_type": str(ingredient_profile.get("ingredient_type", "") or ""),
+                    "ingredient_confidence": ingredient_profile.get("confidence", ""),
+                    "ingredient_category_reason": str(ingredient_profile.get("reason", "") or ""),
+                    "ingredient_source": str(ingredient_profile.get("source", "") or ""),
+                    "legacy_category_main": str(ingredient_profile.get("legacy_category_main", "") or ""),
+                    "legacy_category_sub": str(ingredient_profile.get("legacy_category_sub", "") or ""),
                     "vector_include": coerce_bool(ingredient_profile.get("vector_include", True), True),
                     "is_excipient": coerce_bool(ingredient_profile.get("is_excipient", False), False),
                     "relation_type": str(score_item.get("relation_type", "") or score_item.get("best_relation_type", "") or ""),
@@ -911,6 +1133,23 @@ def semantic_core_keys_from_details(active_vector: dict[str, float], details: di
             continue
         keys.add(key)
     return keys
+
+
+def is_generic_nutrient_signal_detail(detail: dict) -> bool:
+    ingredient_type = str(detail.get("ingredient_type", "") or "").strip()
+    if ingredient_type in {"nutrient", "generic_nutrient"}:
+        return True
+    ingredient_names = [str(name or "").strip() for name in detail.get("ingredients", []) or [] if str(name or "").strip()]
+    if ingredient_names and all(is_generic_nutrient_name(name) for name in ingredient_names):
+        return True
+    ingredient_main = str(detail.get("ingredient_main_category", "") or "").strip()
+    weight = float(detail.get("weight", 0.0) or 0.0)
+    return ingredient_main == NUTRITION_MAIN_CATEGORY and weight <= 0.4
+
+
+def is_bone_core_nutrient_signal_detail(detail: dict) -> bool:
+    ingredient_names = [str(name or "").strip() for name in detail.get("ingredients", []) or [] if str(name or "").strip()]
+    return bool(ingredient_names) and any(is_bone_core_nutrient_name(name) for name in ingredient_names)
 
 
 def semantic_core_coverage_detail(
@@ -1000,6 +1239,265 @@ def calculate_semantic_weighted_jaccard_v2(
                 "reason": core_coverage.get("reason"),
             }
         )
+    base_main_category = str(base_profile.get("product_main_category", "") or "").strip()
+    target_main_category = str(target_profile.get("product_main_category", "") or "").strip()
+    base_nutrition_subtype = nutrition_subtype_from_profile(base_profile, base_details)
+    target_nutrition_subtype = nutrition_subtype_from_profile(target_profile, target_details)
+    generic_nutrient_shared_keys = [
+        key
+        for key in shared_keys
+        if (
+            is_generic_nutrient_signal_detail(base_details.get(key, {}) or {})
+            and is_generic_nutrient_signal_detail(target_details.get(key, {}) or {})
+        )
+    ]
+    non_generic_nutrient_shared_keys = [key for key in shared_keys if key not in set(generic_nutrient_shared_keys)]
+    non_generic_nutrient_weak_adjunct_shared = (
+        len(non_generic_nutrient_shared_keys) <= GENERIC_NUTRIENT_DOMINANT_MAX_WEAK_ADJUNCT_KEYS
+        and all(
+            max(float(base_vector.get(key, 0.0) or 0.0), float(target_vector.get(key, 0.0) or 0.0)) < SEMANTIC_CORE_WEIGHT_MIN
+            for key in non_generic_nutrient_shared_keys
+        )
+    )
+    generic_nutrient_only_shared = bool(shared_keys) and len(generic_nutrient_shared_keys) == len(shared_keys)
+    generic_nutrient_dominant_shared = (
+        bool(shared_keys)
+        and len(generic_nutrient_shared_keys) >= GENERIC_NUTRIENT_DOMINANT_MIN_GENERIC_KEYS
+        and (
+            len(non_generic_nutrient_shared_keys) <= GENERIC_NUTRIENT_DOMINANT_MAX_NON_GENERIC_KEYS
+            or non_generic_nutrient_weak_adjunct_shared
+        )
+        and (len(generic_nutrient_shared_keys) / len(shared_keys)) >= GENERIC_NUTRIENT_DOMINANT_SHARED_RATIO
+    )
+    bone_core_generic_shared = (
+        base_main_category == BONE_HEALTH_MAIN_CATEGORY
+        and target_main_category == BONE_HEALTH_MAIN_CATEGORY
+        and any(
+            is_bone_core_nutrient_signal_detail(base_details.get(key, {}) or {})
+            or is_bone_core_nutrient_signal_detail(target_details.get(key, {}) or {})
+            for key in generic_nutrient_shared_keys
+        )
+    )
+    if generic_nutrient_only_shared and base_main_category != target_main_category:
+        original_score = score
+        score = min(score, GENERIC_NUTRIENT_ONLY_CROSS_MAIN_SCORE_CAP)
+        score_adjustments.append(
+            {
+                "type": "generic_nutrient_only_cross_main_score_cap",
+                "cap": GENERIC_NUTRIENT_ONLY_CROSS_MAIN_SCORE_CAP,
+                "original_score": round(float(original_score), 6),
+                "shared_keys": shared_keys,
+            }
+        )
+    elif (
+        (generic_nutrient_only_shared or generic_nutrient_dominant_shared)
+        and base_main_category == NUTRITION_MAIN_CATEGORY
+        and target_main_category == NUTRITION_MAIN_CATEGORY
+    ):
+        original_score = score
+        score = min(score, GENERIC_NUTRIENT_ONLY_NUTRITION_MAIN_SCORE_CAP)
+        score_adjustments.append(
+            {
+                "type": (
+                    "generic_nutrient_only_nutrition_main_score_cap"
+                    if generic_nutrient_only_shared
+                    else "generic_nutrient_dominant_nutrition_main_score_cap"
+                ),
+                "cap": GENERIC_NUTRIENT_ONLY_NUTRITION_MAIN_SCORE_CAP,
+                "original_score": round(float(original_score), 6),
+                "main_category": base_main_category,
+                "shared_keys": shared_keys,
+                "generic_nutrient_shared_keys": generic_nutrient_shared_keys,
+                "non_generic_nutrient_shared_keys": non_generic_nutrient_shared_keys,
+            }
+        )
+    elif (
+        generic_nutrient_only_shared
+        and base_main_category
+        and base_main_category == target_main_category
+        and base_main_category not in GENERIC_NUTRIENT_ONLY_MAIN_CATEGORY_ALLOWLIST
+        and not bone_core_generic_shared
+    ):
+        original_score = score
+        score = min(score, GENERIC_NUTRIENT_ONLY_SAME_MAIN_SCORE_CAP)
+        score_adjustments.append(
+            {
+                "type": "generic_nutrient_only_same_main_score_cap",
+                "cap": GENERIC_NUTRIENT_ONLY_SAME_MAIN_SCORE_CAP,
+                "original_score": round(float(original_score), 6),
+                "main_category": base_main_category,
+                "shared_keys": shared_keys,
+            }
+        )
+    if (
+        score > NUTRITION_SUBTYPE_MISMATCH_SCORE_CAP
+        and base_main_category == NUTRITION_MAIN_CATEGORY
+        and target_main_category == NUTRITION_MAIN_CATEGORY
+        and base_nutrition_subtype
+        and target_nutrition_subtype
+        and base_nutrition_subtype != target_nutrition_subtype
+    ):
+        original_score = score
+        score = min(score, NUTRITION_SUBTYPE_MISMATCH_SCORE_CAP)
+        score_adjustments.append(
+            {
+                "type": "nutrition_subtype_mismatch_score_cap",
+                "cap": NUTRITION_SUBTYPE_MISMATCH_SCORE_CAP,
+                "original_score": round(float(original_score), 6),
+                "base_nutrition_subtype": base_nutrition_subtype,
+                "target_nutrition_subtype": target_nutrition_subtype,
+                "shared_keys": shared_keys,
+            }
+        )
+    generic_nutrient_shared_ratio = (
+        (len(generic_nutrient_shared_keys) / len(shared_keys))
+        if shared_keys
+        else 0.0
+    )
+    if (
+        score > NUTRITION_GENERIC_LOW_CORE_COVERAGE_SCORE_CAP
+        and base_main_category == NUTRITION_MAIN_CATEGORY
+        and target_main_category == NUTRITION_MAIN_CATEGORY
+        and len(core_coverage.get("shared_core_semantic_keys", []) or []) <= 1
+        and len(core_coverage.get("base_core_semantic_keys", []) or []) >= 3
+        and float(core_coverage.get("base_core_coverage", 1.0) or 1.0)
+        <= NUTRITION_GENERIC_LOW_CORE_COVERAGE_MAX_BASE_CORE_COVERAGE
+        and generic_nutrient_shared_ratio >= NUTRITION_GENERIC_LOW_CORE_COVERAGE_MIN_GENERIC_RATIO
+    ):
+        original_score = score
+        score = min(score, NUTRITION_GENERIC_LOW_CORE_COVERAGE_SCORE_CAP)
+        score_adjustments.append(
+            {
+                "type": "nutrition_generic_low_core_coverage_score_cap",
+                "cap": NUTRITION_GENERIC_LOW_CORE_COVERAGE_SCORE_CAP,
+                "original_score": round(float(original_score), 6),
+                "base_core_coverage": round(float(core_coverage.get("base_core_coverage", 0.0) or 0.0), 6),
+                "shared_core_semantic_keys": list(core_coverage.get("shared_core_semantic_keys", []) or []),
+                "base_core_semantic_keys": list(core_coverage.get("base_core_semantic_keys", []) or []),
+                "generic_nutrient_shared_ratio": round(float(generic_nutrient_shared_ratio), 6),
+                "generic_nutrient_shared_keys": generic_nutrient_shared_keys,
+                "shared_keys": shared_keys,
+            }
+        )
+    weak_signal_only_shared = bool(shared_keys) and all(
+        max(float(base_vector.get(key, 0.0) or 0.0), float(target_vector.get(key, 0.0) or 0.0)) < SEMANTIC_CORE_WEIGHT_MIN
+        for key in shared_keys
+    )
+    no_semantic_core_keys = not core_coverage.get("base_core_semantic_keys") and not core_coverage.get("target_core_semantic_keys")
+    if (
+        score > WEAK_SIGNAL_ONLY_CROSS_MAIN_SCORE_CAP
+        and weak_signal_only_shared
+        and no_semantic_core_keys
+        and base_main_category
+        and target_main_category
+        and base_main_category != target_main_category
+    ):
+        original_score = score
+        score = min(score, WEAK_SIGNAL_ONLY_CROSS_MAIN_SCORE_CAP)
+        score_adjustments.append(
+            {
+                "type": "weak_signal_only_cross_main_score_cap",
+                "cap": WEAK_SIGNAL_ONLY_CROSS_MAIN_SCORE_CAP,
+                "original_score": round(float(original_score), 6),
+                "base_main_category": base_main_category,
+                "target_main_category": target_main_category,
+                "shared_keys": shared_keys,
+            }
+        )
+    elif (
+        score > WEAK_SIGNAL_ONLY_SCORE_CAP
+        and weak_signal_only_shared
+        and no_semantic_core_keys
+        and base_main_category
+        and base_main_category == target_main_category
+        and base_main_category not in GENERIC_NUTRIENT_ONLY_MAIN_CATEGORY_ALLOWLIST
+        and not bone_core_generic_shared
+    ):
+        original_score = score
+        score = min(score, WEAK_SIGNAL_ONLY_SCORE_CAP)
+        score_adjustments.append(
+            {
+                "type": "weak_signal_only_score_cap",
+                "cap": WEAK_SIGNAL_ONLY_SCORE_CAP,
+                "original_score": round(float(original_score), 6),
+                "main_category": base_main_category,
+                "shared_keys": shared_keys,
+            }
+        )
+    base_only_semantic_keys = [
+        key
+        for key in base_vector
+        if not key.startswith("__") and float(base_vector.get(key, 0.0) or 0.0) > 0.0 and key not in shared_keys
+    ]
+    if (
+        score > SINGLE_CORE_LOW_SHARED_SCORE_CAP
+        and base_main_category
+        and base_main_category == target_main_category
+        and len(core_coverage.get("shared_core_semantic_keys", []) or []) == 1
+        and len(shared_keys) <= SINGLE_CORE_LOW_SHARED_MAX_SHARED_KEYS
+        and len(base_only_semantic_keys) >= SINGLE_CORE_LOW_SHARED_MIN_BASE_ONLY_KEYS
+    ):
+        original_score = score
+        score = min(score, SINGLE_CORE_LOW_SHARED_SCORE_CAP)
+        score_adjustments.append(
+            {
+                "type": "single_core_low_shared_coverage_score_cap",
+                "cap": SINGLE_CORE_LOW_SHARED_SCORE_CAP,
+                "original_score": round(float(original_score), 6),
+                "shared_core_semantic_keys": list(core_coverage.get("shared_core_semantic_keys", []) or []),
+                "shared_keys": shared_keys,
+                "base_only_semantic_keys": base_only_semantic_keys,
+            }
+        )
+    if (
+        score > NO_CORE_LOW_SHARED_SCORE_CAP
+        and base_main_category
+        and base_main_category == target_main_category
+        and not (core_coverage.get("shared_core_semantic_keys", []) or [])
+        and (
+            len(shared_keys) <= NO_CORE_LOW_SHARED_MAX_SHARED_KEYS
+            or (weak_signal_only_shared and len(shared_keys) <= NO_CORE_LOW_SHARED_MAX_WEAK_SHARED_KEYS)
+        )
+        and len(base_only_semantic_keys) >= NO_CORE_LOW_SHARED_MIN_BASE_ONLY_KEYS
+    ):
+        original_score = score
+        score = min(score, NO_CORE_LOW_SHARED_SCORE_CAP)
+        score_adjustments.append(
+            {
+                "type": "no_core_low_shared_coverage_score_cap",
+                "cap": NO_CORE_LOW_SHARED_SCORE_CAP,
+                "original_score": round(float(original_score), 6),
+                "shared_keys": shared_keys,
+                "base_only_semantic_keys": base_only_semantic_keys,
+            }
+        )
+    if (
+        score > CROSS_MAIN_SHARED_SUBCATEGORY_ONLY_SCORE_CAP
+        and base_main_category not in NON_SPECIFIC_CATEGORY_LABELS
+        and target_main_category not in NON_SPECIFIC_CATEGORY_LABELS
+        and base_main_category != target_main_category
+    ):
+        base_categories = product_semantic_category_set(base_profile)
+        target_categories = product_semantic_category_set(target_profile)
+        shared_categories = sorted((base_categories & target_categories) - NON_SPECIFIC_CATEGORY_LABELS)
+        if (
+            shared_categories
+            and base_main_category not in target_categories
+            and target_main_category not in base_categories
+        ):
+            original_score = score
+            score = min(score, CROSS_MAIN_SHARED_SUBCATEGORY_ONLY_SCORE_CAP)
+            score_adjustments.append(
+                {
+                    "type": "cross_main_shared_subcategory_only_score_cap",
+                    "cap": CROSS_MAIN_SHARED_SUBCATEGORY_ONLY_SCORE_CAP,
+                    "original_score": round(float(original_score), 6),
+                    "base_main_category": base_main_category,
+                    "target_main_category": target_main_category,
+                    "shared_categories": shared_categories,
+                    "shared_keys": shared_keys,
+                }
+            )
     effective_base_total = sum(float(value or 0.0) for value in base_vector.values())
     effective_target_total = sum(float(value or 0.0) for value in target_vector.values())
     base_name_key = normalize_token(base_profile.get("product_name", ""))
@@ -1041,6 +1539,26 @@ def calculate_semantic_weighted_jaccard_v2(
                 "target_ingredients": target_names,
                 "base_relation_type": str(base_details.get(key, {}).get("relation_type", "") or ""),
                 "target_relation_type": str(target_details.get(key, {}).get("relation_type", "") or ""),
+                "base_ingredient_main_category": str(base_details.get(key, {}).get("ingredient_main_category", "") or ""),
+                "target_ingredient_main_category": str(target_details.get(key, {}).get("ingredient_main_category", "") or ""),
+                "base_ingredient_sub_function_categories": list(
+                    base_details.get(key, {}).get("ingredient_sub_function_categories", []) or []
+                ),
+                "target_ingredient_sub_function_categories": list(
+                    target_details.get(key, {}).get("ingredient_sub_function_categories", []) or []
+                ),
+                "base_ingredient_type": str(base_details.get(key, {}).get("ingredient_type", "") or ""),
+                "target_ingredient_type": str(target_details.get(key, {}).get("ingredient_type", "") or ""),
+                "base_ingredient_confidence": base_details.get(key, {}).get("ingredient_confidence", ""),
+                "target_ingredient_confidence": target_details.get(key, {}).get("ingredient_confidence", ""),
+                "base_ingredient_category_reason": str(base_details.get(key, {}).get("ingredient_category_reason", "") or ""),
+                "target_ingredient_category_reason": str(target_details.get(key, {}).get("ingredient_category_reason", "") or ""),
+                "base_ingredient_source": str(base_details.get(key, {}).get("ingredient_source", "") or ""),
+                "target_ingredient_source": str(target_details.get(key, {}).get("ingredient_source", "") or ""),
+                "base_legacy_category_main": str(base_details.get(key, {}).get("legacy_category_main", "") or ""),
+                "target_legacy_category_main": str(target_details.get(key, {}).get("legacy_category_main", "") or ""),
+                "base_legacy_category_sub": str(base_details.get(key, {}).get("legacy_category_sub", "") or ""),
+                "target_legacy_category_sub": str(target_details.get(key, {}).get("legacy_category_sub", "") or ""),
                 "base_v2_decision": str(base_details.get(key, {}).get("v2_decision", "") or ""),
                 "target_v2_decision": str(target_details.get(key, {}).get("v2_decision", "") or ""),
                 "base_source_raw_ingredients": str(base_details.get(key, {}).get("source_raw_ingredients", "") or ""),
@@ -1061,6 +1579,8 @@ def calculate_semantic_weighted_jaccard_v2(
         "effective_target_total": round(float(effective_target_total), 6),
         "base_semantic_ingredient_count": len(base_vector),
         "target_semantic_ingredient_count": len(target_vector),
+        "base_nutrition_subtype": base_nutrition_subtype,
+        "target_nutrition_subtype": target_nutrition_subtype,
         "shared_semantic_keys": shared_details,
     }
 
@@ -1104,6 +1624,152 @@ def calculate_core_match_score(base_profile: dict, target_profile: dict, semanti
     family_union = base_primary_families | target_primary_families
     family_score = 0.0 if not family_union else float(len(base_primary_families & target_primary_families) / len(family_union))
     return round(max(exact_score, family_score), 6)
+
+
+def semantic_shared_signal_is_weak_only(semantic_explanation: dict | None) -> bool:
+    shared_details = list((semantic_explanation or {}).get("shared_semantic_keys", []) or [])
+    if not shared_details:
+        return False
+    for detail in shared_details:
+        base_weight = float((detail or {}).get("base_weight", 0.0) or 0.0)
+        target_weight = float((detail or {}).get("target_weight", 0.0) or 0.0)
+        if max(base_weight, target_weight) >= SEMANTIC_CORE_WEIGHT_MIN:
+            return False
+    return True
+
+
+def _semantic_detail_has_review_marker(detail: dict, prefix: str) -> bool:
+    values: list[str] = []
+    for key in (
+        f"{prefix}_ingredient_source",
+        f"{prefix}_ingredient_category_reason",
+        f"{prefix}_legacy_category_main",
+        f"{prefix}_legacy_category_sub",
+        f"{prefix}_ingredient_main_category",
+    ):
+        values.append(str(detail.get(key, "") or ""))
+    for item in detail.get(f"{prefix}_ingredient_sub_function_categories", []) or []:
+        values.append(str(item or ""))
+    text = " ".join(values)
+    return any(marker in text for marker in REVIEW_SIGNAL_MARKERS)
+
+
+def semantic_sparse_review_signal_only(semantic_explanation: dict | None) -> bool:
+    explanation = semantic_explanation or {}
+    shared_details = list(explanation.get("shared_semantic_keys", []) or [])
+    if not shared_details:
+        return False
+    base_count = int(explanation.get("base_semantic_ingredient_count", 0) or 0)
+    target_count = int(explanation.get("target_semantic_ingredient_count", 0) or 0)
+    if min(base_count, target_count) > 1:
+        return False
+    return all(
+        _semantic_detail_has_review_marker(detail or {}, "base")
+        or _semantic_detail_has_review_marker(detail or {}, "target")
+        for detail in shared_details
+    )
+
+
+def semantic_single_core_low_shared_coverage(semantic_explanation: dict | None) -> bool:
+    explanation = semantic_explanation or {}
+    shared_details = list(explanation.get("shared_semantic_keys", []) or [])
+    if not shared_details:
+        return False
+    core_coverage = explanation.get("core_coverage", {}) or {}
+    shared_core_keys = set(core_coverage.get("shared_core_semantic_keys", []) or [])
+    if len(shared_core_keys) != 1:
+        return False
+    if len(shared_details) > SINGLE_CORE_LOW_SHARED_MAX_SHARED_KEYS:
+        non_core_shared = [
+            detail
+            for detail in shared_details
+            if str(detail.get("semantic_key", "") or "") not in shared_core_keys
+        ]
+        if len(non_core_shared) > GENERIC_NUTRIENT_DOMINANT_MAX_WEAK_ADJUNCT_KEYS:
+            return False
+        if any(
+            max(
+                float(detail.get("base_weight", 0.0) or 0.0),
+                float(detail.get("target_weight", 0.0) or 0.0),
+            )
+            >= SEMANTIC_CORE_WEIGHT_MIN
+            for detail in non_core_shared
+        ):
+            return False
+    base_count = int(explanation.get("base_semantic_ingredient_count", 0) or 0)
+    return (base_count - len(shared_details)) >= SINGLE_CORE_LOW_SHARED_MIN_BASE_ONLY_KEYS
+
+
+def recommendation_quality_metadata(
+    similarity_score: float,
+    semantic_explanation: dict | None = None,
+    core_match_score: float | None = None,
+    function_similarity_score: float | None = None,
+    exact_match: bool = False,
+) -> dict:
+    if exact_match:
+        return {
+            "recommendation_quality": "exact_match",
+            "recommendation_display_eligible": True,
+            "recommendation_review_reason": "",
+        }
+    score = float(similarity_score or 0.0)
+    if score >= RECOMMENDATION_DISPLAY_SCORE_MIN:
+        return {
+            "recommendation_quality": "strong_match",
+            "recommendation_display_eligible": True,
+            "recommendation_review_reason": "",
+        }
+    quality = "low_confidence_match" if score >= RECOMMENDATION_REVIEW_SCORE_MIN else "very_low_confidence_match"
+    adjustment_types = [
+        str(item.get("type", "") or "")
+        for item in (semantic_explanation or {}).get("score_adjustments", []) or []
+        if str(item.get("type", "") or "")
+    ]
+    weak_signal_only = any("weak_signal_only" in item for item in adjustment_types) or semantic_shared_signal_is_weak_only(
+        semantic_explanation
+    )
+    sparse_review_signal_only = semantic_sparse_review_signal_only(semantic_explanation)
+    single_core_low_shared_coverage = semantic_single_core_low_shared_coverage(semantic_explanation)
+    if score < RECOMMENDATION_REVIEW_SCORE_MIN:
+        reason = "below_review_score_min"
+    elif any("nutrition_subtype_mismatch" in item for item in adjustment_types):
+        reason = "nutrition_subtype_mismatch"
+    elif any("nutrition_generic_low_core_coverage" in item for item in adjustment_types):
+        reason = "nutrition_generic_low_core_coverage"
+    elif any("generic_nutrient" in item for item in adjustment_types):
+        reason = "generic_nutrient_only_or_dominant"
+    elif any("cross_main_shared_subcategory_only" in item for item in adjustment_types):
+        reason = "cross_main_shared_subcategory_only"
+    elif any("low_shared_coverage" in item for item in adjustment_types):
+        reason = "low_shared_coverage"
+    elif single_core_low_shared_coverage:
+        reason = "single_core_low_shared_coverage"
+    elif sparse_review_signal_only:
+        reason = "sparse_review_signal_only"
+    elif weak_signal_only:
+        reason = "weak_signal_only"
+    elif core_match_score is not None and float(core_match_score or 0.0) <= 0.0:
+        reason = "no_core_overlap"
+    elif (
+        score < RECOMMENDATION_LOW_SCORE_CORE_MIN
+        and core_match_score is not None
+        and float(core_match_score or 0.0) < RECOMMENDATION_LOW_SCORE_CORE_MATCH_MIN
+    ):
+        reason = "low_score_low_core_overlap"
+    elif function_similarity_score is not None and float(function_similarity_score or 0.0) < RECOMMENDATION_REVIEW_FUNCTION_MIN:
+        reason = "low_function_similarity"
+    else:
+        return {
+            "recommendation_quality": quality,
+            "recommendation_display_eligible": True,
+            "recommendation_review_reason": "",
+        }
+    return {
+        "recommendation_quality": quality,
+        "recommendation_display_eligible": False,
+        "recommendation_review_reason": reason,
+    }
 
 
 def sub_function_categories(profile: dict) -> list[str]:
@@ -1435,6 +2101,7 @@ def build_candidate_pool(
     max_df_for_seed: int,
 ) -> list[dict]:
     candidate_stats: dict[str, dict] = {}
+    base_main_category = base_profile.get("product_main_category")
     base_categories = {str(base_profile.get("product_main_category", "기타"))}
     base_categories.update(sub_function_categories(base_profile))
     base_focus_families = focus_joint_families(base_profile)
@@ -1464,7 +2131,7 @@ def build_candidate_pool(
     for candidate_id, profile in profiles.items():
         if candidate_id == base_product_id:
             continue
-        if profile.get("product_main_category") == base_profile.get("product_main_category"):
+        if profile.get("product_main_category") == base_main_category:
             ensure_candidate(candidate_id)
 
     seed_groups = [
@@ -1479,6 +2146,8 @@ def build_candidate_pool(
                 continue
             for candidate_id in ingredient_postings.get(ingredient, []):
                 if candidate_id == base_product_id or candidate_id not in profiles:
+                    continue
+                if profiles[candidate_id].get("product_main_category") != base_main_category:
                     continue
                 stat = ensure_candidate(candidate_id)
                 if role_name == "primary":
@@ -1522,8 +2191,8 @@ def build_candidate_pool_v2(
     ingredient_category_profiles: dict[str, dict] | None = None,
 ) -> list[dict]:
     candidate_stats: dict[str, dict] = {}
+    base_main_category = base_profile.get("product_main_category")
     base_categories = product_semantic_category_set(base_profile)
-    base_sub_categories = set(sub_function_categories(base_profile))
     base_focus_families = focus_joint_families(base_profile)
     base_semantic_vector, base_semantic_details = build_semantic_weight_vector(
         base_profile,
@@ -1553,11 +2222,8 @@ def build_candidate_pool_v2(
     for candidate_id, profile in profiles.items():
         if candidate_id == base_product_id:
             continue
-        candidate_categories = product_semantic_category_set(profile)
-        same_main = profile.get("product_main_category") == base_profile.get("product_main_category")
-        sub_overlap = bool(base_sub_categories & candidate_categories)
-        family_overlap = bool(base_focus_families & focus_joint_families(profile))
-        if same_main or sub_overlap or family_overlap:
+        same_main = profile.get("product_main_category") == base_main_category
+        if same_main:
             ensure_candidate(candidate_id)
 
     for semantic_key, semantic_weight in base_semantic_vector.items():
@@ -1570,6 +2236,8 @@ def build_candidate_pool_v2(
                 continue
             for candidate_id in ingredient_postings.get(ingredient, []):
                 if candidate_id == base_product_id or candidate_id not in profiles:
+                    continue
+                if profiles[candidate_id].get("product_main_category") != base_main_category:
                     continue
                 stat = ensure_candidate(candidate_id)
                 stat["shared_semantic_ingredient_count"] += 1
@@ -1816,6 +2484,12 @@ def compute_topk_for_single_product(
             explanation_json["similarity_algorithm"] = similarity_algorithm
             if semantic_explanation:
                 explanation_json["semantic_weighted_jaccard_v2"] = semantic_explanation
+            quality_metadata = recommendation_quality_metadata(
+                similarity_score,
+                semantic_explanation,
+                core_match_score,
+                function_similarity_score,
+            )
             rows.append(
                 {
                     "base_product_id": base_product_id,
@@ -1836,6 +2510,7 @@ def compute_topk_for_single_product(
                     "caution": generate_caution(),
                     "explanation_json": json.dumps(explanation_json, ensure_ascii=False),
                     "similarity_algorithm": similarity_algorithm,
+                    **quality_metadata,
                 }
             )
         except Exception as exc:  # noqa: BLE001

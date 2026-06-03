@@ -52,6 +52,9 @@ class RecommendationItem(BaseModel):
     function_similarity_score: float
     core_match_score: float
     substitutability: str
+    recommendation_quality: str = ""
+    recommendation_display_eligible: bool = True
+    recommendation_review_reason: str = ""
     shared_ingredients: List[str]
     target_primary_ingredients: List[str] = Field(default_factory=list)
     target_secondary_ingredients: List[str] = Field(default_factory=list)

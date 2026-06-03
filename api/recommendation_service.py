@@ -22,6 +22,7 @@ from scripts.enhance_similarity_with_explanation import (
     load_vector_inputs,
     is_semantic_excipient_name,
     normalize_similarity_algorithm,
+    recommendation_quality_metadata,
     refresh_cache_rows,
     resolve_runtime_paths,
     safe_json_loads,
@@ -203,7 +204,13 @@ class RecommendationService:
                 f"CREATE INDEX IF NOT EXISTS idx_{CATALOG_TABLE_NAME}_product_name ON {CATALOG_TABLE_NAME}(product_name)"
             )
             conn.execute(
+                f"CREATE INDEX IF NOT EXISTS idx_{CATALOG_TABLE_NAME}_product_name_report_no ON {CATALOG_TABLE_NAME}(product_name, report_no)"
+            )
+            conn.execute(
                 f"CREATE INDEX IF NOT EXISTS idx_{CATALOG_TABLE_NAME}_company_name ON {CATALOG_TABLE_NAME}(company_name)"
+            )
+            conn.execute(
+                f"CREATE INDEX IF NOT EXISTS idx_{CATALOG_TABLE_NAME}_company_name_report_no ON {CATALOG_TABLE_NAME}(company_name, report_no)"
             )
 
             row = conn.execute(
@@ -334,6 +341,9 @@ class RecommendationService:
             )
             conn.execute(
                 f"CREATE INDEX IF NOT EXISTS idx_{UPLOADED_PRODUCT_TABLE_NAME}_product_name ON {UPLOADED_PRODUCT_TABLE_NAME}(product_name)"
+            )
+            conn.execute(
+                f"CREATE INDEX IF NOT EXISTS idx_{UPLOADED_PRODUCT_TABLE_NAME}_product_name_report_no ON {UPLOADED_PRODUCT_TABLE_NAME}(product_name, report_no)"
             )
             columns = {
                 str(row[1] or "")
@@ -561,10 +571,8 @@ class RecommendationService:
         query_text = str(query or "").strip()
         normalized = query_text.replace(" ", "")
         offset = max(0, (page - 1) * page_size)
-        rows = self._load_catalog_rows(query_text, normalized)
-        total_count = len(rows)
-        paged_rows = rows[offset : offset + page_size]
-        results = [self._merge_catalog_with_profile(row) for row in paged_rows]
+        rows, total_count = self._load_catalog_page(query_text, normalized, page_size, offset)
+        results = [self._merge_catalog_with_profile(row) for row in rows]
         return {
             "query": query,
             "page": page,
@@ -575,78 +583,158 @@ class RecommendationService:
 
     def get_catalog_product_detail(self, report_no: str) -> Optional[dict]:
         self.ensure_loaded()
-        rows = self._load_catalog_rows(str(report_no), str(report_no).replace(" ", ""))
-        target = next((row for row in rows if str(row.get("report_no", "")) == str(report_no)), None)
+        target = self._load_catalog_product_by_report_no(str(report_no))
         if not target:
             return None
         result = self._merge_catalog_with_profile(target)
         result["has_profile"] = bool(self.profile_by_report_no.get(str(report_no)))
         return result
 
-    def _load_catalog_rows(self, query_text: str, normalized: str) -> List[dict]:
+    def _catalog_search_conditions(self, query_text: str, normalized: str) -> tuple[str, str, list[str], list[str]]:
         query_text = str(query_text or "").strip()
-        normalized = str(normalized or "").strip().lower()
+        normalized = str(normalized or "").strip()
+        if not query_text:
+            return "1 = 1", "1 = 1", [], []
 
-        def matches(row: dict) -> bool:
-            if not query_text:
-                return True
-            report_no = str(row.get("report_no", "") or "")
-            product_name = str(row.get("product_name", "") or "")
-            company_name = str(row.get("company_name", "") or "")
-            collapsed_name = product_name.replace(" ", "").lower()
-            needle = query_text.lower()
-            return (
-                report_no == query_text
-                or needle in product_name.lower()
-                or needle in company_name.lower()
-                or (normalized and normalized in collapsed_name)
-            )
+        like_text = f"%{query_text}%"
+        like_normalized = f"%{normalized}%" if normalized else ""
+        base_conditions = [
+            "report_no = ?",
+            "product_name LIKE ? COLLATE NOCASE",
+            "company_name LIKE ? COLLATE NOCASE",
+        ]
+        base_params = [query_text, like_text, like_text]
+        uploaded_conditions = [
+            "report_no = ?",
+            "product_name LIKE ? COLLATE NOCASE",
+        ]
+        uploaded_params = [query_text, like_text]
+        if like_normalized:
+            base_conditions.append("REPLACE(product_name, ' ', '') LIKE ? COLLATE NOCASE")
+            base_params.append(like_normalized)
+            uploaded_conditions.append("REPLACE(product_name, ' ', '') LIKE ? COLLATE NOCASE")
+            uploaded_params.append(like_normalized)
+        return (
+            "(" + " OR ".join(base_conditions) + ")",
+            "(" + " OR ".join(uploaded_conditions) + ")",
+            base_params,
+            uploaded_params,
+        )
 
+    def _uploaded_catalog_valid_sql(self) -> tuple[str, list[str]]:
+        invalid_names = sorted(INVALID_UPLOADED_PRODUCT_NAMES)
+        placeholders = ", ".join("?" for _ in invalid_names)
+        return (
+            f"TRIM(COALESCE(product_name, '')) NOT IN ({placeholders}) "
+            "AND LENGTH(TRIM(COALESCE(product_name, ''))) > 1",
+            invalid_names,
+        )
+
+    def _catalog_union_sql(self, base_where: str, uploaded_where: str, uploaded_valid_sql: str) -> str:
+        return f"""
+            SELECT
+                report_no, product_name, company_name, license_no, report_date,
+                product_type, shelf_life, appearance, intake_method, main_functionality,
+                cautions, storage_method, form_factor, standard_spec, raw_ingredients
+            FROM {CATALOG_TABLE_NAME}
+            WHERE {base_where}
+            UNION ALL
+            SELECT
+                report_no,
+                product_name,
+                '' AS company_name,
+                '' AS license_no,
+                '' AS report_date,
+                source_type AS product_type,
+                '' AS shelf_life,
+                '' AS appearance,
+                '' AS intake_method,
+                product_main_category AS main_functionality,
+                '' AS cautions,
+                '' AS storage_method,
+                '' AS form_factor,
+                '' AS standard_spec,
+                raw_ingredients
+            FROM {UPLOADED_PRODUCT_TABLE_NAME}
+            WHERE {uploaded_valid_sql}
+              AND {uploaded_where}
+        """
+
+    def _load_catalog_page(self, query_text: str, normalized: str, limit: int, offset: int) -> tuple[List[dict], int]:
+        base_where, uploaded_where, base_params, uploaded_params = self._catalog_search_conditions(query_text, normalized)
+        uploaded_valid_sql, uploaded_valid_params = self._uploaded_catalog_valid_sql()
+        union_sql = self._catalog_union_sql(base_where, uploaded_where, uploaded_valid_sql)
+        params = [*base_params, *uploaded_valid_params, *uploaded_params]
         with sqlite_connection(self.runtime["sqlite_path"]) as conn:
             conn.row_factory = sqlite3.Row
-            base_rows = [
+            total_count = int(
+                conn.execute(
+                    f"SELECT COUNT(*) FROM ({union_sql}) AS combined",
+                    params,
+                ).fetchone()[0]
+                or 0
+            )
+            rows = [
                 dict(row)
                 for row in conn.execute(
                     f"""
-                    SELECT
-                        report_no, product_name, company_name, license_no, report_date,
-                        product_type, shelf_life, appearance, intake_method, main_functionality,
-                        cautions, storage_method, form_factor, standard_spec, raw_ingredients
-                    FROM {CATALOG_TABLE_NAME}
+                    SELECT *
+                    FROM ({union_sql}) AS combined
                     ORDER BY product_name, report_no
-                    """
+                    LIMIT ? OFFSET ?
+                    """,
+                    [*params, int(limit), max(0, int(offset))],
                 ).fetchall()
             ]
-            uploaded_rows = [
-                dict(row)
-                for row in conn.execute(
-                    f"""
-                    SELECT
-                        report_no,
-                        product_name,
-                        '' AS company_name,
-                        '' AS license_no,
-                        '' AS report_date,
-                        source_type AS product_type,
-                        '' AS shelf_life,
-                        '' AS appearance,
-                        '' AS intake_method,
-                        product_main_category AS main_functionality,
-                        '' AS cautions,
-                        '' AS storage_method,
-                        '' AS form_factor,
-                        '' AS standard_spec,
-                        raw_ingredients
-                    FROM {UPLOADED_PRODUCT_TABLE_NAME}
-                    ORDER BY product_name, report_no
-                    """
-                ).fetchall()
-            ]
-            uploaded_rows = [row for row in uploaded_rows if not is_invalid_uploaded_product_name(row.get("product_name", ""))]
+        return rows, total_count
 
-        combined = [row for row in base_rows if matches(row)] + [row for row in uploaded_rows if matches(row)]
-        combined.sort(key=lambda item: (str(item.get("product_name", "")), str(item.get("report_no", ""))))
-        return combined
+    def _load_catalog_product_by_report_no(self, report_no: str) -> Optional[dict]:
+        report_no = str(report_no or "").strip()
+        if not report_no:
+            return None
+        uploaded_valid_sql, uploaded_valid_params = self._uploaded_catalog_valid_sql()
+        with sqlite_connection(self.runtime["sqlite_path"]) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                f"""
+                SELECT
+                    report_no, product_name, company_name, license_no, report_date,
+                    product_type, shelf_life, appearance, intake_method, main_functionality,
+                    cautions, storage_method, form_factor, standard_spec, raw_ingredients
+                FROM {CATALOG_TABLE_NAME}
+                WHERE report_no = ?
+                LIMIT 1
+                """,
+                (report_no,),
+            ).fetchone()
+            if row:
+                return dict(row)
+            row = conn.execute(
+                f"""
+                SELECT
+                    report_no,
+                    product_name,
+                    '' AS company_name,
+                    '' AS license_no,
+                    '' AS report_date,
+                    source_type AS product_type,
+                    '' AS shelf_life,
+                    '' AS appearance,
+                    '' AS intake_method,
+                    product_main_category AS main_functionality,
+                    '' AS cautions,
+                    '' AS storage_method,
+                    '' AS form_factor,
+                    '' AS standard_spec,
+                    raw_ingredients
+                FROM {UPLOADED_PRODUCT_TABLE_NAME}
+                WHERE report_no = ?
+                  AND {uploaded_valid_sql}
+                LIMIT 1
+                """,
+                [report_no, *uploaded_valid_params],
+            ).fetchone()
+        return dict(row) if row else None
 
     def register_uploaded_product(
         self,
@@ -1004,6 +1092,15 @@ class RecommendationService:
         semantic_detail = dict(explanation.get("semantic_weighted_jaccard_v2", {}) or {})
         for detail in semantic_detail.get("shared_semantic_keys", []) or []:
             semantic_shared_target_ingredients.update(str(name) for name in detail.get("target_ingredients", []) or [])
+        similarity_score = float(row.get("similarity_score", 0.0) or 0.0)
+        function_similarity_score = float(row.get("function_similarity_score", 0.0) or 0.0)
+        core_match_score = float(row.get("core_match_score", 0.0) or 0.0)
+        quality_metadata = recommendation_quality_metadata(
+            similarity_score,
+            semantic_detail,
+            core_match_score,
+            function_similarity_score,
+        )
         target_other_ingredients = [
             item
             for item in target_all_ingredients
@@ -1016,9 +1113,9 @@ class RecommendationService:
             "target_report_no": target_report_no,
             "target_product_name": str(row.get("target_product_name", "") or ""),
             "target_product_main_category": str(target_profile.get("product_main_category", "") or ""),
-            "similarity_score": float(row.get("similarity_score", 0.0) or 0.0),
-            "function_similarity_score": float(row.get("function_similarity_score", 0.0) or 0.0),
-            "core_match_score": float(row.get("core_match_score", 0.0) or 0.0),
+            "similarity_score": similarity_score,
+            "function_similarity_score": function_similarity_score,
+            "core_match_score": core_match_score,
             "substitutability": str(row.get("substitutability", "") or ""),
             "shared_ingredients": shared_ingredients,
             "target_primary_ingredients": target_primary_ingredients,
@@ -1030,7 +1127,18 @@ class RecommendationService:
             "reason": str(row.get("reason", "") or ""),
             "caution": str(row.get("caution", "") or ""),
             "explanation": explanation,
+            **quality_metadata,
         }
+
+    def _display_eligible_recommendations(self, recommendations: List[dict], top_k: int) -> List[dict]:
+        rows = [
+            dict(item)
+            for item in recommendations
+            if bool(item.get("recommendation_display_eligible", True))
+        ][:top_k]
+        for index, item in enumerate(rows, start=1):
+            item["rank"] = index
+        return rows
 
     def _candidate_summary_for_llm(self, recommendation: dict) -> dict:
         target_report_no = str(recommendation.get("target_report_no", "") or "")
@@ -1139,7 +1247,8 @@ class RecommendationService:
             if cache_enabled and not force_refresh:
                 cached_rows = load_cached_rows(conn, base_product_id, top_k, similarity_algorithm)
             if len(cached_rows) >= top_k:
-                recommendations = [self._convert_cache_row(row, idx) for idx, row in enumerate(cached_rows, start=1)]
+                raw_recommendations = [self._convert_cache_row(row, idx) for idx, row in enumerate(cached_rows, start=1)]
+                recommendations = self._display_eligible_recommendations(raw_recommendations, top_k)
                 if llm_rerank:
                     try:
                         recommendations, llm_rerank_applied, _ = self._maybe_rerank_with_llm(
@@ -1182,7 +1291,8 @@ class RecommendationService:
                 pass
             if cache_enabled:
                 refresh_cache_rows(conn, base_product_id, rows, similarity_algorithm)
-            recommendations = [self._convert_cache_row(row, idx) for idx, row in enumerate(rows, start=1)]
+            raw_recommendations = [self._convert_cache_row(row, idx) for idx, row in enumerate(rows, start=1)]
+            recommendations = self._display_eligible_recommendations(raw_recommendations, top_k)
             if llm_rerank:
                 try:
                     recommendations, llm_rerank_applied, _ = self._maybe_rerank_with_llm(

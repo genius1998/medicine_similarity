@@ -49,6 +49,7 @@ from scripts.enhance_similarity_with_explanation import (
     generate_caution,
     generate_recommendation_reason,
     is_semantic_excipient_name,
+    recommendation_quality_metadata,
     safe_json_loads,
     SIMILARITY_ALGORITHM_VERSION,
 )
@@ -3741,6 +3742,7 @@ class UploadRecommendationService:
                 function_similarity_score = 1.0
                 core_match_score = 1.0
                 substitutability = "높음"
+                quality_metadata = recommendation_quality_metadata(similarity_score, {}, exact_match=True)
                 reason = "이전에 업로드된 동일 이미지와 일치해 동일 제품으로 판정했습니다."
             else:
                 similarity_score, shared_semantic_ingredients, semantic_explanation = calculate_semantic_weighted_jaccard_v2(
@@ -3773,6 +3775,12 @@ class UploadRecommendationService:
                 function_similarity_score = calculate_function_similarity(temp_profile, target_profile)
                 core_match_score = calculate_core_match_score(temp_profile, target_profile, semantic_explanation)
                 substitutability = classify_substitutability(similarity_score, temp_profile, target_profile, semantic_explanation)
+                quality_metadata = recommendation_quality_metadata(
+                    similarity_score,
+                    semantic_explanation,
+                    core_match_score,
+                    function_similarity_score,
+                )
                 reason = generate_recommendation_reason(temp_profile, target_profile, comparison, service.ingredient_frequency, semantic_explanation)
             explanation = build_explanation_json(reason, comparison, substitutability)
             explanation["similarity_algorithm"] = SIMILARITY_ALGORITHM_VERSION
@@ -3806,6 +3814,7 @@ class UploadRecommendationService:
                     "function_similarity_score": float(function_similarity_score),
                     "core_match_score": float(core_match_score),
                     "substitutability": substitutability,
+                    **quality_metadata,
                     "shared_ingredients": comparison["shared_ingredients"],
                     "target_primary_ingredients": target_primary_ingredients,
                     "target_secondary_ingredients": target_secondary_ingredients,
@@ -3860,7 +3869,8 @@ class UploadRecommendationService:
                 seen_uploaded_report_nos.add(report_no)
                 uploaded_rows.append(item)
             else:
-                official_rows.append(item)
+                if bool(item.get("recommendation_display_eligible", True)):
+                    official_rows.append(item)
 
         uploaded_debug_rows: List[dict] = []
         seen_uploaded_debug_keys = set()
@@ -3909,6 +3919,7 @@ class UploadRecommendationService:
             "function_similarity_score": 1.0,
             "core_match_score": 1.0,
             "substitutability": "?믪쓬",
+            **recommendation_quality_metadata(1.0, {}, exact_match=True),
             "shared_ingredients": sorted(
                 set(str(item or "") for item in temp_profile.get("primary_ingredients", []))
                 | set(str(item or "") for item in temp_profile.get("secondary_ingredients", []))

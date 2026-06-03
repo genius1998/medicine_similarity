@@ -1,0 +1,1393 @@
+from __future__ import annotations
+
+import argparse
+import contextlib
+import csv
+import io
+import json
+import math
+import os
+import random
+import re
+import subprocess
+import sys
+import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from collections import Counter, defaultdict
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+import pandas as pd
+
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from scripts.enhance_similarity_with_explanation import (  # noqa: E402
+    DEFAULT_CANDIDATE_LIMIT,
+    DEFAULT_MAX_DF_FOR_SEED,
+    DEFAULT_TOP_K,
+    SIMILARITY_ALGORITHM_VERSION,
+    build_vector_indexes,
+    calculate_semantic_weighted_jaccard_v2,
+    compute_topk_for_single_product,
+    load_ingredient_category_profiles,
+    load_product_function_profiles,
+    load_vector_inputs,
+    normalize_similarity_algorithm,
+    recommendation_quality_metadata,
+    resolve_runtime_paths,
+    safe_json_loads,
+)
+
+
+DEFAULT_OUTPUT_DIR = ROOT_DIR / "output" / "recommendation_quality_judge"
+DEFAULT_HEALTH_BATCH_DIR = Path(r"D:\health_batch_project")
+DEFAULT_BATCH_JSONL_NAME = "gemini_recommendation_judge_batch.jsonl"
+DEFAULT_RESULT_JSONL_NAME = "gemini_recommendation_judge_result.jsonl"
+JUDGMENTS = {"reasonable", "acceptable_adjacent", "weak", "bad"}
+MODEL_NAME = "gemini-2.5-flash-lite"
+_WORKER_CONTEXT: dict[str, Any] = {}
+
+
+def now_iso() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def resolve_path(path: str | Path) -> Path:
+    resolved = Path(path)
+    if not resolved.is_absolute():
+        resolved = ROOT_DIR / resolved
+    return resolved
+
+
+def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="\n") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
+
+
+def read_jsonl(path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8-sig") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            text = line.strip()
+            if not text:
+                continue
+            try:
+                rows.append(json.loads(text))
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"{path}:{line_number}: invalid JSONL") from exc
+    return rows
+
+
+def write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({key: row.get(key, "") for key in fieldnames})
+
+
+def compact_list(values: Any, limit: int = 8) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    result: list[str] = []
+    seen = set()
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+        if len(result) >= limit:
+            break
+    return result
+
+
+def compact_profile(profile: dict[str, Any], *, include_product_id: bool = False) -> dict[str, Any]:
+    item = {
+        "report_no": str(profile.get("report_no", "") or ""),
+        "product_name": str(profile.get("product_name", "") or ""),
+        "product_main_category": str(profile.get("product_main_category", "") or ""),
+        "sub_categories": compact_list(
+            profile.get("llm_sub_function_categories")
+            or profile.get("product_sub_categories")
+            or profile.get("legacy_product_sub_categories")
+            or [],
+            limit=4,
+        ),
+        "primary_ingredients": compact_list(profile.get("primary_ingredients", []), limit=8),
+        "secondary_ingredients": compact_list(profile.get("secondary_ingredients", []), limit=8),
+        "support_ingredients": compact_list(profile.get("support_ingredients", []), limit=8),
+        "confidence": round(float(profile.get("confidence", 0.0) or 0.0), 4),
+    }
+    if include_product_id:
+        item["product_id"] = str(profile.get("product_id", "") or "")
+    return item
+
+
+def profile_categories(profile: dict[str, Any]) -> set[str]:
+    categories = {str(profile.get("product_main_category", "") or "").strip()}
+    for key in ("sub_categories", "llm_sub_function_categories", "product_sub_categories", "legacy_product_sub_categories"):
+        for value in profile.get(key, []) or []:
+            text = str(value or "").strip()
+            if text:
+                categories.add(text)
+    return {item for item in categories if item}
+
+
+def local_risk_flags(base_profile: dict[str, Any], candidate: dict[str, Any]) -> list[str]:
+    flags: list[str] = []
+    target_profile = candidate.get("target_profile", {})
+    base_main = str(base_profile.get("product_main_category", "") or "").strip()
+    target_main = str(target_profile.get("product_main_category", "") or "").strip()
+    shared_ingredients = list(candidate.get("shared_ingredients", []) or [])
+    shared_categories = list(candidate.get("shared_categories", []) or [])
+    score = float(candidate.get("similarity_score", 0.0) or 0.0)
+    semantic_core_reason = str(candidate.get("semantic_core_reason", "") or "")
+
+    if base_main and target_main and base_main != target_main and not (profile_categories(base_profile) & profile_categories(target_profile)):
+        flags.append("category_mismatch")
+    if not shared_ingredients:
+        flags.append("no_shared_ingredients")
+    if semantic_core_reason == "no_semantic_core_overlap":
+        flags.append("no_core_overlap")
+    if shared_categories and not shared_ingredients:
+        flags.append("category_only_match")
+    if score >= 0.65 and any(flag in flags for flag in ("category_mismatch", "no_core_overlap", "category_only_match")):
+        flags.append("high_score_with_weak_signal")
+    if base_main == "영양보충" or target_main == "영양보충":
+        flags.append("nutrition_generic_review")
+    return flags
+
+
+def local_quality_bucket(flags: list[str], similarity_score: float) -> str:
+    high_risk = {"category_mismatch", "no_shared_ingredients", "no_core_overlap", "category_only_match"}
+    if similarity_score >= 0.65 and high_risk.intersection(flags):
+        return "high_risk"
+    if high_risk.intersection(flags):
+        return "needs_review"
+    return "likely_reasonable"
+
+
+def select_product_ids(
+    profiles: dict[str, dict[str, Any]],
+    product_vectors: dict[str, dict[str, float]],
+    *,
+    all_products: bool,
+    report_nos: list[str],
+    sample_size: int,
+    per_category: int,
+    seed: int,
+) -> list[str]:
+    eligible = [
+        product_id
+        for product_id, profile in profiles.items()
+        if product_id in product_vectors and str(profile.get("report_no", "") or "").strip()
+    ]
+    eligible.sort(key=lambda product_id: (str(profiles[product_id].get("report_no", "") or ""), product_id))
+
+    if report_nos:
+        wanted = {str(value or "").strip() for value in report_nos if str(value or "").strip()}
+        selected = [product_id for product_id in eligible if str(profiles[product_id].get("report_no", "") or "") in wanted]
+        missing = sorted(wanted - {str(profiles[product_id].get("report_no", "") or "") for product_id in selected})
+        if missing:
+            raise ValueError(f"report_no not found: {missing[:10]}")
+        return selected
+
+    if all_products:
+        return eligible
+
+    rng = random.Random(seed)
+    by_category: dict[str, list[str]] = defaultdict(list)
+    for product_id in eligible:
+        category = str(profiles[product_id].get("product_main_category", "") or "기타").strip() or "기타"
+        by_category[category].append(product_id)
+
+    selected: list[str] = []
+    for category in sorted(by_category):
+        group = list(by_category[category])
+        rng.shuffle(group)
+        selected.extend(group[: max(0, per_category)])
+
+    if sample_size > 0:
+        selected_set = set(selected)
+        remaining = [product_id for product_id in eligible if product_id not in selected_set]
+        rng.shuffle(remaining)
+        selected.extend(remaining[: max(0, sample_size - len(selected))])
+        if len(selected) > sample_size:
+            rng.shuffle(selected)
+            selected = selected[:sample_size]
+
+    selected.sort(key=lambda product_id: (str(profiles[product_id].get("product_main_category", "") or ""), str(profiles[product_id].get("report_no", "") or ""), product_id))
+    return selected
+
+
+def build_snapshot_item(
+    key: str,
+    base_product_id: str,
+    rows: list[dict[str, Any]],
+    profiles: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    base_profile = profiles[base_product_id]
+    recommendations: list[dict[str, Any]] = []
+    for row in rows:
+        if not bool(row.get("recommendation_display_eligible", True)):
+            continue
+        rank = len(recommendations) + 1
+        target_product_id = str(row.get("target_product_id", "") or "")
+        target_profile = profiles.get(target_product_id, {})
+        explanation = safe_json_loads(row.get("explanation_json", "{}"), {})
+        semantic = dict(explanation.get("semantic_weighted_jaccard_v2", {}) or {})
+        core_coverage = dict(semantic.get("core_coverage", {}) or {})
+        candidate = {
+            "rank": rank,
+            "target_product_id": target_product_id,
+            "target_profile": compact_profile(target_profile, include_product_id=True),
+            "similarity_score": round(float(row.get("similarity_score", 0.0) or 0.0), 6),
+            "function_similarity_score": round(float(row.get("function_similarity_score", 0.0) or 0.0), 6),
+            "core_match_score": round(float(row.get("core_match_score", 0.0) or 0.0), 6),
+            "substitutability": str(row.get("substitutability", "") or ""),
+            "recommendation_quality": str(row.get("recommendation_quality", "") or ""),
+            "recommendation_review_reason": str(row.get("recommendation_review_reason", "") or ""),
+            "shared_ingredients": compact_list(safe_json_loads(row.get("shared_ingredients_json", "[]"), []), limit=10),
+            "shared_categories": compact_list(safe_json_loads(row.get("shared_categories_json", "[]"), []), limit=8),
+            "base_only_ingredients": compact_list(safe_json_loads(row.get("base_only_ingredients_json", "[]"), []), limit=8),
+            "target_only_ingredients": compact_list(safe_json_loads(row.get("target_only_ingredients_json", "[]"), []), limit=8),
+            "semantic_core_overlap": compact_list(core_coverage.get("shared_core_semantic_keys", []) or core_coverage.get("shared_primary_semantic_keys", []), limit=8),
+            "semantic_core_reason": str(core_coverage.get("reason", "") or ""),
+            "score_adjustments": list(semantic.get("score_adjustments", []) or []),
+            "algorithm_reason": str(row.get("reason", "") or ""),
+        }
+        flags = local_risk_flags(base_profile, candidate)
+        candidate["local_risk_flags"] = flags
+        candidate["local_quality_bucket"] = local_quality_bucket(flags, float(candidate["similarity_score"]))
+        recommendations.append(candidate)
+
+    return {
+        "key": key,
+        "base_product_id": base_product_id,
+        "base_product": compact_profile(base_profile, include_product_id=True),
+        "recommendations": recommendations,
+    }
+
+
+def prepare_worker_init(
+    similarity_algorithm: str,
+    ingredient_profile_path_value: str,
+) -> None:
+    runtime = resolve_runtime_paths()
+    ingredient_profile_path = Path(ingredient_profile_path_value) if ingredient_profile_path_value else runtime.get("ingredient_category_profile_path")
+    vector_df = load_vector_inputs(runtime["vector_csv_path"])
+    profiles = load_product_function_profiles(runtime["product_profile_csv_path"])
+    ingredient_category_profiles = load_ingredient_category_profiles(ingredient_profile_path)
+    product_vectors, product_names, _report_to_product_ids, ingredient_postings, ingredient_frequency = build_vector_indexes(vector_df)
+    _WORKER_CONTEXT.clear()
+    _WORKER_CONTEXT.update(
+        {
+            "profiles": profiles,
+            "product_vectors": product_vectors,
+            "product_names": product_names,
+            "ingredient_postings": ingredient_postings,
+            "ingredient_frequency": ingredient_frequency,
+            "ingredient_category_profiles": ingredient_category_profiles,
+            "similarity_algorithm": similarity_algorithm,
+        }
+    )
+
+
+def prepare_product_worker(task: tuple[int, str, int, int, int]) -> dict[str, Any]:
+    index, base_product_id, top_k, candidate_limit, max_df_for_seed = task
+    profiles = _WORKER_CONTEXT["profiles"]
+    base_profile = profiles.get(base_product_id, {})
+    key = f"recjudge_{index:06d}"
+    try:
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            rows, failed_candidates, _stats = compute_topk_for_single_product(
+                base_product_id,
+                top_k,
+                candidate_limit,
+                max_df_for_seed,
+                _WORKER_CONTEXT["product_vectors"],
+                _WORKER_CONTEXT["product_names"],
+                profiles,
+                _WORKER_CONTEXT["ingredient_postings"],
+                _WORKER_CONTEXT["ingredient_frequency"],
+                _WORKER_CONTEXT["similarity_algorithm"],
+                _WORKER_CONTEXT["ingredient_category_profiles"],
+            )
+        failed_rows = [{"key": key, "stage": "candidate_scoring", **failed} for failed in failed_candidates]
+        return {
+            "index": index,
+            "key": key,
+            "base_product_id": base_product_id,
+            "base_product_name": str(base_profile.get("product_name", "") or ""),
+            "snapshot": build_snapshot_item(key, base_product_id, rows, profiles),
+            "failed_rows": failed_rows,
+            "error": "",
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "index": index,
+            "key": key,
+            "base_product_id": base_product_id,
+            "base_product_name": str(base_profile.get("product_name", "") or ""),
+            "snapshot": None,
+            "failed_rows": [
+                {
+                    "key": key,
+                    "stage": "topk",
+                    "base_product_id": base_product_id,
+                    "base_report_no": str(base_profile.get("report_no", "") or ""),
+                    "base_product_name": str(base_profile.get("product_name", "") or ""),
+                    "error": str(exc),
+                }
+            ],
+            "error": str(exc),
+        }
+
+
+def flatten_snapshot(snapshot_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    flat: list[dict[str, Any]] = []
+    for item in snapshot_rows:
+        base = item["base_product"]
+        for rec in item.get("recommendations", []) or []:
+            target = rec.get("target_profile", {})
+            flat.append(
+                {
+                    "key": item["key"],
+                    "base_report_no": base.get("report_no", ""),
+                    "base_product_name": base.get("product_name", ""),
+                    "base_main_category": base.get("product_main_category", ""),
+                    "base_sub_categories_json": json.dumps(base.get("sub_categories", []), ensure_ascii=False),
+                    "rank": rec.get("rank", ""),
+                    "target_report_no": target.get("report_no", ""),
+                    "target_product_name": target.get("product_name", ""),
+                    "target_main_category": target.get("product_main_category", ""),
+                    "target_sub_categories_json": json.dumps(target.get("sub_categories", []), ensure_ascii=False),
+                    "similarity_score": rec.get("similarity_score", 0.0),
+                    "function_similarity_score": rec.get("function_similarity_score", 0.0),
+                    "core_match_score": rec.get("core_match_score", 0.0),
+                    "substitutability": rec.get("substitutability", ""),
+                    "recommendation_quality": rec.get("recommendation_quality", ""),
+                    "recommendation_review_reason": rec.get("recommendation_review_reason", ""),
+                    "shared_ingredients_json": json.dumps(rec.get("shared_ingredients", []), ensure_ascii=False),
+                    "shared_categories_json": json.dumps(rec.get("shared_categories", []), ensure_ascii=False),
+                    "semantic_core_overlap_json": json.dumps(rec.get("semantic_core_overlap", []), ensure_ascii=False),
+                    "semantic_core_reason": rec.get("semantic_core_reason", ""),
+                    "local_risk_flags_json": json.dumps(rec.get("local_risk_flags", []), ensure_ascii=False),
+                    "local_quality_bucket": rec.get("local_quality_bucket", ""),
+                    "algorithm_reason": rec.get("algorithm_reason", ""),
+                }
+            )
+    return flat
+
+
+def judge_prompt(snapshot_item: dict[str, Any]) -> str:
+    payload = {
+        "base_product": snapshot_item["base_product"],
+        "candidates": [
+            {
+                "rank": rec["rank"],
+                "target_product": rec["target_profile"],
+                "algorithm_scores": {
+                    "similarity_score": rec["similarity_score"],
+                    "function_similarity_score": rec["function_similarity_score"],
+                    "core_match_score": rec["core_match_score"],
+                    "substitutability": rec["substitutability"],
+                    "recommendation_quality": rec.get("recommendation_quality", ""),
+                    "recommendation_review_reason": rec.get("recommendation_review_reason", ""),
+                },
+                "match_evidence": {
+                    "shared_ingredients": rec["shared_ingredients"],
+                    "shared_categories": rec["shared_categories"],
+                    "semantic_core_overlap": rec["semantic_core_overlap"],
+                    "semantic_core_reason": rec["semantic_core_reason"],
+                    "score_adjustments": rec["score_adjustments"],
+                    "local_risk_flags": rec["local_risk_flags"],
+                    "algorithm_reason": rec["algorithm_reason"],
+                },
+            }
+            for rec in snapshot_item.get("recommendations", []) or []
+        ],
+    }
+    return (
+        "당신은 건강기능식품 제품 추천 품질을 평가하는 전문가입니다.\n"
+        "주어진 base_product에 대해 candidates가 추천 결과로 합리적인지 평가하세요.\n\n"
+        "판정 라벨:\n"
+        "- reasonable: 같은 기능 목적군이며 핵심 기능성 원료 또는 강한 semantic 근거가 있다.\n"
+        "- acceptable_adjacent: 완전 대체품은 아니지만 인접 기능군이라 비교/보조 추천으로 납득 가능하다.\n"
+        "- weak: 일부 근거는 있으나 상위 추천으로는 약하다.\n"
+        "- bad: 기능 목적, 핵심 원료, 카테고리가 어긋나거나 흔한 영양소/부원료만 근거다.\n\n"
+        "평가 규칙:\n"
+        "1. product_name만 비슷한 것은 충분한 근거가 아니다.\n"
+        "2. 비타민/미네랄 같은 흔한 영양소만 겹치면 보수적으로 weak 또는 bad로 판단한다.\n"
+        "3. main category가 다르더라도 sub category 또는 핵심 원료가 강하게 겹치면 acceptable_adjacent 이상이 가능하다.\n"
+        "4. 치료, 질병 개선, 의약품 대체 같은 표현은 쓰지 않는다.\n"
+        "5. candidates의 rank와 target_product.report_no는 반드시 그대로 반환한다.\n\n"
+        "JSON만 반환하세요. 마크다운 코드블록은 쓰지 마세요.\n"
+        "출력 형식:\n"
+        "{\n"
+        '  "base_report_no": "string",\n'
+        '  "labels": [\n'
+        '    {"rank": 1, "target_report_no": "string", "judgment": "reasonable|acceptable_adjacent|weak|bad", "confidence": 0.0, "reason": "80자 이내", "risk_flags": ["string"], "suggested_rule": "string"}\n'
+        "  ],\n"
+        '  "overall_notes": "string"\n'
+        "}\n\n"
+        "입력:\n"
+        + json.dumps(payload, ensure_ascii=False, indent=2)
+    )
+
+
+def build_batch_requests(snapshot_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    requests: list[dict[str, Any]] = []
+    for item in snapshot_rows:
+        if not item.get("recommendations"):
+            continue
+        requests.append(
+            {
+                "key": item["key"],
+                "request": {
+                    "contents": [{"role": "user", "parts": [{"text": judge_prompt(item)}]}],
+                    "generation_config": {
+                        "temperature": 0.0,
+                        "response_mime_type": "application/json",
+                        "max_output_tokens": 2048,
+                    },
+                },
+            }
+        )
+    return requests
+
+
+def estimate_batch_cost(batch_requests: list[dict[str, Any]], top_k: int) -> dict[str, Any]:
+    request_text = "\n".join(json.dumps(item, ensure_ascii=False) for item in batch_requests)
+    input_tokens_estimate = math.ceil(len(request_text) / 2.7)
+    output_tokens_low = len(batch_requests) * max(160, top_k * 45)
+    output_tokens_high = len(batch_requests) * max(260, top_k * 75)
+    input_cost = input_tokens_estimate / 1_000_000 * 0.05
+    output_cost_low = output_tokens_low / 1_000_000 * 0.20
+    output_cost_high = output_tokens_high / 1_000_000 * 0.20
+    return {
+        "model": MODEL_NAME,
+        "pricing_mode": "Gemini Batch API estimate",
+        "input_tokens_estimate": input_tokens_estimate,
+        "output_tokens_low_estimate": output_tokens_low,
+        "output_tokens_high_estimate": output_tokens_high,
+        "estimated_usd_low": round(input_cost + output_cost_low, 4),
+        "estimated_usd_high": round(input_cost + output_cost_high, 4),
+        "pricing_assumption": "Batch input $0.05/1M tokens, output $0.20/1M tokens",
+    }
+
+
+def prepare(args: argparse.Namespace) -> None:
+    output_dir = resolve_path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    runtime = resolve_runtime_paths()
+    ingredient_profile_path = (
+        Path(args.ingredient_category_profile)
+        if str(args.ingredient_category_profile or "").strip()
+        else runtime.get("ingredient_category_profile_path")
+    )
+    similarity_algorithm = normalize_similarity_algorithm(args.similarity_algorithm)
+
+    vector_df = load_vector_inputs(runtime["vector_csv_path"])
+    profiles = load_product_function_profiles(runtime["product_profile_csv_path"])
+    ingredient_category_profiles = load_ingredient_category_profiles(ingredient_profile_path)
+    product_vectors, product_names, _report_to_product_ids, ingredient_postings, ingredient_frequency = build_vector_indexes(vector_df)
+
+    selected_product_ids = select_product_ids(
+        profiles,
+        product_vectors,
+        all_products=args.all,
+        report_nos=args.report_no or [],
+        sample_size=max(0, int(args.sample_size or 0)),
+        per_category=max(0, int(args.per_category or 0)),
+        seed=int(args.seed),
+    )
+    if args.limit > 0:
+        if args.offset > 0:
+            selected_product_ids = selected_product_ids[args.offset :]
+        selected_product_ids = selected_product_ids[: args.limit]
+    elif args.offset > 0:
+        selected_product_ids = selected_product_ids[args.offset :]
+
+    snapshot_rows: list[dict[str, Any]] = []
+    failed_rows: list[dict[str, Any]] = []
+    started = time.perf_counter()
+    workers = max(1, int(args.workers or 1))
+    if workers > 1 and selected_product_ids:
+        print(f"[INFO] parallel_prepare workers={workers} products={len(selected_product_ids)}", flush=True)
+        worker_results: list[dict[str, Any]] = []
+        tasks = [
+            (index, base_product_id, args.top_k, args.candidate_limit, args.max_df_for_seed)
+            for index, base_product_id in enumerate(selected_product_ids, start=1)
+        ]
+        with ProcessPoolExecutor(
+            max_workers=workers,
+            initializer=prepare_worker_init,
+            initargs=(similarity_algorithm, str(ingredient_profile_path or "")),
+        ) as executor:
+            future_to_index = {executor.submit(prepare_product_worker, task): task[0] for task in tasks}
+            completed = 0
+            for future in as_completed(future_to_index):
+                result = future.result()
+                completed += 1
+                worker_results.append(result)
+                failed_rows.extend(result.get("failed_rows", []) or [])
+                if completed % max(1, args.progress_every) == 0 or completed == len(selected_product_ids):
+                    elapsed = round(time.perf_counter() - started, 1)
+                    print(
+                        f"[PROGRESS] {completed}/{len(selected_product_ids)} elapsed={elapsed}s last={result.get('base_product_name', '')}",
+                        flush=True,
+                    )
+        for result in sorted(worker_results, key=lambda item: int(item.get("index", 0) or 0)):
+            if result.get("snapshot"):
+                snapshot_rows.append(result["snapshot"])
+    else:
+        for index, base_product_id in enumerate(selected_product_ids, start=1):
+            base_profile = profiles[base_product_id]
+            key = f"recjudge_{index:06d}"
+            try:
+                stdout = io.StringIO()
+                with contextlib.redirect_stdout(stdout):
+                    rows, failed_candidates, _stats = compute_topk_for_single_product(
+                        base_product_id,
+                        args.top_k,
+                        args.candidate_limit,
+                        args.max_df_for_seed,
+                        product_vectors,
+                        product_names,
+                        profiles,
+                        ingredient_postings,
+                        ingredient_frequency,
+                        similarity_algorithm,
+                        ingredient_category_profiles,
+                    )
+                snapshot_rows.append(build_snapshot_item(key, base_product_id, rows, profiles))
+                for failed in failed_candidates:
+                    failed_rows.append({"key": key, "stage": "candidate_scoring", **failed})
+                if index % max(1, args.progress_every) == 0 or index == len(selected_product_ids):
+                    elapsed = round(time.perf_counter() - started, 1)
+                    print(f"[PROGRESS] {index}/{len(selected_product_ids)} elapsed={elapsed}s last={base_profile.get('product_name', '')}", flush=True)
+            except Exception as exc:  # noqa: BLE001
+                failed_rows.append(
+                    {
+                        "key": key,
+                        "stage": "topk",
+                        "base_product_id": base_product_id,
+                        "base_report_no": str(base_profile.get("report_no", "") or ""),
+                        "base_product_name": str(base_profile.get("product_name", "") or ""),
+                        "error": str(exc),
+                    }
+                )
+
+    batch_requests = build_batch_requests(snapshot_rows)
+    snapshot_jsonl = output_dir / "recommendation_snapshot.jsonl"
+    snapshot_csv = output_dir / "recommendation_snapshot.csv"
+    batch_jsonl = output_dir / DEFAULT_BATCH_JSONL_NAME
+    request_map = {
+        item["key"]: {
+            "base_product_id": item["base_product_id"],
+            "base_report_no": item["base_product"].get("report_no", ""),
+            "candidate_report_nos": [rec.get("target_profile", {}).get("report_no", "") for rec in item.get("recommendations", [])],
+        }
+        for item in snapshot_rows
+    }
+
+    write_jsonl(snapshot_jsonl, snapshot_rows)
+    write_csv(
+        snapshot_csv,
+        [
+            "key",
+            "base_report_no",
+            "base_product_name",
+            "base_main_category",
+            "base_sub_categories_json",
+            "rank",
+            "target_report_no",
+            "target_product_name",
+            "target_main_category",
+            "target_sub_categories_json",
+            "similarity_score",
+            "function_similarity_score",
+            "core_match_score",
+            "substitutability",
+            "recommendation_quality",
+            "recommendation_review_reason",
+            "shared_ingredients_json",
+            "shared_categories_json",
+            "semantic_core_overlap_json",
+            "semantic_core_reason",
+            "local_risk_flags_json",
+            "local_quality_bucket",
+            "algorithm_reason",
+        ],
+        flatten_snapshot(snapshot_rows),
+    )
+    write_jsonl(batch_jsonl, batch_requests)
+    (output_dir / "request_map.json").write_text(json.dumps(request_map, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_csv(
+        output_dir / "failed_products.csv",
+        ["key", "stage", "base_product_id", "base_report_no", "base_product_name", "target_product_id", "target_product_name", "notes", "error"],
+        failed_rows,
+    )
+
+    bucket_counts = Counter()
+    risk_counts = Counter()
+    category_counts = Counter()
+    for item in snapshot_rows:
+        category_counts[str(item["base_product"].get("product_main_category", "") or "")] += 1
+        for rec in item.get("recommendations", []) or []:
+            bucket_counts[str(rec.get("local_quality_bucket", "") or "")] += 1
+            risk_counts.update(rec.get("local_risk_flags", []) or [])
+
+    summary = {
+        "created_at": now_iso(),
+        "mode": "all" if args.all else "sample",
+        "runtime": {key: str(value) for key, value in runtime.items()},
+        "ingredient_category_profile_path": str(ingredient_profile_path or ""),
+        "similarity_algorithm": similarity_algorithm,
+        "profile_count": len(profiles),
+        "selected_product_count": len(selected_product_ids),
+        "offset": args.offset,
+        "limit": args.limit,
+        "successful_product_count": len(snapshot_rows),
+        "no_display_recommendation_product_count": sum(1 for item in snapshot_rows if not item.get("recommendations")),
+        "failed_row_count": len(failed_rows),
+        "top_k": args.top_k,
+        "candidate_limit": args.candidate_limit,
+        "max_df_for_seed": args.max_df_for_seed,
+        "workers": workers,
+        "base_category_counts": dict(category_counts),
+        "local_quality_bucket_counts": dict(bucket_counts),
+        "local_risk_flag_counts": dict(risk_counts),
+        "batch_request_count": len(batch_requests),
+        "batch_jsonl": str(batch_jsonl),
+        "snapshot_jsonl": str(snapshot_jsonl),
+        "snapshot_csv": str(snapshot_csv),
+        "request_map": str(output_dir / "request_map.json"),
+        "estimated_batch_cost": estimate_batch_cost(batch_requests, args.top_k),
+        "elapsed_seconds": round(time.perf_counter() - started, 3),
+    }
+    summary_path = output_dir / "prepare_summary.json"
+    summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+
+
+def response_from_batch_line(line_obj: dict[str, Any]) -> dict[str, Any] | None:
+    if isinstance(line_obj.get("response"), dict):
+        return line_obj["response"]
+    inline_response = line_obj.get("inlineResponse") or line_obj.get("inline_response")
+    if isinstance(inline_response, dict) and isinstance(inline_response.get("response"), dict):
+        return inline_response["response"]
+    if isinstance(line_obj.get("candidates"), list):
+        return line_obj
+    return None
+
+
+def extract_response_text(response: dict[str, Any]) -> str:
+    candidates = response.get("candidates") or []
+    parts: list[str] = []
+    for candidate in candidates:
+        content = candidate.get("content") or {}
+        for part in content.get("parts") or []:
+            text = part.get("text")
+            if text:
+                parts.append(str(text))
+    if parts:
+        return "\n".join(parts).strip()
+    text = response.get("text")
+    return str(text or "").strip()
+
+
+def parse_model_json(text: str) -> dict[str, Any]:
+    cleaned = re.sub(r"^```(?:json)?\s*", "", str(text or "").strip(), flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*```$", "", cleaned).strip()
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError:
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start == -1 or end <= start:
+            raise
+        parsed = json.loads(cleaned[start : end + 1])
+    if not isinstance(parsed, dict):
+        raise ValueError("model output root must be an object")
+    return parsed
+
+
+def normalize_label(label: dict[str, Any]) -> dict[str, Any]:
+    judgment = str(label.get("judgment", "") or "").strip()
+    if judgment not in JUDGMENTS:
+        judgment = "weak"
+    try:
+        rank = int(label.get("rank", 0) or 0)
+    except (TypeError, ValueError):
+        rank = 0
+    try:
+        confidence = float(label.get("confidence", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    confidence = max(0.0, min(1.0, confidence))
+    risk_flags = label.get("risk_flags", [])
+    if not isinstance(risk_flags, list):
+        risk_flags = [str(risk_flags)]
+    return {
+        "rank": rank,
+        "target_report_no": str(label.get("target_report_no", "") or "").strip(),
+        "judgment": judgment,
+        "confidence": round(confidence, 4),
+        "reason": str(label.get("reason", "") or "").strip(),
+        "risk_flags": [str(item or "").strip() for item in risk_flags if str(item or "").strip()],
+        "suggested_rule": str(label.get("suggested_rule", "") or "").strip(),
+    }
+
+
+def snapshot_indexes(snapshot_rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {str(item.get("key", "") or ""): item for item in snapshot_rows}
+
+
+def find_recommendation(snapshot_item: dict[str, Any], label: dict[str, Any]) -> dict[str, Any]:
+    target_report_no = str(label.get("target_report_no", "") or "")
+    rank = int(label.get("rank", 0) or 0)
+    recommendations = list(snapshot_item.get("recommendations", []) or [])
+    if target_report_no:
+        for rec in recommendations:
+            if str(rec.get("target_profile", {}).get("report_no", "") or "") == target_report_no:
+                return rec
+    if rank:
+        for rec in recommendations:
+            if int(rec.get("rank", 0) or 0) == rank:
+                return rec
+    return {}
+
+
+def apply_results(args: argparse.Namespace) -> None:
+    output_dir = resolve_path(args.output_dir)
+    result_jsonl = resolve_path(args.result_jsonl) if args.result_jsonl else output_dir / DEFAULT_RESULT_JSONL_NAME
+    snapshot_jsonl = resolve_path(args.snapshot_jsonl) if args.snapshot_jsonl else output_dir / "recommendation_snapshot.jsonl"
+    if not result_jsonl.exists():
+        raise FileNotFoundError(result_jsonl)
+    if not snapshot_jsonl.exists():
+        raise FileNotFoundError(snapshot_jsonl)
+
+    snapshot_by_key = snapshot_indexes(read_jsonl(snapshot_jsonl))
+    parsed_rows: list[dict[str, Any]] = []
+    error_rows: list[dict[str, Any]] = []
+    raw_rows = read_jsonl(result_jsonl)
+    for line_number, line_obj in enumerate(raw_rows, start=1):
+        key = str(line_obj.get("key", "") or "")
+        try:
+            if line_obj.get("error"):
+                raise ValueError(json.dumps(line_obj["error"], ensure_ascii=False))
+            response = response_from_batch_line(line_obj)
+            if not response:
+                raise ValueError("missing response")
+            text = extract_response_text(response)
+            parsed = parse_model_json(text)
+            labels = parsed.get("labels")
+            if not isinstance(labels, list):
+                raise ValueError("missing labels array")
+            snapshot_item = snapshot_by_key.get(key)
+            if not snapshot_item:
+                raise ValueError(f"unknown key: {key}")
+            base = snapshot_item.get("base_product", {})
+            for raw_label in labels:
+                label = normalize_label(raw_label if isinstance(raw_label, dict) else {})
+                rec = find_recommendation(snapshot_item, label)
+                target = rec.get("target_profile", {}) if rec else {}
+                parsed_rows.append(
+                    {
+                        "key": key,
+                        "base_report_no": base.get("report_no", ""),
+                        "base_product_name": base.get("product_name", ""),
+                        "base_main_category": base.get("product_main_category", ""),
+                        "rank": label["rank"] or rec.get("rank", ""),
+                        "target_report_no": label["target_report_no"] or target.get("report_no", ""),
+                        "target_product_name": target.get("product_name", ""),
+                        "target_main_category": target.get("product_main_category", ""),
+                        "similarity_score": rec.get("similarity_score", ""),
+                        "function_similarity_score": rec.get("function_similarity_score", ""),
+                        "core_match_score": rec.get("core_match_score", ""),
+                        "shared_ingredients_json": json.dumps(rec.get("shared_ingredients", []), ensure_ascii=False),
+                        "shared_categories_json": json.dumps(rec.get("shared_categories", []), ensure_ascii=False),
+                        "local_risk_flags_json": json.dumps(rec.get("local_risk_flags", []), ensure_ascii=False),
+                        "local_quality_bucket": rec.get("local_quality_bucket", ""),
+                        "judge_judgment": label["judgment"],
+                        "judge_confidence": label["confidence"],
+                        "judge_reason": label["reason"],
+                        "judge_risk_flags_json": json.dumps(label["risk_flags"], ensure_ascii=False),
+                        "suggested_rule": label["suggested_rule"],
+                    }
+                )
+        except Exception as exc:  # noqa: BLE001
+            error_rows.append({"line_number": line_number, "key": key, "error": str(exc), "raw": json.dumps(line_obj, ensure_ascii=False)[:4000]})
+
+    result_csv = output_dir / "gemini_judge_results.csv"
+    result_rows_jsonl = output_dir / "gemini_judge_results.jsonl"
+    errors_csv = output_dir / "gemini_judge_errors.csv"
+    result_fields = [
+        "key",
+        "base_report_no",
+        "base_product_name",
+        "base_main_category",
+        "rank",
+        "target_report_no",
+        "target_product_name",
+        "target_main_category",
+        "similarity_score",
+        "function_similarity_score",
+        "core_match_score",
+        "shared_ingredients_json",
+        "shared_categories_json",
+        "local_risk_flags_json",
+        "local_quality_bucket",
+        "judge_judgment",
+        "judge_confidence",
+        "judge_reason",
+        "judge_risk_flags_json",
+        "suggested_rule",
+    ]
+    write_csv(result_csv, result_fields, parsed_rows)
+    write_jsonl(result_rows_jsonl, parsed_rows)
+    write_csv(errors_csv, ["line_number", "key", "error", "raw"], error_rows)
+
+    judgment_counts = Counter(row["judge_judgment"] for row in parsed_rows)
+    category_counts = Counter()
+    suggested_rule_counts = Counter()
+    high_score_bad_or_weak: list[dict[str, Any]] = []
+    for row in parsed_rows:
+        category_counts[(row["base_main_category"], row["judge_judgment"])] += 1
+        if row.get("suggested_rule"):
+            suggested_rule_counts[row["suggested_rule"]] += 1
+        try:
+            score = float(row.get("similarity_score", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            score = 0.0
+        if score >= args.high_score_threshold and row["judge_judgment"] in {"weak", "bad"}:
+            high_score_bad_or_weak.append(row)
+
+    summary = {
+        "created_at": now_iso(),
+        "result_jsonl": str(result_jsonl),
+        "snapshot_jsonl": str(snapshot_jsonl),
+        "result_count": len(parsed_rows),
+        "error_count": len(error_rows),
+        "judgment_counts": dict(judgment_counts),
+        "weak_or_bad_rate": round(
+            (judgment_counts.get("weak", 0) + judgment_counts.get("bad", 0)) / len(parsed_rows),
+            4,
+        )
+        if parsed_rows
+        else 0.0,
+        "high_score_threshold": args.high_score_threshold,
+        "high_score_weak_or_bad_count": len(high_score_bad_or_weak),
+        "suggested_rule_counts": dict(suggested_rule_counts.most_common(30)),
+        "category_judgment_counts": {f"{category}|{judgment}": count for (category, judgment), count in category_counts.items()},
+        "outputs": {
+            "results_csv": str(result_csv),
+            "results_jsonl": str(result_rows_jsonl),
+            "errors_csv": str(errors_csv),
+        },
+    }
+    summary_path = output_dir / "gemini_judge_summary.json"
+    summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+
+
+def refresh_snapshot(args: argparse.Namespace) -> None:
+    source_snapshot = resolve_path(args.source_snapshot_jsonl)
+    output_dir = resolve_path(args.output_dir)
+    if not source_snapshot.exists():
+        raise FileNotFoundError(source_snapshot)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    snapshot_rows = read_jsonl(source_snapshot)
+    if args.offset > 0:
+        snapshot_rows = snapshot_rows[args.offset :]
+    if args.limit > 0:
+        snapshot_rows = snapshot_rows[: args.limit]
+    bucket_counts = Counter()
+    risk_counts = Counter()
+    category_counts = Counter()
+    for item in snapshot_rows:
+        base = item.get("base_product", {})
+        category_counts[str(base.get("product_main_category", "") or "")] += 1
+        refreshed_recommendations: list[dict[str, Any]] = []
+        for rec in item.get("recommendations", []) or []:
+            quality_metadata = recommendation_quality_metadata(
+                float(rec.get("similarity_score", 0.0) or 0.0),
+                {"score_adjustments": rec.get("score_adjustments", []) or []},
+                float(rec.get("core_match_score", 0.0) or 0.0),
+                float(rec.get("function_similarity_score", 0.0) or 0.0),
+            )
+            rec.update(quality_metadata)
+            if not bool(rec.get("recommendation_display_eligible", True)):
+                continue
+            rec["rank"] = len(refreshed_recommendations) + 1
+            flags = local_risk_flags(base, rec)
+            bucket = local_quality_bucket(flags, float(rec.get("similarity_score", 0.0) or 0.0))
+            rec["local_risk_flags"] = flags
+            rec["local_quality_bucket"] = bucket
+            bucket_counts[bucket] += 1
+            risk_counts.update(flags)
+            refreshed_recommendations.append(rec)
+        item["recommendations"] = refreshed_recommendations
+
+    batch_requests = build_batch_requests(snapshot_rows)
+    snapshot_jsonl = output_dir / "recommendation_snapshot.jsonl"
+    snapshot_csv = output_dir / "recommendation_snapshot.csv"
+    batch_jsonl = output_dir / DEFAULT_BATCH_JSONL_NAME
+    request_map = {
+        item["key"]: {
+            "base_product_id": item.get("base_product_id", ""),
+            "base_report_no": item.get("base_product", {}).get("report_no", ""),
+            "candidate_report_nos": [
+                rec.get("target_profile", {}).get("report_no", "")
+                for rec in item.get("recommendations", []) or []
+            ],
+        }
+        for item in snapshot_rows
+    }
+
+    write_jsonl(snapshot_jsonl, snapshot_rows)
+    write_csv(
+        snapshot_csv,
+        [
+            "key",
+            "base_report_no",
+            "base_product_name",
+            "base_main_category",
+            "base_sub_categories_json",
+            "rank",
+            "target_report_no",
+            "target_product_name",
+            "target_main_category",
+            "target_sub_categories_json",
+            "similarity_score",
+            "function_similarity_score",
+        "core_match_score",
+        "substitutability",
+        "recommendation_quality",
+        "recommendation_review_reason",
+        "shared_ingredients_json",
+        "shared_categories_json",
+            "semantic_core_overlap_json",
+            "semantic_core_reason",
+            "local_risk_flags_json",
+            "local_quality_bucket",
+            "algorithm_reason",
+        ],
+        flatten_snapshot(snapshot_rows),
+    )
+    write_jsonl(batch_jsonl, batch_requests)
+    (output_dir / "request_map.json").write_text(json.dumps(request_map, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    summary = {
+        "created_at": now_iso(),
+        "source_snapshot_jsonl": str(source_snapshot),
+        "successful_product_count": len(snapshot_rows),
+        "no_display_recommendation_product_count": sum(1 for item in snapshot_rows if not item.get("recommendations")),
+        "recommendation_pair_count": sum(len(item.get("recommendations", []) or []) for item in snapshot_rows),
+        "base_category_counts": dict(category_counts),
+        "local_quality_bucket_counts": dict(bucket_counts),
+        "local_risk_flag_counts": dict(risk_counts),
+        "batch_request_count": len(batch_requests),
+        "batch_jsonl": str(batch_jsonl),
+        "snapshot_jsonl": str(snapshot_jsonl),
+        "snapshot_csv": str(snapshot_csv),
+        "request_map": str(output_dir / "request_map.json"),
+        "estimated_batch_cost": estimate_batch_cost(batch_requests, int(args.top_k)),
+    }
+    summary_path = output_dir / "refresh_summary.json"
+    summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+
+
+def score_impact(args: argparse.Namespace) -> None:
+    output_dir = resolve_path(args.output_dir)
+    judge_csv = resolve_path(args.judge_csv) if args.judge_csv else output_dir / "gemini_judge_results.csv"
+    if not judge_csv.exists():
+        raise FileNotFoundError(judge_csv)
+
+    runtime = resolve_runtime_paths()
+    ingredient_profile_path = (
+        Path(args.ingredient_category_profile)
+        if str(args.ingredient_category_profile or "").strip()
+        else runtime.get("ingredient_category_profile_path")
+    )
+    profiles = load_product_function_profiles(runtime["product_profile_csv_path"])
+    ingredient_category_profiles = load_ingredient_category_profiles(ingredient_profile_path)
+    profile_by_report_no = {
+        str(profile.get("report_no", "") or ""): profile
+        for profile in profiles.values()
+        if str(profile.get("report_no", "") or "")
+    }
+
+    df = pd.read_csv(judge_csv, encoding="utf-8-sig", low_memory=False).fillna("")
+    rows: list[dict[str, Any]] = []
+    missing_rows: list[dict[str, Any]] = []
+    adjustment_counts: Counter[str] = Counter()
+    high_threshold = float(args.high_score_threshold)
+
+    for source in df.to_dict(orient="records"):
+        base_report_no = str(source.get("base_report_no", "") or "").strip()
+        target_report_no = str(source.get("target_report_no", "") or "").strip()
+        base_profile = profile_by_report_no.get(base_report_no)
+        target_profile = profile_by_report_no.get(target_report_no)
+        if not base_profile or not target_profile:
+            missing_rows.append(
+                {
+                    "base_report_no": base_report_no,
+                    "target_report_no": target_report_no,
+                    "reason": "missing_profile",
+                }
+            )
+            continue
+
+        old_score = float(source.get("similarity_score", 0.0) or 0.0)
+        judgment = str(source.get("judge_judgment", "") or "")
+        new_score, shared, detail = calculate_semantic_weighted_jaccard_v2(
+            base_profile,
+            target_profile,
+            ingredient_category_profiles,
+        )
+        adjustments = list(detail.get("score_adjustments", []) or [])
+        adjustment_types = [str(item.get("type", "") or "") for item in adjustments if str(item.get("type", "") or "")]
+        adjustment_counts.update(adjustment_types)
+        old_high_weak_bad = judgment in {"weak", "bad"} and old_score >= high_threshold
+        new_high_weak_bad = judgment in {"weak", "bad"} and float(new_score) >= high_threshold
+        rows.append(
+            {
+                "base_report_no": base_report_no,
+                "base_product_name": str(source.get("base_product_name", "") or ""),
+                "base_main_category": str(source.get("base_main_category", "") or ""),
+                "target_report_no": target_report_no,
+                "target_product_name": str(source.get("target_product_name", "") or ""),
+                "target_main_category": str(source.get("target_main_category", "") or ""),
+                "rank": source.get("rank", ""),
+                "judge_judgment": judgment,
+                "judge_confidence": source.get("judge_confidence", ""),
+                "judge_reason": str(source.get("judge_reason", "") or ""),
+                "old_similarity_score": round(old_score, 6),
+                "new_similarity_score": round(float(new_score), 6),
+                "score_delta": round(float(new_score) - old_score, 6),
+                "old_high_weak_or_bad": int(old_high_weak_bad),
+                "new_high_weak_or_bad": int(new_high_weak_bad),
+                "reduced_below_high_threshold": int(old_high_weak_bad and not new_high_weak_bad),
+                "shared_after_json": json.dumps(shared, ensure_ascii=False),
+                "score_adjustment_types_json": json.dumps(adjustment_types, ensure_ascii=False),
+                "score_adjustments_json": json.dumps(adjustments, ensure_ascii=False),
+            }
+        )
+
+    result_path = output_dir / "post_fix_score_impact.csv"
+    missing_path = output_dir / "post_fix_score_impact_missing.csv"
+    fieldnames = [
+        "base_report_no",
+        "base_product_name",
+        "base_main_category",
+        "target_report_no",
+        "target_product_name",
+        "target_main_category",
+        "rank",
+        "judge_judgment",
+        "judge_confidence",
+        "judge_reason",
+        "old_similarity_score",
+        "new_similarity_score",
+        "score_delta",
+        "old_high_weak_or_bad",
+        "new_high_weak_or_bad",
+        "reduced_below_high_threshold",
+        "shared_after_json",
+        "score_adjustment_types_json",
+        "score_adjustments_json",
+    ]
+    write_csv(result_path, fieldnames, rows)
+    write_csv(missing_path, ["base_report_no", "target_report_no", "reason"], missing_rows)
+
+    judgment_counts = Counter(row["judge_judgment"] for row in rows)
+    old_high_weak_bad = sum(int(row["old_high_weak_or_bad"]) for row in rows)
+    new_high_weak_bad = sum(int(row["new_high_weak_or_bad"]) for row in rows)
+    reduced_count = sum(int(row["reduced_below_high_threshold"]) for row in rows)
+    score_changed_count = sum(1 for row in rows if abs(float(row["score_delta"])) > 0.000001)
+    summary = {
+        "created_at": now_iso(),
+        "judge_csv": str(judge_csv),
+        "ingredient_category_profile_path": str(ingredient_profile_path or ""),
+        "row_count": len(rows),
+        "missing_count": len(missing_rows),
+        "judgment_counts": dict(judgment_counts),
+        "high_score_threshold": high_threshold,
+        "old_high_score_weak_or_bad_count": old_high_weak_bad,
+        "new_high_score_weak_or_bad_count": new_high_weak_bad,
+        "reduced_below_high_threshold_count": reduced_count,
+        "score_changed_count": score_changed_count,
+        "adjustment_counts": dict(adjustment_counts.most_common(30)),
+        "outputs": {
+            "impact_csv": str(result_path),
+            "missing_csv": str(missing_path),
+        },
+    }
+    summary_path = output_dir / "post_fix_score_impact_summary.json"
+    summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+
+
+def merge_parts(args: argparse.Namespace) -> None:
+    output_dir = resolve_path(args.output_dir)
+    parts_glob = Path(args.parts_glob)
+    if parts_glob.is_absolute():
+        part_dirs = sorted(parts_glob.parent.glob(parts_glob.name))
+    else:
+        part_dirs = sorted(resolve_path(".").glob(args.parts_glob))
+    if not part_dirs:
+        raise FileNotFoundError(f"no part dirs matched: {args.parts_glob}")
+
+    result_frames: list[pd.DataFrame] = []
+    error_frames: list[pd.DataFrame] = []
+    summaries: list[dict[str, Any]] = []
+    for part_dir in part_dirs:
+        result_csv = part_dir / "gemini_judge_results.csv"
+        error_csv = part_dir / "gemini_judge_errors.csv"
+        summary_json = part_dir / "gemini_judge_summary.json"
+        if result_csv.exists():
+            frame = pd.read_csv(result_csv, encoding="utf-8-sig", low_memory=False).fillna("")
+            frame.insert(0, "part_dir", str(part_dir))
+            result_frames.append(frame)
+        if error_csv.exists():
+            errors = pd.read_csv(error_csv, encoding="utf-8-sig", low_memory=False).fillna("")
+            if not errors.empty:
+                errors.insert(0, "part_dir", str(part_dir))
+                error_frames.append(errors)
+        if summary_json.exists():
+            summaries.append(json.loads(summary_json.read_text(encoding="utf-8")))
+
+    merged = pd.concat(result_frames, ignore_index=True) if result_frames else pd.DataFrame()
+    all_errors_merged = pd.concat(error_frames, ignore_index=True) if error_frames else pd.DataFrame()
+    errors_merged = all_errors_merged
+    retry_covered_error_count = 0
+    if not all_errors_merged.empty and "key" in all_errors_merged.columns and "key" in merged.columns:
+        successful_keys = {str(value) for value in merged["key"].tolist() if str(value)}
+        covered_mask = all_errors_merged["key"].astype(str).isin(successful_keys)
+        retry_covered_error_count = int(covered_mask.sum())
+        errors_merged = all_errors_merged.loc[~covered_mask].copy()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    merged_csv = output_dir / "merged_gemini_judge_results.csv"
+    errors_csv = output_dir / "merged_gemini_judge_errors.csv"
+    all_errors_csv = output_dir / "merged_gemini_judge_errors_all.csv"
+    merged.to_csv(merged_csv, index=False, encoding="utf-8-sig")
+    errors_merged.to_csv(errors_csv, index=False, encoding="utf-8-sig")
+    all_errors_merged.to_csv(all_errors_csv, index=False, encoding="utf-8-sig")
+
+    judgment_counts = Counter(str(value) for value in merged.get("judge_judgment", []) if str(value))
+    category_counts = Counter()
+    if not merged.empty and {"base_main_category", "judge_judgment"}.issubset(set(merged.columns)):
+        for row in merged[["base_main_category", "judge_judgment"]].to_dict(orient="records"):
+            category_counts[(str(row["base_main_category"]), str(row["judge_judgment"]))] += 1
+    weak_or_bad_count = judgment_counts.get("weak", 0) + judgment_counts.get("bad", 0)
+    summary = {
+        "created_at": now_iso(),
+        "parts_glob": args.parts_glob,
+        "part_count": len(part_dirs),
+        "parts": [str(path) for path in part_dirs],
+        "result_count": int(len(merged)),
+        "error_count": int(len(errors_merged)),
+        "raw_error_count": int(len(all_errors_merged)),
+        "retry_covered_error_count": retry_covered_error_count,
+        "part_summaries_error_count": sum(int(item.get("error_count", 0) or 0) for item in summaries),
+        "judgment_counts": dict(judgment_counts),
+        "weak_or_bad_rate": round(float(weak_or_bad_count / len(merged)), 4) if len(merged) else 0.0,
+        "high_score_weak_or_bad_count": int(
+            len(
+                merged[
+                    merged.get("judge_judgment", pd.Series(dtype=str)).isin(["weak", "bad"])
+                    & (pd.to_numeric(merged.get("similarity_score", pd.Series(dtype=float)), errors="coerce") >= float(args.high_score_threshold))
+                ]
+            )
+        )
+        if not merged.empty
+        else 0,
+        "category_judgment_counts": {f"{category}|{judgment}": count for (category, judgment), count in category_counts.items()},
+        "outputs": {
+            "merged_results_csv": str(merged_csv),
+            "merged_errors_csv": str(errors_csv),
+            "merged_all_errors_csv": str(all_errors_csv),
+        },
+    }
+    summary_path = output_dir / "merged_gemini_judge_summary.json"
+    summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+
+
+def run_command(command: list[str], cwd: Path, *, allow_failure: bool = False) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
+    proc = subprocess.run(
+        command,
+        cwd=str(cwd),
+        env=env,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    if proc.stdout:
+        print(proc.stdout, end="", flush=True)
+    if proc.returncode != 0 and not allow_failure:
+        raise RuntimeError(f"command failed ({proc.returncode}): {' '.join(command)}")
+    return proc
+
+
+def extract_job_name(output: str) -> str:
+    match = re.search(r"Batch job name:\s*(\S+)", output)
+    if not match:
+        raise RuntimeError("Batch job name not found in submit output")
+    return match.group(1)
+
+
+def extract_state(output: str) -> str:
+    match = re.search(r"(JOB_STATE_[A-Z_]+)", output)
+    return match.group(1) if match else "UNKNOWN"
+
+
+def submit(args: argparse.Namespace) -> None:
+    output_dir = resolve_path(args.output_dir)
+    health_batch_dir = resolve_path(args.health_batch_dir)
+    jsonl_path = resolve_path(args.jsonl) if args.jsonl else output_dir / DEFAULT_BATCH_JSONL_NAME
+    if not health_batch_dir.exists():
+        raise FileNotFoundError(health_batch_dir)
+    if not jsonl_path.exists():
+        raise FileNotFoundError(jsonl_path)
+
+    job_file = resolve_path(args.job_file) if args.job_file else output_dir / "gemini_recommendation_judge.job.txt"
+    if job_file.exists() and not args.force:
+        job_name = job_file.read_text(encoding="utf-8").strip()
+        print(json.dumps({"job_name": job_name, "job_file": str(job_file), "reused": True}, ensure_ascii=False, indent=2))
+        return
+
+    display_name = args.name or f"recommendation-quality-judge-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    proc = run_command(
+        ["py", "-3.12", "submit_gemini_batch.py", "--jsonl", str(jsonl_path), "--name", display_name],
+        cwd=health_batch_dir,
+    )
+    job_name = extract_job_name(proc.stdout or "")
+    job_file.parent.mkdir(parents=True, exist_ok=True)
+    job_file.write_text(job_name + "\n", encoding="utf-8")
+    print(json.dumps({"job_name": job_name, "job_file": str(job_file), "jsonl": str(jsonl_path)}, ensure_ascii=False, indent=2))
+
+
+def check(args: argparse.Namespace) -> None:
+    output_dir = resolve_path(args.output_dir)
+    health_batch_dir = resolve_path(args.health_batch_dir)
+    job_name = args.job
+    if not job_name:
+        job_file = resolve_path(args.job_file) if args.job_file else output_dir / "gemini_recommendation_judge.job.txt"
+        if not job_file.exists():
+            raise FileNotFoundError(job_file)
+        job_name = job_file.read_text(encoding="utf-8").strip()
+
+    command = ["py", "-3.12", "check_gemini_batch.py", "--job", job_name]
+    if args.watch:
+        command.append("--watch")
+    if args.download:
+        result_path = resolve_path(args.download_output) if args.download_output else output_dir / DEFAULT_RESULT_JSONL_NAME
+        command.extend(["--download-output", str(result_path)])
+    proc = run_command(command, cwd=health_batch_dir, allow_failure=args.allow_failure)
+    print(json.dumps({"job_name": job_name, "state": extract_state(proc.stdout or "")}, ensure_ascii=False, indent=2))
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Prepare and parse Gemini Batch recommendation quality judge jobs.")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    prepare_parser = subparsers.add_parser("prepare", help="Create top-k recommendation snapshot and Gemini Batch JSONL.")
+    prepare_parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
+    prepare_parser.add_argument("--all", action="store_true", help="Evaluate every product instead of a stratified sample.")
+    prepare_parser.add_argument("--sample-size", type=int, default=0, help="Optional total sample cap after stratified selection.")
+    prepare_parser.add_argument("--per-category", type=int, default=10, help="Sample count per main category when --all is not set.")
+    prepare_parser.add_argument("--report-no", action="append", default=[], help="Specific report_no to include. Can be repeated.")
+    prepare_parser.add_argument("--offset", type=int, default=0, help="Skip this many selected products before applying --limit.")
+    prepare_parser.add_argument("--limit", type=int, default=0, help="Final cap for quick smoke runs.")
+    prepare_parser.add_argument("--seed", type=int, default=42)
+    prepare_parser.add_argument("--top-k", type=int, default=DEFAULT_TOP_K)
+    prepare_parser.add_argument("--candidate-limit", type=int, default=DEFAULT_CANDIDATE_LIMIT)
+    prepare_parser.add_argument("--max-df-for-seed", type=int, default=DEFAULT_MAX_DF_FOR_SEED)
+    prepare_parser.add_argument("--similarity-algorithm", default=SIMILARITY_ALGORITHM_VERSION)
+    prepare_parser.add_argument("--ingredient-category-profile", default="")
+    prepare_parser.add_argument("--progress-every", type=int, default=10)
+    prepare_parser.add_argument("--workers", type=int, default=1, help="Parallel worker process count for top-k generation.")
+    prepare_parser.set_defaults(func=prepare)
+
+    apply_parser = subparsers.add_parser("apply", help="Parse Gemini Batch result JSONL into CSV and summary.")
+    apply_parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
+    apply_parser.add_argument("--result-jsonl", default="")
+    apply_parser.add_argument("--snapshot-jsonl", default="")
+    apply_parser.add_argument("--high-score-threshold", type=float, default=0.65)
+    apply_parser.set_defaults(func=apply_results)
+
+    refresh_parser = subparsers.add_parser("refresh", help="Recompute local risk flags and Batch JSONL from an existing snapshot.")
+    refresh_parser.add_argument("--source-snapshot-jsonl", required=True)
+    refresh_parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
+    refresh_parser.add_argument("--top-k", type=int, default=DEFAULT_TOP_K)
+    refresh_parser.add_argument("--offset", type=int, default=0)
+    refresh_parser.add_argument("--limit", type=int, default=0)
+    refresh_parser.set_defaults(func=refresh_snapshot)
+
+    impact_parser = subparsers.add_parser("impact", help="Recompute current scores for Gemini-judged pairs and summarize score changes.")
+    impact_parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
+    impact_parser.add_argument("--judge-csv", default="")
+    impact_parser.add_argument("--ingredient-category-profile", default="")
+    impact_parser.add_argument("--high-score-threshold", type=float, default=0.65)
+    impact_parser.set_defaults(func=score_impact)
+
+    merge_parser = subparsers.add_parser("merge-parts", help="Merge Gemini judge CSV results from multiple part output directories.")
+    merge_parser.add_argument("--parts-glob", required=True)
+    merge_parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
+    merge_parser.add_argument("--high-score-threshold", type=float, default=0.65)
+    merge_parser.set_defaults(func=merge_parts)
+
+    submit_parser = subparsers.add_parser("submit", help="Submit the prepared JSONL through D:\\health_batch_project helpers.")
+    submit_parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
+    submit_parser.add_argument("--health-batch-dir", default=str(DEFAULT_HEALTH_BATCH_DIR))
+    submit_parser.add_argument("--jsonl", default="")
+    submit_parser.add_argument("--name", default="")
+    submit_parser.add_argument("--job-file", default="")
+    submit_parser.add_argument("--force", action="store_true")
+    submit_parser.set_defaults(func=submit)
+
+    check_parser = subparsers.add_parser("check", help="Check or download a submitted Gemini Batch job.")
+    check_parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
+    check_parser.add_argument("--health-batch-dir", default=str(DEFAULT_HEALTH_BATCH_DIR))
+    check_parser.add_argument("--job", default="")
+    check_parser.add_argument("--job-file", default="")
+    check_parser.add_argument("--watch", action="store_true")
+    check_parser.add_argument("--download", action="store_true")
+    check_parser.add_argument("--download-output", default="")
+    check_parser.add_argument("--allow-failure", action="store_true")
+    check_parser.set_defaults(func=check)
+    return parser
+
+
+def main() -> None:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    parser = build_parser()
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()
