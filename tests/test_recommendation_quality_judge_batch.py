@@ -324,7 +324,7 @@ def test_parse_openai_batch_response_text_json():
 def test_gemini_submit_reuses_existing_job_without_jsonl_or_helper(tmp_path, monkeypatch, capsys):
     output_dir = tmp_path / "run"
     output_dir.mkdir()
-    (output_dir / "gemini_recommendation_judge.job.txt").write_text("batches/gemini_existing\n", encoding="utf-8")
+    (output_dir / judge_batch.DEFAULT_GEMINI_JOB_FILE_NAME).write_text("batches/gemini_existing\n", encoding="utf-8")
     monkeypatch.setattr(
         judge_batch,
         "run_command",
@@ -352,7 +352,7 @@ def test_gemini_submit_reuses_existing_job_without_jsonl_or_helper(tmp_path, mon
 def test_gemini_check_rejects_empty_job_file_before_running_helper(tmp_path, monkeypatch):
     output_dir = tmp_path / "run"
     output_dir.mkdir()
-    (output_dir / "gemini_recommendation_judge.job.txt").write_text("\n", encoding="utf-8")
+    (output_dir / judge_batch.DEFAULT_GEMINI_JOB_FILE_NAME).write_text("\n", encoding="utf-8")
     monkeypatch.setattr(
         judge_batch,
         "run_command",
@@ -650,7 +650,7 @@ def test_openai_run_submits_watches_downloads_and_finalizes(tmp_path, monkeypatc
 
     assert fake_files.created is True
     assert fake_batches.created is True
-    job_file_text = (output_dir / "openai_recommendation_judge.job.txt").read_text(encoding="utf-8").strip()
+    job_file_text = (output_dir / judge_batch.DEFAULT_OPENAI_JOB_FILE_NAME).read_text(encoding="utf-8").strip()
     result_jsonl_text = (output_dir / "openai_recommendation_judge_result.jsonl").read_text(encoding="utf-8")
     assert job_file_text == "batch_new"
     assert result_jsonl_text == '{"custom_id":"recjudge_000001"}\n'
@@ -699,7 +699,7 @@ def test_openai_run_reuses_existing_job_without_jsonl_and_finalizes(tmp_path, mo
     monkeypatch.setattr(judge_batch, "finalize_openai_result", fake_finalize)
     output_dir = tmp_path / "run"
     output_dir.mkdir()
-    (output_dir / "openai_recommendation_judge.job.txt").write_text("batch_existing\n", encoding="utf-8")
+    (output_dir / judge_batch.DEFAULT_OPENAI_JOB_FILE_NAME).write_text("batch_existing\n", encoding="utf-8")
 
     judge_batch.openai_run(
         SimpleNamespace(
@@ -851,7 +851,7 @@ def test_openai_submit_require_no_active_blocks_new_submit(tmp_path, monkeypatch
     else:
         raise AssertionError("openai-submit should stop when active batches are present")
 
-    assert not (output_dir / "openai_recommendation_judge.job.txt").exists()
+    assert not (output_dir / judge_batch.DEFAULT_OPENAI_JOB_FILE_NAME).exists()
 
 
 def test_openai_submit_blocks_new_batch_when_validation_status_stops_sampling(tmp_path, monkeypatch):
@@ -888,7 +888,7 @@ def test_openai_submit_blocks_new_batch_when_validation_status_stops_sampling(tm
     else:
         raise AssertionError("openai-submit should stop when validation status recommends stopping sampling")
 
-    assert not (output_dir / "openai_recommendation_judge.job.txt").exists()
+    assert not (output_dir / judge_batch.DEFAULT_OPENAI_JOB_FILE_NAME).exists()
 
 
 def test_openai_submit_blocks_validation_stop_before_requiring_jsonl(tmp_path, monkeypatch):
@@ -924,13 +924,13 @@ def test_openai_submit_blocks_validation_stop_before_requiring_jsonl(tmp_path, m
     else:
         raise AssertionError("openai-submit should stop before requiring a JSONL when validation status stops sampling")
 
-    assert not (output_dir / "openai_recommendation_judge.job.txt").exists()
+    assert not (output_dir / judge_batch.DEFAULT_OPENAI_JOB_FILE_NAME).exists()
 
 
 def test_openai_submit_reuses_existing_job_without_jsonl_even_after_validation_stop(tmp_path, monkeypatch):
     output_dir = tmp_path / "run"
     output_dir.mkdir()
-    (output_dir / "openai_recommendation_judge.job.txt").write_text("batch_existing\n", encoding="utf-8")
+    (output_dir / judge_batch.DEFAULT_OPENAI_JOB_FILE_NAME).write_text("batch_existing\n", encoding="utf-8")
     status_json = tmp_path / "validation_status.json"
     status_json.write_text(
         json.dumps({"next_action": "stop_sampling_keep_current_algorithm"}),
@@ -966,7 +966,7 @@ def test_openai_submit_reuses_existing_job_without_jsonl_even_after_validation_s
 def test_openai_submit_rejects_empty_existing_job_file_before_loading_client(tmp_path, monkeypatch):
     output_dir = tmp_path / "run"
     output_dir.mkdir()
-    (output_dir / "openai_recommendation_judge.job.txt").write_text(" \n", encoding="utf-8")
+    (output_dir / judge_batch.DEFAULT_OPENAI_JOB_FILE_NAME).write_text(" \n", encoding="utf-8")
     monkeypatch.setattr(
         judge_batch,
         "load_openai_client",
@@ -1028,13 +1028,13 @@ def test_openai_run_blocks_validation_stop_before_loading_client(tmp_path, monke
     else:
         raise AssertionError("openai-run should stop before loading the OpenAI client")
 
-    assert not (output_dir / "openai_recommendation_judge.job.txt").exists()
+    assert not (output_dir / judge_batch.DEFAULT_OPENAI_JOB_FILE_NAME).exists()
 
 
 def test_openai_run_rejects_empty_existing_job_file_before_loading_client(tmp_path, monkeypatch):
     output_dir = tmp_path / "run"
     output_dir.mkdir()
-    (output_dir / "openai_recommendation_judge.job.txt").write_text("\n", encoding="utf-8")
+    (output_dir / judge_batch.DEFAULT_OPENAI_JOB_FILE_NAME).write_text("\n", encoding="utf-8")
     monkeypatch.setattr(
         judge_batch,
         "load_openai_client",

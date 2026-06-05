@@ -48,6 +48,7 @@ DEFAULT_OUTPUT_DIR = ROOT_DIR / "output" / "recommendation_quality_judge"
 DEFAULT_HEALTH_BATCH_DIR = Path(r"D:\health_batch_project")
 DEFAULT_BATCH_JSONL_NAME = "gemini_recommendation_judge_batch.jsonl"
 DEFAULT_RESULT_JSONL_NAME = "gemini_recommendation_judge_result.jsonl"
+DEFAULT_GEMINI_JOB_FILE_NAME = "gemini_recommendation_judge.job.txt"
 DEFAULT_OPENAI_BATCH_JSONL_NAME = "openai_recommendation_judge_batch.jsonl"
 DEFAULT_OPENAI_RESULT_JSONL_NAME = "openai_recommendation_judge_result.jsonl"
 DEFAULT_OPENAI_JOB_FILE_NAME = "openai_recommendation_judge.job.txt"
@@ -3047,7 +3048,7 @@ def submit(args: argparse.Namespace) -> None:
     output_dir = resolve_path(args.output_dir)
     health_batch_dir = resolve_path(args.health_batch_dir)
     jsonl_path = resolve_path(args.jsonl) if args.jsonl else output_dir / DEFAULT_BATCH_JSONL_NAME
-    job_file = resolve_path(args.job_file) if args.job_file else output_dir / "gemini_recommendation_judge.job.txt"
+    job_file = resolve_path(args.job_file) if args.job_file else output_dir / DEFAULT_GEMINI_JOB_FILE_NAME
     if job_file.exists() and not args.force:
         job_name = read_nonempty_text_file(job_file, label="Gemini Batch job file")
         print(
@@ -3086,7 +3087,7 @@ def check(args: argparse.Namespace) -> None:
     health_batch_dir = resolve_path(args.health_batch_dir)
     job_name = require_nonempty_text(args.job, label="Gemini Batch job name") if args.job else ""
     if not job_name:
-        job_file = resolve_path(args.job_file) if args.job_file else output_dir / "gemini_recommendation_judge.job.txt"
+        job_file = resolve_path(args.job_file) if args.job_file else output_dir / DEFAULT_GEMINI_JOB_FILE_NAME
         job_name = read_nonempty_text_file(job_file, label="Gemini Batch job file")
 
     command = ["py", "-3.12", "check_gemini_batch.py", "--job", job_name]
