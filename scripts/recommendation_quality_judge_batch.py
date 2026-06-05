@@ -3185,9 +3185,6 @@ def validation_stop_submission_block(args: argparse.Namespace) -> dict[str, Any]
 def create_or_reuse_openai_batch(args: argparse.Namespace, client: Any | None = None) -> dict[str, Any]:
     output_dir = resolve_path(args.output_dir)
     jsonl_path = resolve_path(args.jsonl) if args.jsonl else output_dir / DEFAULT_OPENAI_BATCH_JSONL_NAME
-    if not jsonl_path.exists():
-        raise FileNotFoundError(jsonl_path)
-
     job_file = resolve_path(args.job_file) if args.job_file else output_dir / DEFAULT_OPENAI_JOB_FILE_NAME
     if job_file.exists() and not args.force:
         job_id = job_file.read_text(encoding="utf-8").strip()
@@ -3195,9 +3192,13 @@ def create_or_reuse_openai_batch(args: argparse.Namespace, client: Any | None = 
             "job_id": job_id,
             "job_file": str(job_file),
             "jsonl": str(jsonl_path),
+            "jsonl_exists": jsonl_path.exists(),
             "model": args.model,
             "reused": True,
         }
+
+    if not jsonl_path.exists():
+        raise FileNotFoundError(jsonl_path)
 
     stop_block = validation_stop_submission_block(args)
     if stop_block:

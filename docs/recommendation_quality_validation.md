@@ -177,7 +177,7 @@ python scripts\recommendation_quality_judge_batch.py openai-run `
 
 `openai-run` reuses the existing job file by default. `--require-no-active` only blocks a new submission when there is no reusable job file. Use `--force` only when intentionally submitting a replacement job.
 
-When `--validation-status-json` points to a status whose `next_action` is `stop_sampling_keep_current_algorithm`, `openai-submit` and `openai-run` refuse to submit a new OpenAI Batch job. Existing job files can still be reused for download/finalization. Use `--allow-after-validation-stop` only when intentionally overriding the stop decision.
+When `--validation-status-json` points to a status whose `next_action` is `stop_sampling_keep_current_algorithm`, `openai-submit` and `openai-run` refuse to submit a new OpenAI Batch job. Existing job files can still be reused for download/finalization, even if the original JSONL is no longer present. Use `--allow-after-validation-stop` only when intentionally overriding the stop decision.
 
 The `plan-next-sample` output also includes `openai_run_command_powershell` so the next targeted sample can be prepared first and then run with the same safety preflight.
 
