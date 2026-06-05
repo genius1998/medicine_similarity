@@ -1433,6 +1433,317 @@ def merge_parts(args: argparse.Namespace) -> None:
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 
+OPENAI_CHUNK_RESULT_FIELDS = [
+    "chunk",
+    "part_dir",
+    "source_csv",
+    "current_score_source",
+    "is_retry",
+    "key",
+    "base_report_no",
+    "base_product_name",
+    "base_main_category",
+    "rank",
+    "target_report_no",
+    "target_product_name",
+    "target_main_category",
+    "similarity_score",
+    "old_similarity_score",
+    "score_delta",
+    "function_similarity_score",
+    "core_match_score",
+    "shared_ingredients_json",
+    "shared_categories_json",
+    "shared_after_json",
+    "local_risk_flags_json",
+    "local_quality_bucket",
+    "score_adjustment_types_json",
+    "score_adjustments_json",
+    "judge_judgment",
+    "judge_confidence",
+    "judge_reason",
+    "judge_risk_flags_json",
+    "suggested_rule",
+]
+
+
+def coerce_patterns(patterns: Any) -> list[str]:
+    if not patterns:
+        return []
+    if isinstance(patterns, str):
+        return [patterns]
+    return [str(pattern) for pattern in patterns if str(pattern or "").strip()]
+
+
+def glob_directories(patterns: Any) -> list[Path]:
+    matched: list[Path] = []
+    for pattern in coerce_patterns(patterns):
+        path_pattern = Path(pattern)
+        if path_pattern.is_absolute():
+            candidates = path_pattern.parent.glob(path_pattern.name)
+        else:
+            candidates = ROOT_DIR.glob(pattern.replace("\\", "/"))
+        matched.extend(path for path in candidates if path.is_dir())
+    deduped = {str(path.resolve()): path for path in matched}
+    return [deduped[key] for key in sorted(deduped)]
+
+
+def chunk_label_from_dir(path: Path) -> str:
+    name = path.name
+    match = re.search(r"openai_chunk_(\d+_\d+)(?:_retry_.+)?$", name)
+    if match:
+        return match.group(1)
+    if "_retry_" in name:
+        return name.split("_retry_", 1)[0]
+    return name
+
+
+def snapshot_expected_counts(part_dir: Path) -> dict[str, Any]:
+    snapshot_jsonl = part_dir / "recommendation_snapshot.jsonl"
+    if not snapshot_jsonl.exists():
+        raise FileNotFoundError(snapshot_jsonl)
+
+    expected_by_base: dict[str, int] = {}
+    request_count = 0
+    expected_label_count = 0
+    for item in read_jsonl(snapshot_jsonl):
+        base = item.get("base_product", {}) if isinstance(item, dict) else {}
+        base_report_no = str(base.get("report_no", "") or "").strip()
+        recommendations = item.get("recommendations", []) if isinstance(item, dict) else []
+        recommendation_count = len(recommendations or [])
+        if recommendation_count:
+            request_count += 1
+            expected_label_count += recommendation_count
+        if base_report_no:
+            expected_by_base[base_report_no] = recommendation_count
+    return {
+        "product_count": len(expected_by_base),
+        "request_count": request_count,
+        "expected_label_count": expected_label_count,
+        "expected_by_base": expected_by_base,
+        "base_report_nos": set(expected_by_base),
+    }
+
+
+def read_csv_records(path: Path) -> list[dict[str, Any]]:
+    frame = pd.read_csv(path, encoding="utf-8-sig", low_memory=False).fillna("")
+    return [dict(row) for row in frame.to_dict(orient="records")]
+
+
+def current_score_rows_for_part(part_dir: Path, *, chunk: str, is_retry: bool) -> list[dict[str, Any]]:
+    impact_csv = part_dir / "post_fix_score_impact.csv"
+    result_csv = part_dir / "gemini_judge_results.csv"
+    if impact_csv.exists():
+        source_csv = impact_csv
+        source = "post_fix_score_impact"
+        records = read_csv_records(impact_csv)
+    elif result_csv.exists():
+        source_csv = result_csv
+        source = "gemini_judge_results"
+        records = read_csv_records(result_csv)
+    else:
+        raise FileNotFoundError(f"missing post_fix_score_impact.csv or gemini_judge_results.csv in {part_dir}")
+
+    rows: list[dict[str, Any]] = []
+    for record in records:
+        if source == "post_fix_score_impact":
+            similarity_score = record.get("new_similarity_score", "")
+            old_similarity_score = record.get("old_similarity_score", "")
+            score_delta = record.get("score_delta", "")
+        else:
+            similarity_score = record.get("similarity_score", "")
+            old_similarity_score = record.get("old_similarity_score", "")
+            score_delta = record.get("score_delta", "")
+
+        row = {
+            "chunk": chunk,
+            "part_dir": str(part_dir),
+            "source_csv": str(source_csv),
+            "current_score_source": source,
+            "is_retry": int(is_retry),
+            "key": record.get("key", ""),
+            "base_report_no": str(record.get("base_report_no", "") or "").strip(),
+            "base_product_name": record.get("base_product_name", ""),
+            "base_main_category": record.get("base_main_category", ""),
+            "rank": record.get("rank", ""),
+            "target_report_no": str(record.get("target_report_no", "") or "").strip(),
+            "target_product_name": record.get("target_product_name", ""),
+            "target_main_category": record.get("target_main_category", ""),
+            "similarity_score": similarity_score,
+            "old_similarity_score": old_similarity_score,
+            "score_delta": score_delta,
+            "function_similarity_score": record.get("function_similarity_score", ""),
+            "core_match_score": record.get("core_match_score", ""),
+            "shared_ingredients_json": record.get("shared_ingredients_json", ""),
+            "shared_categories_json": record.get("shared_categories_json", ""),
+            "shared_after_json": record.get("shared_after_json", ""),
+            "local_risk_flags_json": record.get("local_risk_flags_json", ""),
+            "local_quality_bucket": record.get("local_quality_bucket", ""),
+            "score_adjustment_types_json": record.get("score_adjustment_types_json", ""),
+            "score_adjustments_json": record.get("score_adjustments_json", ""),
+            "judge_judgment": record.get("judge_judgment", ""),
+            "judge_confidence": record.get("judge_confidence", ""),
+            "judge_reason": record.get("judge_reason", ""),
+            "judge_risk_flags_json": record.get("judge_risk_flags_json", ""),
+            "suggested_rule": record.get("suggested_rule", ""),
+        }
+        rows.append(row)
+    return rows
+
+
+def score_as_float(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def ordered_fields(rows: list[dict[str, Any]], preferred: list[str]) -> list[str]:
+    present = set()
+    for row in rows:
+        present.update(row.keys())
+    return preferred + sorted(present - set(preferred))
+
+
+def summarize_chunks(args: argparse.Namespace) -> None:
+    output_dir = resolve_path(args.output_dir)
+    part_dirs = [path for path in glob_directories(args.parts_glob) if "_retry_" not in path.name]
+    retry_dirs = glob_directories(getattr(args, "retry_glob", []))
+    if not part_dirs:
+        raise FileNotFoundError(f"no part dirs matched: {coerce_patterns(args.parts_glob)}")
+
+    rows: list[dict[str, Any]] = []
+    expected_by_chunk_base: dict[tuple[str, str], int] = {}
+    part_summaries: list[dict[str, Any]] = []
+    product_count = 0
+    request_count = 0
+    expected_label_count = 0
+    for part_dir in part_dirs:
+        chunk = chunk_label_from_dir(part_dir)
+        expected = snapshot_expected_counts(part_dir)
+        product_count += int(expected["product_count"])
+        request_count += int(expected["request_count"])
+        expected_label_count += int(expected["expected_label_count"])
+        for base_report_no, label_count in expected["expected_by_base"].items():
+            expected_by_chunk_base[(chunk, base_report_no)] = int(label_count)
+        part_rows = current_score_rows_for_part(part_dir, chunk=chunk, is_retry=False)
+        rows.extend(part_rows)
+        part_summaries.append(
+            {
+                "chunk": chunk,
+                "part_dir": str(part_dir),
+                "product_count": int(expected["product_count"]),
+                "request_count": int(expected["request_count"]),
+                "expected_label_count": int(expected["expected_label_count"]),
+                "actual_label_count": len(part_rows),
+            }
+        )
+
+    retry_replacements: list[dict[str, Any]] = []
+    for retry_dir in retry_dirs:
+        parent_chunk = chunk_label_from_dir(retry_dir)
+        retry_expected = snapshot_expected_counts(retry_dir)
+        retry_base_report_nos = set(retry_expected["base_report_nos"])
+        retry_rows = current_score_rows_for_part(retry_dir, chunk=parent_chunk, is_retry=True)
+        if not retry_base_report_nos:
+            retry_base_report_nos = {row["base_report_no"] for row in retry_rows if row.get("base_report_no")}
+
+        before_count = len(rows)
+        rows = [
+            row
+            for row in rows
+            if not (row.get("chunk") == parent_chunk and str(row.get("base_report_no", "") or "") in retry_base_report_nos)
+        ]
+        removed_count = before_count - len(rows)
+        rows.extend(retry_rows)
+        retry_replacements.append(
+            {
+                "retry_dir": str(retry_dir),
+                "parent_chunk": parent_chunk,
+                "base_report_nos": sorted(retry_base_report_nos),
+                "removed_label_count": removed_count,
+                "retry_label_count": len(retry_rows),
+            }
+        )
+
+    judgment_counts = Counter(str(row.get("judge_judgment", "") or "") for row in rows if str(row.get("judge_judgment", "") or ""))
+    category_counts = Counter(
+        (str(row.get("base_main_category", "") or ""), str(row.get("judge_judgment", "") or ""))
+        for row in rows
+        if str(row.get("judge_judgment", "") or "")
+    )
+    high_threshold = float(args.high_score_threshold)
+    high_score_weak_or_bad = [
+        row
+        for row in rows
+        if str(row.get("judge_judgment", "") or "") in {"weak", "bad"} and score_as_float(row.get("similarity_score")) >= high_threshold
+    ]
+
+    actual_by_chunk_base = Counter(
+        (str(row.get("chunk", "") or ""), str(row.get("base_report_no", "") or ""))
+        for row in rows
+        if str(row.get("base_report_no", "") or "")
+    )
+    coverage_mismatches = [
+        {
+            "chunk": chunk,
+            "base_report_no": base_report_no,
+            "expected": expected_count,
+            "actual": int(actual_by_chunk_base.get((chunk, base_report_no), 0)),
+        }
+        for (chunk, base_report_no), expected_count in sorted(expected_by_chunk_base.items())
+        if int(actual_by_chunk_base.get((chunk, base_report_no), 0)) != expected_count
+    ]
+    actual_label_count = len(rows)
+    missing_label_count = sum(max(0, int(item["expected"]) - int(item["actual"])) for item in coverage_mismatches)
+    extra_label_count = sum(max(0, int(item["actual"]) - int(item["expected"])) for item in coverage_mismatches)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    results_csv = output_dir / "openai_chunk_judge_results.csv"
+    high_score_csv = output_dir / "openai_chunk_high_score_weak_or_bad.csv"
+    coverage_csv = output_dir / "openai_chunk_label_coverage_mismatches.csv"
+    result_fields = ordered_fields(rows, OPENAI_CHUNK_RESULT_FIELDS)
+    write_csv(results_csv, result_fields, rows)
+    write_csv(high_score_csv, result_fields, high_score_weak_or_bad)
+    write_csv(coverage_csv, ["chunk", "base_report_no", "expected", "actual"], coverage_mismatches)
+
+    weak_or_bad_count = judgment_counts.get("weak", 0) + judgment_counts.get("bad", 0)
+    summary = {
+        "created_at": now_iso(),
+        "parts_glob": coerce_patterns(args.parts_glob),
+        "retry_glob": coerce_patterns(getattr(args, "retry_glob", [])),
+        "part_count": len(part_dirs),
+        "retry_part_count": len(retry_dirs),
+        "product_count": product_count,
+        "request_count": request_count,
+        "expected_label_count": expected_label_count,
+        "actual_label_count": actual_label_count,
+        "coverage_ok": expected_label_count == actual_label_count and not coverage_mismatches,
+        "missing_label_count": int(missing_label_count),
+        "extra_label_count": int(extra_label_count),
+        "coverage_mismatch_count": len(coverage_mismatches),
+        "coverage_mismatches": coverage_mismatches[:50],
+        "judgment_counts": dict(judgment_counts),
+        "weak_or_bad_rate": round(float(weak_or_bad_count / actual_label_count), 4) if actual_label_count else 0.0,
+        "high_score_threshold": high_threshold,
+        "current_high_score_weak_or_bad_count": len(high_score_weak_or_bad),
+        "current_high_score_weak_or_bad_rate": round(float(len(high_score_weak_or_bad) / actual_label_count), 4)
+        if actual_label_count
+        else 0.0,
+        "category_judgment_counts": {f"{category}|{judgment}": count for (category, judgment), count in category_counts.items()},
+        "parts": part_summaries,
+        "retry_replacements": retry_replacements,
+        "outputs": {
+            "results_csv": str(results_csv),
+            "high_score_weak_or_bad_csv": str(high_score_csv),
+            "coverage_mismatches_csv": str(coverage_csv),
+        },
+    }
+    summary_path = output_dir / "openai_chunk_judge_summary.json"
+    summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+
+
 def run_command(command: list[str], cwd: Path, *, allow_failure: bool = False) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
@@ -1701,6 +2012,16 @@ def build_parser() -> argparse.ArgumentParser:
     merge_parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     merge_parser.add_argument("--high-score-threshold", type=float, default=0.65)
     merge_parser.set_defaults(func=merge_parts)
+
+    summarize_parser = subparsers.add_parser(
+        "summarize-chunks",
+        help="Summarize OpenAI chunk judge outputs, preferring post-fix impact scores and applying retry replacements.",
+    )
+    summarize_parser.add_argument("--parts-glob", action="append", required=True)
+    summarize_parser.add_argument("--retry-glob", action="append", default=[])
+    summarize_parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
+    summarize_parser.add_argument("--high-score-threshold", type=float, default=0.65)
+    summarize_parser.set_defaults(func=summarize_chunks)
 
     submit_parser = subparsers.add_parser("submit", help="Submit the prepared JSONL through D:\\health_batch_project helpers.")
     submit_parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))

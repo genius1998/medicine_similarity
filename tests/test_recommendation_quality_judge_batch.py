@@ -18,6 +18,7 @@ from scripts.recommendation_quality_judge_batch import (  # noqa: E402
     parse_model_json,
     response_from_batch_line,
     select_product_ids,
+    summarize_chunks,
 )
 
 
@@ -342,3 +343,100 @@ def test_merge_parts_suppresses_retry_covered_errors(tmp_path, monkeypatch):
     assert summary["retry_covered_error_count"] == 1
     assert (output_dir / "merged_gemini_judge_errors.csv").read_text(encoding="utf-8-sig").strip() == "part_dir,line_number,key,error,raw"
     assert "recjudge_000002" in (output_dir / "merged_gemini_judge_errors_all.csv").read_text(encoding="utf-8-sig")
+
+
+def test_summarize_chunks_prefers_impact_scores_and_applies_retry(tmp_path):
+    output_dir = tmp_path / "merged"
+    impact_part = tmp_path / "recommendation_quality_judge_v2_8_openai_chunk_000_002"
+    retry_parent = tmp_path / "recommendation_quality_judge_v2_9_openai_chunk_002_003"
+    retry_dir = tmp_path / "recommendation_quality_judge_v2_9_openai_chunk_002_003_retry_000001"
+    impact_part.mkdir()
+    retry_parent.mkdir()
+    retry_dir.mkdir()
+
+    snapshot_impact = [
+        {
+            "key": "recjudge_000001",
+            "base_product": {"report_no": "B1"},
+            "recommendations": [{"rank": 1}, {"rank": 2}],
+        },
+        {
+            "key": "recjudge_000002",
+            "base_product": {"report_no": "B2"},
+            "recommendations": [{"rank": 1}],
+        },
+    ]
+    (impact_part / "recommendation_snapshot.jsonl").write_text(
+        "\n".join(json.dumps(row) for row in snapshot_impact) + "\n",
+        encoding="utf-8",
+    )
+    (impact_part / "post_fix_score_impact.csv").write_text(
+        "base_report_no,base_product_name,base_main_category,target_report_no,target_product_name,target_main_category,rank,"
+        "judge_judgment,judge_confidence,judge_reason,old_similarity_score,new_similarity_score,score_delta,"
+        "old_high_weak_or_bad,new_high_weak_or_bad,reduced_below_high_threshold,shared_after_json,"
+        "score_adjustment_types_json,score_adjustments_json\n"
+        "B1,base one,cat,T1,target one,cat,1,weak,0.7,too broad,0.8,0.5,-0.3,1,0,1,[],[],[]\n"
+        "B1,base one,cat,T2,target two,cat,2,reasonable,0.9,good,0.7,0.7,0.0,0,0,0,[],[],[]\n"
+        "B2,base two,cat,T3,target three,cat,1,weak,0.8,still high,0.8,0.8,0.0,1,1,0,[],[],[]\n",
+        encoding="utf-8-sig",
+    )
+
+    (retry_parent / "recommendation_snapshot.jsonl").write_text(
+        json.dumps(
+            {
+                "key": "recjudge_000001",
+                "base_product": {"report_no": "B3"},
+                "recommendations": [{"rank": 1}],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (retry_parent / "gemini_judge_results.csv").write_text(
+        "key,base_report_no,base_product_name,base_main_category,rank,target_report_no,target_product_name,target_main_category,"
+        "similarity_score,function_similarity_score,core_match_score,shared_ingredients_json,shared_categories_json,"
+        "local_risk_flags_json,local_quality_bucket,judge_judgment,judge_confidence,judge_reason,judge_risk_flags_json,suggested_rule\n"
+        "recjudge_000001,B3,base three,cat,1,T4,target four,cat,0.9,,,[],[],[],likely_reasonable,weak,0.6,extra label,[],\n",
+        encoding="utf-8-sig",
+    )
+
+    (retry_dir / "recommendation_snapshot.jsonl").write_text(
+        json.dumps(
+            {
+                "key": "recjudge_000001",
+                "base_product": {"report_no": "B3"},
+                "recommendations": [{"rank": 1}],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (retry_dir / "gemini_judge_results.csv").write_text(
+        "key,base_report_no,base_product_name,base_main_category,rank,target_report_no,target_product_name,target_main_category,"
+        "similarity_score,function_similarity_score,core_match_score,shared_ingredients_json,shared_categories_json,"
+        "local_risk_flags_json,local_quality_bucket,judge_judgment,judge_confidence,judge_reason,judge_risk_flags_json,suggested_rule\n"
+        "recjudge_000001,B3,base three,cat,1,T4,target four,cat,0.9,,,[],[],[],likely_reasonable,acceptable_adjacent,0.9,retry fixed,[],\n",
+        encoding="utf-8-sig",
+    )
+
+    summarize_chunks(
+        SimpleNamespace(
+            output_dir=str(output_dir),
+            parts_glob=[str(tmp_path / "recommendation_quality_judge_v2_*_openai_chunk_*_*")],
+            retry_glob=[str(tmp_path / "recommendation_quality_judge_v2_*_openai_chunk_*_retry_*")],
+            high_score_threshold=0.65,
+        )
+    )
+
+    summary = json.loads((output_dir / "openai_chunk_judge_summary.json").read_text(encoding="utf-8"))
+    merged_csv = (output_dir / "openai_chunk_judge_results.csv").read_text(encoding="utf-8-sig")
+
+    assert summary["coverage_ok"] is True
+    assert summary["expected_label_count"] == 4
+    assert summary["actual_label_count"] == 4
+    assert summary["judgment_counts"] == {"weak": 2, "reasonable": 1, "acceptable_adjacent": 1}
+    assert summary["current_high_score_weak_or_bad_count"] == 1
+    assert summary["retry_replacements"][0]["removed_label_count"] == 1
+    assert "post_fix_score_impact" in merged_csv
+    assert "retry fixed" in merged_csv
+    assert "extra label" not in merged_csv
