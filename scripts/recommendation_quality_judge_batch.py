@@ -3332,10 +3332,16 @@ def openai_check(args: argparse.Namespace) -> None:
 def openai_run(args: argparse.Namespace) -> None:
     output_dir = resolve_path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    client = load_openai_client(args.env_path)
     active_batches: list[dict[str, Any]] = []
     job_file = resolve_path(args.job_file) if args.job_file else output_dir / DEFAULT_OPENAI_JOB_FILE_NAME
     will_reuse_job = job_file.exists() and not bool(args.force)
+    if not will_reuse_job:
+        stop_block = validation_stop_submission_block(args)
+        if stop_block:
+            print(json.dumps(stop_block, ensure_ascii=False, indent=2))
+            raise SystemExit(2)
+
+    client = load_openai_client(args.env_path)
     if bool(args.require_no_active) and not will_reuse_job:
         active_batches = list_active_openai_batches(client, limit=int(args.active_check_limit))
         if active_batches:
