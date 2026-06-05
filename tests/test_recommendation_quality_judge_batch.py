@@ -16,6 +16,8 @@ from scripts.recommendation_quality_judge_batch import (  # noqa: E402
     extract_response_text,
     merge_parts,
     parse_model_json,
+    pattern_features_for_row,
+    pattern_impact_rows,
     response_from_batch_line,
     select_product_ids,
     summarize_chunks,
@@ -463,3 +465,56 @@ def test_summarize_chunks_prefers_impact_scores_and_applies_retry(tmp_path):
     assert "post_fix_score_impact" in merged_csv
     assert "retry fixed" in merged_csv
     assert "extra label" not in merged_csv
+
+
+def test_pattern_features_and_impact_rows_capture_cross_role_primary_overlap():
+    base = {
+        "report_no": "B1",
+        "product_name": "base",
+        "product_main_category": "skin",
+        "primary_ingredients": ["hyaluronic"],
+        "secondary_ingredients": ["vitamin-c"],
+        "category_scores": {"skin": 5.0},
+        "role_by_ingredient": {"hyaluronic": "primary", "vitamin-c": "secondary"},
+        "ingredient_scores": [
+            {"ingredient": "hyaluronic", "weight": 0.95, "role": "primary", "category_main": "skin", "category_sub": ""},
+            {"ingredient": "vitamin-c", "weight": 0.95, "role": "secondary", "category_main": "skin", "category_sub": ""},
+        ],
+    }
+    target = {
+        "report_no": "T1",
+        "product_name": "target",
+        "product_main_category": "skin",
+        "primary_ingredients": ["vitamin-c"],
+        "secondary_ingredients": ["hyaluronic"],
+        "category_scores": {"skin": 5.0},
+        "role_by_ingredient": {"vitamin-c": "primary", "hyaluronic": "secondary"},
+        "ingredient_scores": [
+            {"ingredient": "vitamin-c", "weight": 0.95, "role": "primary", "category_main": "skin", "category_sub": ""},
+            {"ingredient": "hyaluronic", "weight": 0.95, "role": "secondary", "category_main": "skin", "category_sub": ""},
+        ],
+    }
+    ingredient_profiles = {
+        "hyaluronic": {"ingredient_main_category": "skin", "ingredient_type": "functional", "vector_include": True, "is_excipient": False},
+        "vitamin-c": {"ingredient_main_category": "skin", "ingredient_type": "functional", "vector_include": True, "is_excipient": False},
+    }
+    weak_row = {
+        "base_report_no": "B1",
+        "target_report_no": "T1",
+        "judge_judgment": "weak",
+        "similarity_score": "0.8",
+        "function_similarity_score": "0.5",
+    }
+    reasonable_row = dict(weak_row, judge_judgment="reasonable")
+
+    weak_features = pattern_features_for_row(weak_row, base, target, ingredient_profiles)
+    reasonable_features = pattern_features_for_row(reasonable_row, base, target, ingredient_profiles)
+    impact_rows = pattern_impact_rows([weak_features, reasonable_features], high_score_threshold=0.65)
+    impact_by_name = {row["pattern"]: row for row in impact_rows}
+
+    assert weak_features["no_primary_primary_overlap_cross_role"] == 1
+    assert weak_features["primary_primary_overlap_count"] == 0
+    assert weak_features["shared_count"] == 2
+    assert impact_by_name["no_primary_primary_overlap_cross_role_shared_le2"]["matched_count"] == 2
+    assert impact_by_name["no_primary_primary_overlap_cross_role_shared_le2"]["weak_or_bad_count"] == 1
+    assert impact_by_name["no_primary_primary_overlap_cross_role_shared_le2"]["non_weak_affected_count"] == 1

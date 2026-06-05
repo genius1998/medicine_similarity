@@ -32,6 +32,7 @@ from scripts.enhance_similarity_with_explanation import (  # noqa: E402
     SIMILARITY_ALGORITHM_VERSION,
     build_vector_indexes,
     calculate_semantic_weighted_jaccard_v2,
+    calculate_function_similarity,
     compute_topk_for_single_product,
     load_ingredient_category_profiles,
     load_product_function_profiles,
@@ -1752,6 +1753,280 @@ def summarize_chunks(args: argparse.Namespace) -> None:
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 
+PATTERN_FEATURE_FIELDS = [
+    "base_report_no",
+    "base_product_name",
+    "base_main_category",
+    "target_report_no",
+    "target_product_name",
+    "target_main_category",
+    "rank",
+    "judge_judgment",
+    "judge_confidence",
+    "judge_reason",
+    "current_similarity_score",
+    "source_similarity_score",
+    "function_similarity_score",
+    "shared_count",
+    "shared_core_count",
+    "same_primary_set",
+    "primary_primary_overlap_count",
+    "base_primary_count",
+    "target_primary_count",
+    "base_primary_in_target_secondary_count",
+    "target_primary_in_base_secondary_count",
+    "no_primary_primary_overlap_cross_role",
+    "base_only_semantic_count",
+    "target_only_semantic_count",
+    "shared_labels_json",
+    "shared_core_keys_json",
+    "score_adjustment_types_json",
+]
+
+
+def ingredient_name_set(values: Any) -> set[str]:
+    return {str(value or "").strip() for value in values or [] if str(value or "").strip()}
+
+
+def json_list(value: Any) -> str:
+    return json.dumps(list(value or []), ensure_ascii=False)
+
+
+def pattern_features_for_row(
+    row: dict[str, Any],
+    base_profile: dict[str, Any],
+    target_profile: dict[str, Any],
+    ingredient_category_profiles: dict[str, dict],
+) -> dict[str, Any]:
+    current_score, shared_labels, detail = calculate_semantic_weighted_jaccard_v2(
+        base_profile,
+        target_profile,
+        ingredient_category_profiles,
+    )
+    core_coverage = detail.get("core_coverage", {}) or {}
+    shared_core_keys = list(core_coverage.get("shared_core_semantic_keys", []) or [])
+    adjustment_types = [
+        str(item.get("type", "") or "")
+        for item in detail.get("score_adjustments", []) or []
+        if str(item.get("type", "") or "")
+    ]
+    base_primary = ingredient_name_set(base_profile.get("primary_ingredients"))
+    base_secondary = ingredient_name_set(base_profile.get("secondary_ingredients"))
+    target_primary = ingredient_name_set(target_profile.get("primary_ingredients"))
+    target_secondary = ingredient_name_set(target_profile.get("secondary_ingredients"))
+    primary_primary_overlap = sorted(base_primary & target_primary)
+    base_primary_in_target_secondary = sorted(base_primary & target_secondary)
+    target_primary_in_base_secondary = sorted(target_primary & base_secondary)
+    function_similarity = score_as_float(row.get("function_similarity_score"))
+    if function_similarity <= 0.0:
+        function_similarity = calculate_function_similarity(base_profile, target_profile)
+
+    return {
+        "base_report_no": str(row.get("base_report_no", "") or "").strip(),
+        "base_product_name": row.get("base_product_name", base_profile.get("product_name", "")),
+        "base_main_category": row.get("base_main_category", base_profile.get("product_main_category", "")),
+        "target_report_no": str(row.get("target_report_no", "") or "").strip(),
+        "target_product_name": row.get("target_product_name", target_profile.get("product_name", "")),
+        "target_main_category": row.get("target_main_category", target_profile.get("product_main_category", "")),
+        "rank": row.get("rank", ""),
+        "judge_judgment": row.get("judge_judgment", ""),
+        "judge_confidence": row.get("judge_confidence", ""),
+        "judge_reason": row.get("judge_reason", ""),
+        "current_similarity_score": round(float(current_score), 6),
+        "source_similarity_score": row.get("similarity_score", ""),
+        "function_similarity_score": round(float(function_similarity), 6),
+        "shared_count": len(shared_labels),
+        "shared_core_count": len(shared_core_keys),
+        "same_primary_set": int(bool(base_primary and target_primary and base_primary == target_primary)),
+        "primary_primary_overlap_count": len(primary_primary_overlap),
+        "base_primary_count": len(base_primary),
+        "target_primary_count": len(target_primary),
+        "base_primary_in_target_secondary_count": len(base_primary_in_target_secondary),
+        "target_primary_in_base_secondary_count": len(target_primary_in_base_secondary),
+        "no_primary_primary_overlap_cross_role": int(
+            bool(
+                base_primary
+                and target_primary
+                and not primary_primary_overlap
+                and (base_primary_in_target_secondary or target_primary_in_base_secondary)
+            )
+        ),
+        "base_only_semantic_count": max(0, int(detail.get("base_semantic_ingredient_count", 0) or 0) - len(shared_labels)),
+        "target_only_semantic_count": max(0, int(detail.get("target_semantic_ingredient_count", 0) or 0) - len(shared_labels)),
+        "shared_labels_json": json_list(shared_labels),
+        "shared_core_keys_json": json_list(shared_core_keys),
+        "score_adjustment_types_json": json_list(adjustment_types),
+    }
+
+
+def bool_feature(row: dict[str, Any], key: str) -> bool:
+    return bool(int(row.get(key, 0) or 0))
+
+
+def pattern_rule_definitions() -> list[dict[str, Any]]:
+    return [
+        {
+            "name": "no_primary_primary_overlap_cross_role_shared_le2",
+            "description": "No primary-primary overlap, but a primary ingredient appears only as the other product's secondary ingredient; shared ingredients <= 2.",
+            "predicate": lambda row: bool_feature(row, "no_primary_primary_overlap_cross_role") and int(row.get("shared_count", 0) or 0) <= 2,
+        },
+        {
+            "name": "no_primary_primary_overlap_cross_role_shared_le1",
+            "description": "Stricter cross-role primary signal with shared ingredients <= 1.",
+            "predicate": lambda row: bool_feature(row, "no_primary_primary_overlap_cross_role") and int(row.get("shared_count", 0) or 0) <= 1,
+        },
+        {
+            "name": "single_core_shared_le2",
+            "description": "Only one shared semantic core and shared ingredients <= 2.",
+            "predicate": lambda row: int(row.get("shared_core_count", 0) or 0) == 1 and int(row.get("shared_count", 0) or 0) <= 2,
+        },
+        {
+            "name": "single_core_shared_le3_low_function",
+            "description": "Only one shared semantic core, shared ingredients <= 3, and function similarity < 0.40.",
+            "predicate": lambda row: int(row.get("shared_core_count", 0) or 0) == 1
+            and int(row.get("shared_count", 0) or 0) <= 3
+            and score_as_float(row.get("function_similarity_score")) < 0.40,
+        },
+        {
+            "name": "single_core_base_only_ge3",
+            "description": "Only one shared semantic core and base has at least 3 unshared semantic ingredients.",
+            "predicate": lambda row: int(row.get("shared_core_count", 0) or 0) == 1
+            and int(row.get("base_only_semantic_count", 0) or 0) >= 3,
+        },
+        {
+            "name": "high_score_low_function",
+            "description": "High current score but function similarity < 0.40.",
+            "predicate": lambda row: score_as_float(row.get("function_similarity_score")) < 0.40,
+        },
+        {
+            "name": "same_primary_set",
+            "description": "Base and target have the same primary ingredient set; useful as a control group.",
+            "predicate": lambda row: bool_feature(row, "same_primary_set"),
+        },
+    ]
+
+
+def pattern_impact_rows(feature_rows: list[dict[str, Any]], high_score_threshold: float) -> list[dict[str, Any]]:
+    high_rows = [row for row in feature_rows if score_as_float(row.get("current_similarity_score")) >= high_score_threshold]
+    rows: list[dict[str, Any]] = []
+    for rule in pattern_rule_definitions():
+        matched = [row for row in high_rows if rule["predicate"](row)]
+        judgment_counts = Counter(str(row.get("judge_judgment", "") or "") for row in matched)
+        weak_or_bad_count = judgment_counts.get("weak", 0) + judgment_counts.get("bad", 0)
+        rows.append(
+            {
+                "pattern": rule["name"],
+                "description": rule["description"],
+                "matched_count": len(matched),
+                "reasonable_count": judgment_counts.get("reasonable", 0),
+                "acceptable_adjacent_count": judgment_counts.get("acceptable_adjacent", 0),
+                "weak_count": judgment_counts.get("weak", 0),
+                "bad_count": judgment_counts.get("bad", 0),
+                "weak_or_bad_count": weak_or_bad_count,
+                "weak_or_bad_rate": round(float(weak_or_bad_count / len(matched)), 4) if matched else 0.0,
+                "non_weak_affected_count": len(matched) - weak_or_bad_count,
+            }
+        )
+    return rows
+
+
+def analyze_patterns(args: argparse.Namespace) -> None:
+    results_csv = resolve_path(args.results_csv)
+    output_dir = resolve_path(args.output_dir)
+    if not results_csv.exists():
+        raise FileNotFoundError(results_csv)
+
+    runtime = resolve_runtime_paths()
+    ingredient_profile_path = (
+        Path(args.ingredient_category_profile)
+        if str(args.ingredient_category_profile or "").strip()
+        else runtime.get("ingredient_category_profile_path")
+    )
+    profiles = load_product_function_profiles(runtime["product_profile_csv_path"])
+    ingredient_category_profiles = load_ingredient_category_profiles(ingredient_profile_path)
+    profile_by_report_no = {
+        str(profile.get("report_no", "") or ""): profile
+        for profile in profiles.values()
+        if str(profile.get("report_no", "") or "")
+    }
+
+    feature_rows: list[dict[str, Any]] = []
+    missing_rows: list[dict[str, Any]] = []
+    for row in read_csv_records(results_csv):
+        base_report_no = str(row.get("base_report_no", "") or "").strip()
+        target_report_no = str(row.get("target_report_no", "") or "").strip()
+        base_profile = profile_by_report_no.get(base_report_no)
+        target_profile = profile_by_report_no.get(target_report_no)
+        if not base_profile or not target_profile:
+            missing_rows.append(
+                {
+                    "base_report_no": base_report_no,
+                    "target_report_no": target_report_no,
+                    "reason": "missing_profile",
+                }
+            )
+            continue
+        feature_rows.append(pattern_features_for_row(row, base_profile, target_profile, ingredient_category_profiles))
+
+    high_score_threshold = float(args.high_score_threshold)
+    high_score_weak_rows = [
+        row
+        for row in feature_rows
+        if str(row.get("judge_judgment", "") or "") in {"weak", "bad"}
+        and score_as_float(row.get("current_similarity_score")) >= high_score_threshold
+    ]
+    impact_rows = pattern_impact_rows(feature_rows, high_score_threshold)
+    judgment_counts = Counter(str(row.get("judge_judgment", "") or "") for row in feature_rows)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    features_csv = output_dir / "judge_pattern_features.csv"
+    high_score_csv = output_dir / "judge_high_score_weak_patterns.csv"
+    impact_csv = output_dir / "judge_pattern_impact.csv"
+    missing_csv = output_dir / "judge_pattern_missing_profiles.csv"
+    write_csv(features_csv, ordered_fields(feature_rows, PATTERN_FEATURE_FIELDS), feature_rows)
+    write_csv(high_score_csv, ordered_fields(high_score_weak_rows, PATTERN_FEATURE_FIELDS), high_score_weak_rows)
+    write_csv(
+        impact_csv,
+        [
+            "pattern",
+            "description",
+            "matched_count",
+            "reasonable_count",
+            "acceptable_adjacent_count",
+            "weak_count",
+            "bad_count",
+            "weak_or_bad_count",
+            "weak_or_bad_rate",
+            "non_weak_affected_count",
+        ],
+        impact_rows,
+    )
+    write_csv(missing_csv, ["base_report_no", "target_report_no", "reason"], missing_rows)
+
+    weak_or_bad_count = judgment_counts.get("weak", 0) + judgment_counts.get("bad", 0)
+    summary = {
+        "created_at": now_iso(),
+        "results_csv": str(results_csv),
+        "ingredient_category_profile_path": str(ingredient_profile_path or ""),
+        "row_count": len(feature_rows),
+        "missing_count": len(missing_rows),
+        "judgment_counts": dict(judgment_counts),
+        "weak_or_bad_rate": round(float(weak_or_bad_count / len(feature_rows)), 4) if feature_rows else 0.0,
+        "high_score_threshold": high_score_threshold,
+        "high_score_weak_or_bad_count": len(high_score_weak_rows),
+        "pattern_impacts": impact_rows,
+        "outputs": {
+            "features_csv": str(features_csv),
+            "high_score_weak_patterns_csv": str(high_score_csv),
+            "pattern_impact_csv": str(impact_csv),
+            "missing_profiles_csv": str(missing_csv),
+        },
+    }
+    summary_path = output_dir / "judge_pattern_summary.json"
+    summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+
+
 def run_command(command: list[str], cwd: Path, *, allow_failure: bool = False) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
@@ -2031,6 +2306,16 @@ def build_parser() -> argparse.ArgumentParser:
     summarize_parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     summarize_parser.add_argument("--high-score-threshold", type=float, default=0.65)
     summarize_parser.set_defaults(func=summarize_chunks)
+
+    analyze_patterns_parser = subparsers.add_parser(
+        "analyze-patterns",
+        help="Analyze high-score weak judge results and estimate candidate cap pattern impact.",
+    )
+    analyze_patterns_parser.add_argument("--results-csv", required=True)
+    analyze_patterns_parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
+    analyze_patterns_parser.add_argument("--ingredient-category-profile", default="")
+    analyze_patterns_parser.add_argument("--high-score-threshold", type=float, default=0.65)
+    analyze_patterns_parser.set_defaults(func=analyze_patterns)
 
     submit_parser = subparsers.add_parser("submit", help="Submit the prepared JSONL through D:\\health_batch_project helpers.")
     submit_parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
