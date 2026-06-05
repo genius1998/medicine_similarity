@@ -2713,6 +2713,13 @@ def openai_list(args: argparse.Namespace) -> None:
     print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
 
 
+def list_active_openai_batches(client: Any, *, limit: int) -> list[dict[str, Any]]:
+    kwargs: dict[str, Any] = {}
+    if int(limit) > 0:
+        kwargs["limit"] = int(limit)
+    return openai_batch_rows(client.batches.list(**kwargs), active_only=True)
+
+
 def openai_submit(args: argparse.Namespace) -> None:
     result = create_or_reuse_openai_batch(args)
     print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -2864,6 +2871,26 @@ def openai_run(args: argparse.Namespace) -> None:
     output_dir = resolve_path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     client = load_openai_client(args.env_path)
+    active_batches: list[dict[str, Any]] = []
+    job_file = resolve_path(args.job_file) if args.job_file else output_dir / DEFAULT_OPENAI_JOB_FILE_NAME
+    will_reuse_job = job_file.exists() and not bool(args.force)
+    if bool(args.require_no_active) and not will_reuse_job:
+        active_batches = list_active_openai_batches(client, limit=int(args.active_check_limit))
+        if active_batches:
+            print(
+                json.dumps(
+                    {
+                        "error": "active_openai_batches_present",
+                        "active_statuses": sorted(OPENAI_ACTIVE_BATCH_STATUSES),
+                        "active_count": len(active_batches),
+                        "active_batches": active_batches,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                    default=str,
+                )
+            )
+            raise SystemExit(2)
     submit_result = create_or_reuse_openai_batch(args, client=client)
 
     wait_args = argparse.Namespace(
@@ -2905,6 +2932,7 @@ def openai_run(args: argparse.Namespace) -> None:
         "wait": wait_result,
         "finalized": finalized,
         "finalize_summary_json": str(finalize_summary_path) if finalized else "",
+        "active_preflight_count": len(active_batches),
     }
     run_summary_path = output_dir / "openai_run_summary.json"
     run_summary_path.write_text(json.dumps(run_summary, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -3222,6 +3250,8 @@ def build_parser() -> argparse.ArgumentParser:
     openai_run_parser.add_argument("--skip-finalize", action="store_true")
     openai_run_parser.add_argument("--fail-on-review", action="store_true")
     openai_run_parser.add_argument("--fail-on-incomplete", action="store_true")
+    openai_run_parser.add_argument("--require-no-active", action="store_true")
+    openai_run_parser.add_argument("--active-check-limit", type=int, default=20)
     openai_run_parser.set_defaults(func=openai_run)
 
     openai_cancel_parser = subparsers.add_parser("openai-cancel", help="Cancel a submitted OpenAI Batch job.")

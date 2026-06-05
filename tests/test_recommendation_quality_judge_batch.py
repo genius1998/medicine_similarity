@@ -500,6 +500,8 @@ def test_openai_run_submits_watches_downloads_and_finalizes(tmp_path, monkeypatc
             skip_finalize=False,
             fail_on_review=False,
             fail_on_incomplete=False,
+            require_no_active=False,
+            active_check_limit=20,
         )
     )
 
@@ -515,6 +517,64 @@ def test_openai_run_submits_watches_downloads_and_finalizes(tmp_path, monkeypatc
     assert run_summary["submitted"]["job_id"] == "batch_new"
     assert run_summary["wait"]["status"] == "completed"
     assert run_summary["finalized"] is True
+
+
+def test_openai_run_require_no_active_blocks_new_submit(tmp_path, monkeypatch):
+    class FakeBatches:
+        def list(self, **kwargs):
+            assert kwargs["limit"] == 20
+            return [
+                {
+                    "id": "batch_active",
+                    "status": "in_progress",
+                    "request_counts": {"completed": 0, "failed": 0, "total": 1},
+                    "metadata": {"name": "active"},
+                }
+            ]
+
+        def create(self, **kwargs):
+            raise AssertionError("new batch should not be submitted")
+
+    fake_client = SimpleNamespace(files=SimpleNamespace(), batches=FakeBatches())
+    monkeypatch.setattr(judge_batch, "load_openai_client", lambda env_path: fake_client)
+    output_dir = tmp_path / "run"
+    output_dir.mkdir()
+    (output_dir / "openai_recommendation_judge_batch.jsonl").write_text("{}\n", encoding="utf-8")
+
+    try:
+        judge_batch.openai_run(
+            SimpleNamespace(
+                output_dir=str(output_dir),
+                env_path="unused.env",
+                jsonl="",
+                name="test run",
+                job_file="",
+                model="gpt-5-nano",
+                force=False,
+                download_output="",
+                error_output="",
+                poll_seconds=1,
+                timeout_seconds=30,
+                snapshot_jsonl="",
+                pattern_output_dir="",
+                ingredient_category_profile="",
+                high_score_threshold=0.65,
+                max_weak_or_bad_rate=0.10,
+                max_high_score_weak_or_bad_rate=0.02,
+                min_actionable_pattern_weak_count=5,
+                min_actionable_pattern_weak_rate=0.50,
+                max_actionable_pattern_non_weak_affected=5,
+                skip_finalize=False,
+                fail_on_review=False,
+                fail_on_incomplete=False,
+                require_no_active=True,
+                active_check_limit=20,
+            )
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("openai_run should stop when active batches are present")
 
 
 def test_merge_parts_suppresses_retry_covered_errors(tmp_path, monkeypatch):

@@ -129,12 +129,13 @@ For a prepared output directory, the submit/watch/download/finalize sequence can
 python scripts\recommendation_quality_judge_batch.py openai-run `
   --output-dir output\recommendation_quality_judge_v2_9_openai_targeted_next_seedYYYYMMDD `
   --env-path D:\health_batch_project\.env `
+  --require-no-active `
   --poll-seconds 60 `
   --timeout-seconds 7200 `
   --high-score-threshold 0.65
 ```
 
-`openai-run` reuses the existing job file by default. Use `--force` only when intentionally submitting a replacement job.
+`openai-run` reuses the existing job file by default. `--require-no-active` only blocks a new submission when there is no reusable job file. Use `--force` only when intentionally submitting a replacement job.
 
 ## Decision Rule
 
