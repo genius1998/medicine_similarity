@@ -18,6 +18,7 @@ from scripts.recommendation_quality_judge_batch import (  # noqa: E402
     parse_model_json,
     pattern_features_for_row,
     pattern_impact_rows,
+    quality_gate_decision,
     response_from_batch_line,
     select_product_ids,
     summarize_chunks,
@@ -518,3 +519,89 @@ def test_pattern_features_and_impact_rows_capture_cross_role_primary_overlap():
     assert impact_by_name["no_primary_primary_overlap_cross_role_shared_le2"]["matched_count"] == 2
     assert impact_by_name["no_primary_primary_overlap_cross_role_shared_le2"]["weak_or_bad_count"] == 1
     assert impact_by_name["no_primary_primary_overlap_cross_role_shared_le2"]["non_weak_affected_count"] == 1
+
+
+def test_quality_gate_passes_when_rates_are_low_and_patterns_are_not_actionable():
+    args = SimpleNamespace(
+        max_weak_or_bad_rate=0.10,
+        max_high_score_weak_or_bad_rate=0.02,
+        min_actionable_pattern_weak_count=5,
+        min_actionable_pattern_weak_rate=0.50,
+        max_actionable_pattern_non_weak_affected=5,
+    )
+    summary = {
+        "row_count": 2135,
+        "weak_or_bad_rate": 0.0745,
+        "high_score_weak_or_bad_count": 25,
+        "pattern_impacts": [
+            {
+                "pattern": "cross_role",
+                "weak_or_bad_count": 6,
+                "weak_or_bad_rate": 0.1333,
+                "non_weak_affected_count": 39,
+            }
+        ],
+    }
+
+    result = quality_gate_decision(summary, args)
+
+    assert result["decision"] == "pass_continue_validation_without_algorithm_change"
+    assert result["high_score_weak_or_bad_rate"] == 0.0117
+    assert result["actionable_pattern_count"] == 0
+
+
+def test_quality_gate_flags_low_blast_radius_algorithm_candidate():
+    args = SimpleNamespace(
+        max_weak_or_bad_rate=0.10,
+        max_high_score_weak_or_bad_rate=0.02,
+        min_actionable_pattern_weak_count=5,
+        min_actionable_pattern_weak_rate=0.50,
+        max_actionable_pattern_non_weak_affected=5,
+    )
+    summary = {
+        "row_count": 1000,
+        "weak_or_bad_rate": 0.03,
+        "high_score_weak_or_bad_count": 10,
+        "pattern_impacts": [
+            {
+                "pattern": "candidate",
+                "weak_or_bad_count": 5,
+                "weak_or_bad_rate": 0.7143,
+                "non_weak_affected_count": 2,
+            }
+        ],
+    }
+
+    result = quality_gate_decision(summary, args)
+
+    assert result["decision"] == "algorithm_change_candidate"
+    assert result["actionable_pattern_count"] == 1
+
+
+def test_quality_gate_requests_more_sampling_when_rates_exceed_gate_without_actionable_pattern():
+    args = SimpleNamespace(
+        max_weak_or_bad_rate=0.10,
+        max_high_score_weak_or_bad_rate=0.02,
+        min_actionable_pattern_weak_count=5,
+        min_actionable_pattern_weak_rate=0.50,
+        max_actionable_pattern_non_weak_affected=5,
+    )
+    summary = {
+        "row_count": 1000,
+        "weak_or_bad_rate": 0.12,
+        "high_score_weak_or_bad_count": 35,
+        "pattern_impacts": [
+            {
+                "pattern": "broad_pattern",
+                "weak_or_bad_count": 12,
+                "weak_or_bad_rate": 0.10,
+                "non_weak_affected_count": 108,
+            }
+        ],
+    }
+
+    result = quality_gate_decision(summary, args)
+
+    assert result["decision"] == "review_collect_more_targeted_samples"
+    assert "overall_weak_rate_exceeds_gate" in result["reasons"]
+    assert "high_score_weak_rate_exceeds_gate" in result["reasons"]

@@ -54,6 +54,11 @@ DEFAULT_OPENAI_JOB_FILE_NAME = "openai_recommendation_judge.job.txt"
 JUDGMENTS = {"reasonable", "acceptable_adjacent", "weak", "bad"}
 MODEL_NAME = "gemini-2.5-flash-lite"
 OPENAI_MODEL_NAME = "gpt-5-nano"
+QUALITY_GATE_MAX_WEAK_OR_BAD_RATE = 0.10
+QUALITY_GATE_MAX_HIGH_SCORE_WEAK_OR_BAD_RATE = 0.02
+QUALITY_GATE_MIN_ACTIONABLE_PATTERN_WEAK_COUNT = 5
+QUALITY_GATE_MIN_ACTIONABLE_PATTERN_WEAK_RATE = 0.50
+QUALITY_GATE_MAX_ACTIONABLE_PATTERN_NON_WEAK_AFFECTED = 5
 _WORKER_CONTEXT: dict[str, Any] = {}
 
 
@@ -2027,6 +2032,82 @@ def analyze_patterns(args: argparse.Namespace) -> None:
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 
+def quality_gate_decision(summary: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    row_count = int(summary.get("row_count", 0) or 0)
+    weak_or_bad_rate = float(summary.get("weak_or_bad_rate", 0.0) or 0.0)
+    high_score_weak_or_bad_count = int(summary.get("high_score_weak_or_bad_count", 0) or 0)
+    high_score_weak_or_bad_rate = (
+        float(high_score_weak_or_bad_count / row_count)
+        if row_count
+        else 0.0
+    )
+    actionable_patterns = []
+    for pattern in summary.get("pattern_impacts", []) or []:
+        if not isinstance(pattern, dict):
+            continue
+        weak_count = int(pattern.get("weak_or_bad_count", 0) or 0)
+        weak_rate = float(pattern.get("weak_or_bad_rate", 0.0) or 0.0)
+        non_weak_affected = int(pattern.get("non_weak_affected_count", 0) or 0)
+        if (
+            weak_count >= int(args.min_actionable_pattern_weak_count)
+            and weak_rate >= float(args.min_actionable_pattern_weak_rate)
+            and non_weak_affected <= int(args.max_actionable_pattern_non_weak_affected)
+        ):
+            actionable_patterns.append(pattern)
+
+    reasons: list[str] = []
+    if actionable_patterns:
+        decision = "algorithm_change_candidate"
+        reasons.append("at_least_one_pattern_has_high_weak_rate_with_low_non_weak_impact")
+    elif (
+        weak_or_bad_rate <= float(args.max_weak_or_bad_rate)
+        and high_score_weak_or_bad_rate <= float(args.max_high_score_weak_or_bad_rate)
+    ):
+        decision = "pass_continue_validation_without_algorithm_change"
+        reasons.append("overall_weak_rate_and_high_score_weak_rate_are_within_gate")
+        reasons.append("candidate_patterns_are_not_actionable_without_overfiltering")
+    else:
+        decision = "review_collect_more_targeted_samples"
+        if weak_or_bad_rate > float(args.max_weak_or_bad_rate):
+            reasons.append("overall_weak_rate_exceeds_gate")
+        if high_score_weak_or_bad_rate > float(args.max_high_score_weak_or_bad_rate):
+            reasons.append("high_score_weak_rate_exceeds_gate")
+        reasons.append("no_low_blast_radius_pattern_was_found")
+
+    return {
+        "decision": decision,
+        "reasons": reasons,
+        "row_count": row_count,
+        "weak_or_bad_rate": round(float(weak_or_bad_rate), 4),
+        "max_weak_or_bad_rate": float(args.max_weak_or_bad_rate),
+        "high_score_weak_or_bad_count": high_score_weak_or_bad_count,
+        "high_score_weak_or_bad_rate": round(float(high_score_weak_or_bad_rate), 4),
+        "max_high_score_weak_or_bad_rate": float(args.max_high_score_weak_or_bad_rate),
+        "actionable_pattern_count": len(actionable_patterns),
+        "actionable_patterns": actionable_patterns,
+        "gate": {
+            "min_actionable_pattern_weak_count": int(args.min_actionable_pattern_weak_count),
+            "min_actionable_pattern_weak_rate": float(args.min_actionable_pattern_weak_rate),
+            "max_actionable_pattern_non_weak_affected": int(args.max_actionable_pattern_non_weak_affected),
+        },
+    }
+
+
+def quality_gate(args: argparse.Namespace) -> None:
+    summary_path = resolve_path(args.pattern_summary_json)
+    output_path = resolve_path(args.output_json) if args.output_json else summary_path.with_name("judge_quality_gate.json")
+    if not summary_path.exists():
+        raise FileNotFoundError(summary_path)
+
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    result = quality_gate_decision(summary, args)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    if args.fail_on_review and result["decision"] != "pass_continue_validation_without_algorithm_change":
+        raise SystemExit(2)
+
+
 def run_command(command: list[str], cwd: Path, *, allow_failure: bool = False) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
@@ -2316,6 +2397,36 @@ def build_parser() -> argparse.ArgumentParser:
     analyze_patterns_parser.add_argument("--ingredient-category-profile", default="")
     analyze_patterns_parser.add_argument("--high-score-threshold", type=float, default=0.65)
     analyze_patterns_parser.set_defaults(func=analyze_patterns)
+
+    quality_gate_parser = subparsers.add_parser(
+        "quality-gate",
+        help="Decide whether judge results support continuing, more sampling, or an algorithm-change candidate.",
+    )
+    quality_gate_parser.add_argument("--pattern-summary-json", required=True)
+    quality_gate_parser.add_argument("--output-json", default="")
+    quality_gate_parser.add_argument("--max-weak-or-bad-rate", type=float, default=QUALITY_GATE_MAX_WEAK_OR_BAD_RATE)
+    quality_gate_parser.add_argument(
+        "--max-high-score-weak-or-bad-rate",
+        type=float,
+        default=QUALITY_GATE_MAX_HIGH_SCORE_WEAK_OR_BAD_RATE,
+    )
+    quality_gate_parser.add_argument(
+        "--min-actionable-pattern-weak-count",
+        type=int,
+        default=QUALITY_GATE_MIN_ACTIONABLE_PATTERN_WEAK_COUNT,
+    )
+    quality_gate_parser.add_argument(
+        "--min-actionable-pattern-weak-rate",
+        type=float,
+        default=QUALITY_GATE_MIN_ACTIONABLE_PATTERN_WEAK_RATE,
+    )
+    quality_gate_parser.add_argument(
+        "--max-actionable-pattern-non-weak-affected",
+        type=int,
+        default=QUALITY_GATE_MAX_ACTIONABLE_PATTERN_NON_WEAK_AFFECTED,
+    )
+    quality_gate_parser.add_argument("--fail-on-review", action="store_true")
+    quality_gate_parser.set_defaults(func=quality_gate)
 
     submit_parser = subparsers.add_parser("submit", help="Submit the prepared JSONL through D:\\health_batch_project helpers.")
     submit_parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
