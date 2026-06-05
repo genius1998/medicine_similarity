@@ -141,7 +141,17 @@ cancelling
 
 Do not resubmit the same validation sample while an active job is still present. The `openai-submit` command also reuses the existing job file by default unless `--force` is explicitly provided.
 
-When using `openai-submit` directly, pass `--require-no-active` so it refuses to create a new Batch job while another one is still validating, running, finalizing, or cancelling. Existing job files are still reused without checking active jobs.
+When using `openai-submit` directly, pass `--require-no-active` and the current `validation_status.json` so it refuses to create a new Batch job while another one is still validating, running, finalizing, or cancelling, and also refuses new submissions after a stop decision:
+
+```powershell
+python scripts\recommendation_quality_judge_batch.py openai-submit `
+  --output-dir output\recommendation_quality_judge_v2_9_openai_targeted_next_seedYYYYMMDD `
+  --env-path D:\health_batch_project\.env `
+  --validation-status-json output\recommendation_quality_judge_v2_9_openai_validation_current_plus_holdout202606062\validation_status.json `
+  --require-no-active
+```
+
+Existing job files are still reused without checking active jobs. Job files must contain a non-empty job id; an empty job file is treated as an error instead of being reused.
 
 After submitting a job, wait for completion and download outputs with:
 
