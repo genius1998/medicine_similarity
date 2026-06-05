@@ -581,6 +581,43 @@ def test_openai_run_require_no_active_blocks_new_submit(tmp_path, monkeypatch):
         raise AssertionError("openai_run should stop when active batches are present")
 
 
+def test_openai_submit_blocks_new_batch_when_validation_status_stops_sampling(tmp_path, monkeypatch):
+    output_dir = tmp_path / "run"
+    output_dir.mkdir()
+    (output_dir / "openai_recommendation_judge_batch.jsonl").write_text("{}\n", encoding="utf-8")
+    status_json = tmp_path / "validation_status.json"
+    status_json.write_text(
+        json.dumps({"next_action": "stop_sampling_keep_current_algorithm"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        judge_batch,
+        "load_openai_client",
+        lambda env_path: (_ for _ in ()).throw(AssertionError("client should not be loaded")),
+    )
+
+    try:
+        judge_batch.create_or_reuse_openai_batch(
+            SimpleNamespace(
+                output_dir=str(output_dir),
+                env_path="unused.env",
+                jsonl="",
+                name="test run",
+                job_file="",
+                model="gpt-5-nano",
+                force=False,
+                validation_status_json=str(status_json),
+                allow_after_validation_stop=False,
+            )
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("openai-submit should stop when validation status recommends stopping sampling")
+
+    assert not (output_dir / "openai_recommendation_judge.job.txt").exists()
+
+
 def test_merge_parts_suppresses_retry_covered_errors(tmp_path, monkeypatch):
     output_dir = tmp_path / "merged"
     part_dir = tmp_path / "chunk_part_000"
@@ -1333,3 +1370,38 @@ def test_next_sample_plan_skips_when_validation_status_stops_sampling(tmp_path):
     assert plan["selected_categories"] == []
     assert plan["prepare_command"] == []
     assert plan["openai_run_command"] == []
+
+
+def test_next_sample_plan_carries_non_stop_validation_status_to_openai_run(tmp_path):
+    status_json = tmp_path / "validation_status.json"
+    status_json.write_text(
+        json.dumps({"next_action": "collect_more_targeted_samples"}),
+        encoding="utf-8",
+    )
+    summary = {
+        "category_judgment_counts": {
+            "A|reasonable": 20,
+            "A|acceptable_adjacent": 60,
+            "A|weak": 20,
+        }
+    }
+    args = SimpleNamespace(
+        summary_json="summary.json",
+        validation_status_json=str(status_json),
+        min_labels=50,
+        min_weak_rate=0.10,
+        max_categories=3,
+        per_category=7,
+        seed=123,
+        sample_output_dir="output/next",
+        top_k=10,
+        workers=4,
+        progress_every=10,
+    )
+
+    plan = next_sample_plan(summary, args)
+
+    assert plan["should_prepare_sample"] is True
+    assert plan["validation_status_next_action"] == "collect_more_targeted_samples"
+    assert "--validation-status-json" in plan["openai_run_command"]
+    assert str(status_json) in plan["openai_run_command"]

@@ -2930,6 +2930,8 @@ def next_sample_plan(summary: dict[str, Any], args: argparse.Namespace) -> dict[
         "--high-score-threshold",
         "0.65",
     ]
+    if validation_status_json:
+        openai_run_command.extend(["--validation-status-json", validation_status_json])
 
     return {
         "created_at": now_iso(),
@@ -3159,6 +3161,27 @@ def openai_submit(args: argparse.Namespace) -> None:
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
+def validation_stop_submission_block(args: argparse.Namespace) -> dict[str, Any] | None:
+    validation_status_json = str(getattr(args, "validation_status_json", "") or "").strip()
+    if not validation_status_json:
+        return None
+    status_path = resolve_path(validation_status_json)
+    if not status_path.exists():
+        raise FileNotFoundError(status_path)
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    next_action = str(status.get("next_action", "") or "")
+    if next_action != "stop_sampling_keep_current_algorithm":
+        return None
+    if bool(getattr(args, "allow_after_validation_stop", False)):
+        return None
+    return {
+        "error": "validation_status_recommends_stop_sampling",
+        "validation_status_json": str(status_path),
+        "validation_status_next_action": next_action,
+        "message": "Refusing to submit a new OpenAI Batch job because validation_status.json recommends stopping routine sampling.",
+    }
+
+
 def create_or_reuse_openai_batch(args: argparse.Namespace, client: Any | None = None) -> dict[str, Any]:
     output_dir = resolve_path(args.output_dir)
     jsonl_path = resolve_path(args.jsonl) if args.jsonl else output_dir / DEFAULT_OPENAI_BATCH_JSONL_NAME
@@ -3175,6 +3198,11 @@ def create_or_reuse_openai_batch(args: argparse.Namespace, client: Any | None = 
             "model": args.model,
             "reused": True,
         }
+
+    stop_block = validation_stop_submission_block(args)
+    if stop_block:
+        print(json.dumps(stop_block, ensure_ascii=False, indent=2))
+        raise SystemExit(2)
 
     if client is None:
         client = load_openai_client(args.env_path)
@@ -3627,6 +3655,8 @@ def build_parser() -> argparse.ArgumentParser:
     openai_submit_parser.add_argument("--job-file", default="")
     openai_submit_parser.add_argument("--model", default=OPENAI_MODEL_NAME)
     openai_submit_parser.add_argument("--force", action="store_true")
+    openai_submit_parser.add_argument("--validation-status-json", default="")
+    openai_submit_parser.add_argument("--allow-after-validation-stop", action="store_true")
     openai_submit_parser.set_defaults(func=openai_submit)
 
     openai_list_parser = subparsers.add_parser("openai-list", help="List recent OpenAI Batch jobs without printing secrets.")
@@ -3696,6 +3726,8 @@ def build_parser() -> argparse.ArgumentParser:
     openai_run_parser.add_argument("--job-file", default="")
     openai_run_parser.add_argument("--model", default=OPENAI_MODEL_NAME)
     openai_run_parser.add_argument("--force", action="store_true")
+    openai_run_parser.add_argument("--validation-status-json", default="")
+    openai_run_parser.add_argument("--allow-after-validation-stop", action="store_true")
     openai_run_parser.add_argument("--download-output", default="")
     openai_run_parser.add_argument("--error-output", default="")
     openai_run_parser.add_argument("--poll-seconds", type=int, default=60)
