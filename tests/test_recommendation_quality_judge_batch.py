@@ -1297,3 +1297,39 @@ def test_next_sample_plan_selects_high_weak_rate_categories_before_fallback():
     assert "--require-no-active" in plan["openai_run_command"]
     assert "output/next" in plan["openai_run_command"]
     assert "D" not in [row["category"] for row in plan["selected_categories"]]
+
+
+def test_next_sample_plan_skips_when_validation_status_stops_sampling(tmp_path):
+    status_json = tmp_path / "validation_status.json"
+    status_json.write_text(
+        json.dumps({"next_action": "stop_sampling_keep_current_algorithm"}),
+        encoding="utf-8",
+    )
+    summary = {
+        "category_judgment_counts": {
+            "A|reasonable": 20,
+            "A|acceptable_adjacent": 60,
+            "A|weak": 20,
+        }
+    }
+    args = SimpleNamespace(
+        summary_json="summary.json",
+        validation_status_json=str(status_json),
+        min_labels=50,
+        min_weak_rate=0.10,
+        max_categories=3,
+        per_category=7,
+        seed=123,
+        sample_output_dir="output/next",
+        top_k=10,
+        workers=4,
+        progress_every=10,
+    )
+
+    plan = next_sample_plan(summary, args)
+
+    assert plan["should_prepare_sample"] is False
+    assert plan["skip_reason"] == "validation_status_recommends_stop_sampling"
+    assert plan["selected_categories"] == []
+    assert plan["prepare_command"] == []
+    assert plan["openai_run_command"] == []

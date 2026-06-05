@@ -2826,6 +2826,34 @@ def next_sample_plan(summary: dict[str, Any], args: argparse.Namespace) -> dict[
     min_labels = int(args.min_labels)
     min_weak_rate = float(args.min_weak_rate)
     max_categories = int(args.max_categories)
+    validation_status_json = str(getattr(args, "validation_status_json", "") or "").strip()
+    validation_status_result: dict[str, Any] | None = None
+    if validation_status_json:
+        status_path = resolve_path(validation_status_json)
+        if not status_path.exists():
+            raise FileNotFoundError(status_path)
+        validation_status_result = json.loads(status_path.read_text(encoding="utf-8"))
+        next_action = str(validation_status_result.get("next_action", "") or "")
+        if next_action == "stop_sampling_keep_current_algorithm":
+            return {
+                "created_at": now_iso(),
+                "source_summary": str(args.summary_json),
+                "validation_status_json": str(status_path),
+                "validation_status_next_action": next_action,
+                "should_prepare_sample": False,
+                "skip_reason": "validation_status_recommends_stop_sampling",
+                "min_labels": min_labels,
+                "min_weak_rate": min_weak_rate,
+                "max_categories": max_categories,
+                "selected_category_count": 0,
+                "selected_categories": [],
+                "prepare_command": [],
+                "prepare_command_powershell": "",
+                "openai_run_command": [],
+                "openai_run_command_powershell": "",
+                "all_category_rows": rows,
+            }
+
     eligible = [
         row
         for row in rows
@@ -2906,6 +2934,9 @@ def next_sample_plan(summary: dict[str, Any], args: argparse.Namespace) -> dict[
     return {
         "created_at": now_iso(),
         "source_summary": str(args.summary_json),
+        "validation_status_json": validation_status_json,
+        "validation_status_next_action": (validation_status_result or {}).get("next_action", ""),
+        "should_prepare_sample": True,
         "min_labels": min_labels,
         "min_weak_rate": min_weak_rate,
         "max_categories": max_categories,
@@ -3555,6 +3586,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Recommend main categories for the next targeted judge sample from a merged judge summary.",
     )
     next_sample_parser.add_argument("--summary-json", required=True)
+    next_sample_parser.add_argument("--validation-status-json", default="")
     next_sample_parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     next_sample_parser.add_argument("--min-labels", type=int, default=50)
     next_sample_parser.add_argument("--min-weak-rate", type=float, default=0.08)

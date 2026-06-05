@@ -178,6 +178,15 @@ python scripts\recommendation_quality_judge_batch.py openai-run `
 
 The `plan-next-sample` output also includes `openai_run_command_powershell` so the next targeted sample can be prepared first and then run with the same safety preflight.
 
+When a validation status is available, pass it to `plan-next-sample` so a stop decision suppresses new sample commands:
+
+```powershell
+python scripts\recommendation_quality_judge_batch.py plan-next-sample `
+  --summary-json output\recommendation_quality_judge_v2_9_openai_validation_current_plus_holdout202606062\openai_chunk_judge_summary.json `
+  --validation-status-json output\recommendation_quality_judge_v2_9_openai_validation_current_plus_holdout202606062\validation_status.json `
+  --output-dir output\recommendation_quality_judge_v2_9_openai_next_sample_plan_after_stop
+```
+
 ## Decision Rule
 
 The quality gate requires at least `50` judge labels by default. Smaller smoke runs are useful for checking OpenAI Batch submission, download, and finalize wiring, but they should not be treated as an accept/reject decision for the recommendation algorithm.
