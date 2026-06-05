@@ -141,6 +141,8 @@ cancelling
 
 Do not resubmit the same validation sample while an active job is still present. The `openai-submit` command also reuses the existing job file by default unless `--force` is explicitly provided.
 
+When using `openai-submit` directly, pass `--require-no-active` so it refuses to create a new Batch job while another one is still validating, running, finalizing, or cancelling. Existing job files are still reused without checking active jobs.
+
 After submitting a job, wait for completion and download outputs with:
 
 ```powershell

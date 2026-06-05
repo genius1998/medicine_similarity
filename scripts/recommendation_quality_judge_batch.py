@@ -3156,6 +3156,18 @@ def list_active_openai_batches(client: Any, *, limit: int) -> list[dict[str, Any
     return openai_batch_rows(client.batches.list(**kwargs), active_only=True)
 
 
+def active_openai_submission_block(client: Any, *, limit: int) -> dict[str, Any] | None:
+    active_batches = list_active_openai_batches(client, limit=int(limit))
+    if not active_batches:
+        return None
+    return {
+        "error": "active_openai_batches_present",
+        "active_statuses": sorted(OPENAI_ACTIVE_BATCH_STATUSES),
+        "active_count": len(active_batches),
+        "active_batches": active_batches,
+    }
+
+
 def openai_submit(args: argparse.Namespace) -> None:
     result = create_or_reuse_openai_batch(args)
     print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -3207,6 +3219,15 @@ def create_or_reuse_openai_batch(args: argparse.Namespace, client: Any | None = 
 
     if client is None:
         client = load_openai_client(args.env_path)
+    if bool(getattr(args, "require_no_active", False)) and not bool(getattr(args, "active_preflight_done", False)):
+        active_block = active_openai_submission_block(
+            client,
+            limit=int(getattr(args, "active_check_limit", 20) or 20),
+        )
+        if active_block:
+            print(json.dumps(active_block, ensure_ascii=False, indent=2, default=str))
+            raise SystemExit(2)
+
     display_name = args.name or f"recommendation-quality-judge-openai-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     with jsonl_path.open("rb") as handle:
         input_file = client.files.create(file=handle, purpose="batch")
@@ -3344,22 +3365,18 @@ def openai_run(args: argparse.Namespace) -> None:
 
     client = load_openai_client(args.env_path)
     if bool(args.require_no_active) and not will_reuse_job:
-        active_batches = list_active_openai_batches(client, limit=int(args.active_check_limit))
-        if active_batches:
+        active_block = active_openai_submission_block(client, limit=int(args.active_check_limit))
+        if active_block:
             print(
                 json.dumps(
-                    {
-                        "error": "active_openai_batches_present",
-                        "active_statuses": sorted(OPENAI_ACTIVE_BATCH_STATUSES),
-                        "active_count": len(active_batches),
-                        "active_batches": active_batches,
-                    },
+                    active_block,
                     ensure_ascii=False,
                     indent=2,
                     default=str,
                 )
             )
             raise SystemExit(2)
+        setattr(args, "active_preflight_done", True)
     submit_result = create_or_reuse_openai_batch(args, client=client)
 
     wait_args = argparse.Namespace(
@@ -3664,6 +3681,8 @@ def build_parser() -> argparse.ArgumentParser:
     openai_submit_parser.add_argument("--force", action="store_true")
     openai_submit_parser.add_argument("--validation-status-json", default="")
     openai_submit_parser.add_argument("--allow-after-validation-stop", action="store_true")
+    openai_submit_parser.add_argument("--require-no-active", action="store_true")
+    openai_submit_parser.add_argument("--active-check-limit", type=int, default=20)
     openai_submit_parser.set_defaults(func=openai_submit)
 
     openai_list_parser = subparsers.add_parser("openai-list", help="List recent OpenAI Batch jobs without printing secrets.")

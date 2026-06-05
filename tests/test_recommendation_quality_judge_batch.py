@@ -661,6 +661,56 @@ def test_openai_run_require_no_active_blocks_new_submit(tmp_path, monkeypatch):
         raise AssertionError("openai_run should stop when active batches are present")
 
 
+def test_openai_submit_require_no_active_blocks_new_submit(tmp_path, monkeypatch):
+    class FakeFiles:
+        def create(self, **kwargs):
+            raise AssertionError("input file should not be uploaded while an active batch exists")
+
+    class FakeBatches:
+        def list(self, **kwargs):
+            assert kwargs["limit"] == 20
+            return [
+                {
+                    "id": "batch_active",
+                    "status": "in_progress",
+                    "request_counts": {"completed": 0, "failed": 0, "total": 1},
+                    "metadata": {"name": "active"},
+                }
+            ]
+
+        def create(self, **kwargs):
+            raise AssertionError("new batch should not be submitted")
+
+    fake_client = SimpleNamespace(files=FakeFiles(), batches=FakeBatches())
+    monkeypatch.setattr(judge_batch, "load_openai_client", lambda env_path: fake_client)
+    output_dir = tmp_path / "run"
+    output_dir.mkdir()
+    (output_dir / "openai_recommendation_judge_batch.jsonl").write_text("{}\n", encoding="utf-8")
+
+    try:
+        judge_batch.create_or_reuse_openai_batch(
+            SimpleNamespace(
+                output_dir=str(output_dir),
+                env_path="unused.env",
+                jsonl="",
+                name="test run",
+                job_file="",
+                model="gpt-5-nano",
+                force=False,
+                validation_status_json="",
+                allow_after_validation_stop=False,
+                require_no_active=True,
+                active_check_limit=20,
+            )
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("openai-submit should stop when active batches are present")
+
+    assert not (output_dir / "openai_recommendation_judge.job.txt").exists()
+
+
 def test_openai_submit_blocks_new_batch_when_validation_status_stops_sampling(tmp_path, monkeypatch):
     output_dir = tmp_path / "run"
     output_dir.mkdir()
@@ -760,6 +810,8 @@ def test_openai_submit_reuses_existing_job_without_jsonl_even_after_validation_s
             force=False,
             validation_status_json=str(status_json),
             allow_after_validation_stop=False,
+            require_no_active=True,
+            active_check_limit=20,
         )
     )
 
