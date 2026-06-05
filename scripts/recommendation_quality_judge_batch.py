@@ -2108,6 +2108,63 @@ def quality_gate(args: argparse.Namespace) -> None:
         raise SystemExit(2)
 
 
+def validate_results(args: argparse.Namespace) -> None:
+    output_dir = resolve_path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    summarize_args = argparse.Namespace(
+        parts_glob=args.parts_glob,
+        retry_glob=args.retry_glob,
+        output_dir=str(output_dir),
+        high_score_threshold=float(args.high_score_threshold),
+    )
+    summarize_chunks(summarize_args)
+
+    results_csv = output_dir / "openai_chunk_judge_results.csv"
+    pattern_dir = output_dir / "patterns"
+    analyze_args = argparse.Namespace(
+        results_csv=str(results_csv),
+        output_dir=str(pattern_dir),
+        ingredient_category_profile=args.ingredient_category_profile,
+        high_score_threshold=float(args.high_score_threshold),
+    )
+    analyze_patterns(analyze_args)
+
+    pattern_summary_path = pattern_dir / "judge_pattern_summary.json"
+    pattern_summary = json.loads(pattern_summary_path.read_text(encoding="utf-8"))
+    gate_args = argparse.Namespace(
+        max_weak_or_bad_rate=float(args.max_weak_or_bad_rate),
+        max_high_score_weak_or_bad_rate=float(args.max_high_score_weak_or_bad_rate),
+        min_actionable_pattern_weak_count=int(args.min_actionable_pattern_weak_count),
+        min_actionable_pattern_weak_rate=float(args.min_actionable_pattern_weak_rate),
+        max_actionable_pattern_non_weak_affected=int(args.max_actionable_pattern_non_weak_affected),
+    )
+    gate_result = quality_gate_decision(pattern_summary, gate_args)
+    gate_json = output_dir / "judge_quality_gate.json"
+    gate_json.write_text(json.dumps(gate_result, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    validation_summary = {
+        "created_at": now_iso(),
+        "decision": gate_result["decision"],
+        "parts_glob": coerce_patterns(args.parts_glob),
+        "retry_glob": coerce_patterns(args.retry_glob),
+        "high_score_threshold": float(args.high_score_threshold),
+        "quality_gate": gate_result,
+        "outputs": {
+            "merged_results_csv": str(results_csv),
+            "merged_summary_json": str(output_dir / "openai_chunk_judge_summary.json"),
+            "pattern_summary_json": str(pattern_summary_path),
+            "quality_gate_json": str(gate_json),
+        },
+    }
+    validation_summary_path = output_dir / "judge_validation_summary.json"
+    validation_summary_path.write_text(json.dumps(validation_summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps(validation_summary, ensure_ascii=False, indent=2))
+
+    if args.fail_on_review and gate_result["decision"] != "pass_continue_validation_without_algorithm_change":
+        raise SystemExit(2)
+
+
 def run_command(command: list[str], cwd: Path, *, allow_failure: bool = False) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
@@ -2427,6 +2484,39 @@ def build_parser() -> argparse.ArgumentParser:
     )
     quality_gate_parser.add_argument("--fail-on-review", action="store_true")
     quality_gate_parser.set_defaults(func=quality_gate)
+
+    validate_parser = subparsers.add_parser(
+        "validate-results",
+        help="Run summarize-chunks, analyze-patterns, and quality-gate as one validation workflow.",
+    )
+    validate_parser.add_argument("--parts-glob", action="append", required=True)
+    validate_parser.add_argument("--retry-glob", action="append", default=[])
+    validate_parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
+    validate_parser.add_argument("--ingredient-category-profile", default="")
+    validate_parser.add_argument("--high-score-threshold", type=float, default=0.65)
+    validate_parser.add_argument("--max-weak-or-bad-rate", type=float, default=QUALITY_GATE_MAX_WEAK_OR_BAD_RATE)
+    validate_parser.add_argument(
+        "--max-high-score-weak-or-bad-rate",
+        type=float,
+        default=QUALITY_GATE_MAX_HIGH_SCORE_WEAK_OR_BAD_RATE,
+    )
+    validate_parser.add_argument(
+        "--min-actionable-pattern-weak-count",
+        type=int,
+        default=QUALITY_GATE_MIN_ACTIONABLE_PATTERN_WEAK_COUNT,
+    )
+    validate_parser.add_argument(
+        "--min-actionable-pattern-weak-rate",
+        type=float,
+        default=QUALITY_GATE_MIN_ACTIONABLE_PATTERN_WEAK_RATE,
+    )
+    validate_parser.add_argument(
+        "--max-actionable-pattern-non-weak-affected",
+        type=int,
+        default=QUALITY_GATE_MAX_ACTIONABLE_PATTERN_NON_WEAK_AFFECTED,
+    )
+    validate_parser.add_argument("--fail-on-review", action="store_true")
+    validate_parser.set_defaults(func=validate_results)
 
     submit_parser = subparsers.add_parser("submit", help="Submit the prepared JSONL through D:\\health_batch_project helpers.")
     submit_parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))

@@ -8,6 +8,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
+import scripts.recommendation_quality_judge_batch as judge_batch  # noqa: E402
 from scripts.recommendation_quality_judge_batch import (  # noqa: E402
     build_batch_requests,
     build_openai_batch_requests,
@@ -605,3 +606,64 @@ def test_quality_gate_requests_more_sampling_when_rates_exceed_gate_without_acti
     assert result["decision"] == "review_collect_more_targeted_samples"
     assert "overall_weak_rate_exceeds_gate" in result["reasons"]
     assert "high_score_weak_rate_exceeds_gate" in result["reasons"]
+
+
+def test_validate_results_orchestrates_summary_analysis_and_gate(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_summarize(args):
+        calls.append(("summarize", args.output_dir, list(args.parts_glob), list(args.retry_glob)))
+        output_dir = Path(args.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "openai_chunk_judge_results.csv").write_text("base_report_no,target_report_no\n", encoding="utf-8")
+        (output_dir / "openai_chunk_judge_summary.json").write_text(json.dumps({"actual_label_count": 1}), encoding="utf-8")
+
+    def fake_analyze(args):
+        calls.append(("analyze", args.results_csv, args.output_dir))
+        output_dir = Path(args.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "judge_pattern_summary.json").write_text(
+            json.dumps(
+                {
+                    "row_count": 1,
+                    "weak_or_bad_rate": 0.0,
+                    "high_score_weak_or_bad_count": 0,
+                    "pattern_impacts": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def fake_quality_gate_decision(summary, args):
+        calls.append(("gate", summary["row_count"], args.max_weak_or_bad_rate))
+        return {
+            "decision": "pass_continue_validation_without_algorithm_change",
+            "row_count": summary["row_count"],
+            "weak_or_bad_rate": summary["weak_or_bad_rate"],
+        }
+
+    monkeypatch.setattr(judge_batch, "summarize_chunks", fake_summarize)
+    monkeypatch.setattr(judge_batch, "analyze_patterns", fake_analyze)
+    monkeypatch.setattr(judge_batch, "quality_gate_decision", fake_quality_gate_decision)
+
+    judge_batch.validate_results(
+        SimpleNamespace(
+            output_dir=str(tmp_path / "validation"),
+            parts_glob=["output/chunk_*"],
+            retry_glob=["output/retry_*"],
+            ingredient_category_profile="",
+            high_score_threshold=0.65,
+            max_weak_or_bad_rate=0.10,
+            max_high_score_weak_or_bad_rate=0.02,
+            min_actionable_pattern_weak_count=5,
+            min_actionable_pattern_weak_rate=0.50,
+            max_actionable_pattern_non_weak_affected=5,
+            fail_on_review=False,
+        )
+    )
+
+    validation_summary = json.loads((tmp_path / "validation" / "judge_validation_summary.json").read_text(encoding="utf-8"))
+
+    assert [item[0] for item in calls] == ["summarize", "analyze", "gate"]
+    assert validation_summary["decision"] == "pass_continue_validation_without_algorithm_change"
+    assert (tmp_path / "validation" / "judge_quality_gate.json").exists()
