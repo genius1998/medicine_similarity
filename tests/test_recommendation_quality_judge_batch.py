@@ -670,6 +670,87 @@ def test_validate_results_orchestrates_summary_analysis_and_gate(tmp_path, monke
     assert (tmp_path / "validation" / "judge_quality_gate.json").exists()
 
 
+def test_write_validation_report_builds_markdown_from_validation_outputs(tmp_path):
+    validation_dir = tmp_path / "validation"
+    pattern_dir = validation_dir / "patterns"
+    pattern_dir.mkdir(parents=True)
+    (validation_dir / "openai_chunk_judge_summary.json").write_text(
+        json.dumps(
+            {
+                "actual_label_count": 100,
+                "expected_label_count": 100,
+                "coverage_ok": True,
+                "product_count": 20,
+                "request_count": 10,
+                "judgment_counts": {
+                    "reasonable": 30,
+                    "acceptable_adjacent": 60,
+                    "weak": 10,
+                },
+                "weak_or_bad_rate": 0.10,
+                "current_high_score_weak_or_bad_count": 1,
+                "category_judgment_counts": {
+                    "A|reasonable": 5,
+                    "A|acceptable_adjacent": 5,
+                    "A|weak": 5,
+                    "B|reasonable": 20,
+                    "B|acceptable_adjacent": 20,
+                    "B|weak": 0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (pattern_dir / "judge_pattern_summary.json").write_text(
+        json.dumps(
+            {
+                "pattern_impacts": [
+                    {
+                        "pattern": "candidate",
+                        "matched_count": 12,
+                        "weak_or_bad_count": 5,
+                        "weak_or_bad_rate": 0.4167,
+                        "non_weak_affected_count": 7,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (validation_dir / "judge_quality_gate.json").write_text(
+        json.dumps(
+            {
+                "decision": "pass_continue_validation_without_algorithm_change",
+                "reasons": ["candidate_patterns_are_not_actionable_without_overfiltering"],
+                "high_score_weak_or_bad_count": 1,
+                "high_score_weak_or_bad_rate": 0.01,
+                "actionable_pattern_count": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    judge_batch.write_validation_report(
+        SimpleNamespace(
+            validation_dir=str(validation_dir),
+            summary_json="",
+            pattern_summary_json="",
+            quality_gate_json="",
+            output_md="",
+            top_categories=1,
+            top_patterns=1,
+        )
+    )
+
+    report = (validation_dir / "judge_validation_report.md").read_text(encoding="utf-8")
+
+    assert "pass_continue_validation_without_algorithm_change" in report
+    assert "keep_current_algorithm_without_new_caps" in report
+    assert "| Label coverage | 100 / 100 |" in report
+    assert "| A | 15 | 5 | 33.33% |" in report
+    assert "| candidate | 12 | 5 | 41.67% | 7 |" in report
+
+
 def test_next_sample_plan_selects_high_weak_rate_categories_before_fallback():
     summary = {
         "category_judgment_counts": {

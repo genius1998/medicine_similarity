@@ -2165,6 +2165,178 @@ def validate_results(args: argparse.Namespace) -> None:
         raise SystemExit(2)
 
 
+def format_rate(value: Any) -> str:
+    return f"{float(value or 0.0) * 100:.2f}%"
+
+
+def build_validation_report(
+    merged_summary: dict[str, Any],
+    pattern_summary: dict[str, Any],
+    quality_gate_result: dict[str, Any],
+    *,
+    validation_dir: str,
+    top_categories: int,
+    top_patterns: int,
+) -> str:
+    judgment_counts = Counter(merged_summary.get("judgment_counts", {}) or {})
+    weak_or_bad_count = int(judgment_counts.get("weak", 0)) + int(judgment_counts.get("bad", 0))
+    label_count = int(merged_summary.get("actual_label_count") or merged_summary.get("row_count") or 0)
+    expected_label_count = int(merged_summary.get("expected_label_count") or label_count)
+    coverage_ok = bool(merged_summary.get("coverage_ok", expected_label_count == label_count))
+    high_score_weak_count = int(
+        merged_summary.get("current_high_score_weak_or_bad_count")
+        or merged_summary.get("high_score_weak_or_bad_count")
+        or quality_gate_result.get("high_score_weak_or_bad_count")
+        or 0
+    )
+    high_score_weak_rate = (
+        float(quality_gate_result.get("high_score_weak_or_bad_rate", 0.0) or 0.0)
+        if quality_gate_result
+        else float(high_score_weak_count / label_count) if label_count else 0.0
+    )
+
+    category_rows = category_judgment_rows(merged_summary)
+    category_rows.sort(
+        key=lambda row: (
+            -float(row["weak_or_bad_rate"]),
+            -int(row["weak_or_bad_count"]),
+            str(row["category"]),
+        )
+    )
+    pattern_rows = [
+        row for row in (pattern_summary.get("pattern_impacts", []) or [])
+        if isinstance(row, dict)
+    ]
+    pattern_rows.sort(
+        key=lambda row: (
+            -int(row.get("weak_or_bad_count", 0) or 0),
+            -float(row.get("weak_or_bad_rate", 0.0) or 0.0),
+            int(row.get("non_weak_affected_count", 0) or 0),
+            str(row.get("pattern", "")),
+        )
+    )
+
+    lines = [
+        "# Recommendation Quality Validation Report",
+        "",
+        f"- Created at: {now_iso()}",
+        f"- Validation dir: `{validation_dir}`",
+        f"- Decision: `{quality_gate_result.get('decision', '')}`",
+        f"- Algorithm recommendation: `keep_current_algorithm_without_new_caps`"
+        if quality_gate_result.get("decision") == "pass_continue_validation_without_algorithm_change"
+        else "- Algorithm recommendation: `review_before_algorithm_change`",
+        "",
+        "## Metrics",
+        "",
+        "| Metric | Value |",
+        "| --- | ---: |",
+        f"| Label coverage | {label_count} / {expected_label_count} |",
+        f"| Coverage OK | {str(coverage_ok).lower()} |",
+        f"| Product count | {int(merged_summary.get('product_count', 0) or 0)} |",
+        f"| Request count | {int(merged_summary.get('request_count', 0) or 0)} |",
+        f"| Weak/bad count | {weak_or_bad_count} |",
+        f"| Weak/bad rate | {format_rate(merged_summary.get('weak_or_bad_rate', 0.0))} |",
+        f"| High-score weak/bad count | {high_score_weak_count} |",
+        f"| High-score weak/bad rate | {format_rate(high_score_weak_rate)} |",
+        f"| Actionable pattern count | {int(quality_gate_result.get('actionable_pattern_count', 0) or 0)} |",
+        "",
+        "## Judgment Counts",
+        "",
+        "| Judgment | Count |",
+        "| --- | ---: |",
+    ]
+    for judgment in ("reasonable", "acceptable_adjacent", "weak", "bad"):
+        lines.append(f"| {judgment} | {int(judgment_counts.get(judgment, 0))} |")
+
+    lines.extend(
+        [
+            "",
+            "## Gate Reasons",
+            "",
+        ]
+    )
+    for reason in quality_gate_result.get("reasons", []) or []:
+        lines.append(f"- `{reason}`")
+    if not quality_gate_result.get("reasons"):
+        lines.append("- none")
+
+    lines.extend(
+        [
+            "",
+            "## Top Category Weak Rates",
+            "",
+            "| Category | Labels | Weak/Bad | Weak/Bad Rate |",
+            "| --- | ---: | ---: | ---: |",
+        ]
+    )
+    for row in category_rows[: max(0, int(top_categories))]:
+        lines.append(
+            f"| {row['category']} | {int(row['total_count'])} | "
+            f"{int(row['weak_or_bad_count'])} | {format_rate(row['weak_or_bad_rate'])} |"
+        )
+
+    lines.extend(
+        [
+            "",
+            "## Candidate Pattern Impact",
+            "",
+            "| Pattern | Matched | Weak/Bad | Weak/Bad Rate | Non-Weak Affected |",
+            "| --- | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for row in pattern_rows[: max(0, int(top_patterns))]:
+        lines.append(
+            f"| {row.get('pattern', '')} | {int(row.get('matched_count', 0) or 0)} | "
+            f"{int(row.get('weak_or_bad_count', 0) or 0)} | "
+            f"{format_rate(row.get('weak_or_bad_rate', 0.0))} | "
+            f"{int(row.get('non_weak_affected_count', 0) or 0)} |"
+        )
+
+    lines.extend(
+        [
+            "",
+            "## Source Files",
+            "",
+            f"- Merged summary: `{merged_summary.get('outputs', {}).get('merged_summary_json', 'openai_chunk_judge_summary.json')}`",
+            f"- Pattern summary: `{pattern_summary.get('outputs', {}).get('pattern_summary_json', 'patterns/judge_pattern_summary.json')}`",
+            "- Quality gate: `judge_quality_gate.json`",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def write_validation_report(args: argparse.Namespace) -> None:
+    validation_dir = resolve_path(args.validation_dir)
+    merged_summary_path = resolve_path(args.summary_json) if args.summary_json else validation_dir / "openai_chunk_judge_summary.json"
+    pattern_summary_path = (
+        resolve_path(args.pattern_summary_json)
+        if args.pattern_summary_json
+        else validation_dir / "patterns" / "judge_pattern_summary.json"
+    )
+    quality_gate_path = resolve_path(args.quality_gate_json) if args.quality_gate_json else validation_dir / "judge_quality_gate.json"
+    output_md = resolve_path(args.output_md) if args.output_md else validation_dir / "judge_validation_report.md"
+    for path in (merged_summary_path, pattern_summary_path, quality_gate_path):
+        if not path.exists():
+            raise FileNotFoundError(path)
+
+    merged_summary = json.loads(merged_summary_path.read_text(encoding="utf-8"))
+    pattern_summary = json.loads(pattern_summary_path.read_text(encoding="utf-8"))
+    quality_gate_result = json.loads(quality_gate_path.read_text(encoding="utf-8"))
+    report = build_validation_report(
+        merged_summary,
+        pattern_summary,
+        quality_gate_result,
+        validation_dir=str(validation_dir),
+        top_categories=int(args.top_categories),
+        top_patterns=int(args.top_patterns),
+    )
+    output_md.parent.mkdir(parents=True, exist_ok=True)
+    with output_md.open("w", encoding="utf-8-sig", newline="\n") as handle:
+        handle.write(report)
+    print(json.dumps({"output_md": str(output_md), "decision": quality_gate_result.get("decision", "")}, ensure_ascii=False, indent=2))
+
+
 def category_judgment_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:
     counts: dict[str, Counter[str]] = defaultdict(Counter)
     for key, count in (summary.get("category_judgment_counts", {}) or {}).items():
@@ -2678,6 +2850,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     validate_parser.add_argument("--fail-on-review", action="store_true")
     validate_parser.set_defaults(func=validate_results)
+
+    report_parser = subparsers.add_parser(
+        "validation-report",
+        help="Write a Markdown report from validate-results JSON outputs.",
+    )
+    report_parser.add_argument("--validation-dir", required=True)
+    report_parser.add_argument("--summary-json", default="")
+    report_parser.add_argument("--pattern-summary-json", default="")
+    report_parser.add_argument("--quality-gate-json", default="")
+    report_parser.add_argument("--output-md", default="")
+    report_parser.add_argument("--top-categories", type=int, default=10)
+    report_parser.add_argument("--top-patterns", type=int, default=10)
+    report_parser.set_defaults(func=write_validation_report)
 
     next_sample_parser = subparsers.add_parser(
         "plan-next-sample",
