@@ -36,6 +36,7 @@ def test_select_product_ids_stratifies_by_main_category():
         product_vectors,
         all_products=False,
         report_nos=[],
+        main_categories=[],
         sample_size=0,
         per_category=1,
         seed=1,
@@ -43,6 +44,28 @@ def test_select_product_ids_stratifies_by_main_category():
 
     assert len(selected) == 2
     assert {profiles[product_id]["product_main_category"] for product_id in selected} == {"면역", "장 건강"}
+
+
+def test_select_product_ids_filters_by_main_category():
+    profiles = {
+        "p1": {"report_no": "1", "product_main_category": "A"},
+        "p2": {"report_no": "2", "product_main_category": "A"},
+        "p3": {"report_no": "3", "product_main_category": "B"},
+    }
+    product_vectors = {key: {"x": 1.0} for key in profiles}
+
+    selected = select_product_ids(
+        profiles,
+        product_vectors,
+        all_products=False,
+        report_nos=[],
+        main_categories=["B"],
+        sample_size=0,
+        per_category=10,
+        seed=1,
+    )
+
+    assert selected == ["p3"]
 
 
 def test_build_batch_requests_contains_json_response_config():

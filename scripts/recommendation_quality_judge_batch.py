@@ -185,14 +185,20 @@ def select_product_ids(
     *,
     all_products: bool,
     report_nos: list[str],
+    main_categories: list[str],
     sample_size: int,
     per_category: int,
     seed: int,
 ) -> list[str]:
+    wanted_main_categories = {str(value or "").strip() for value in main_categories if str(value or "").strip()}
     eligible = [
         product_id
         for product_id, profile in profiles.items()
         if product_id in product_vectors and str(profile.get("report_no", "") or "").strip()
+        and (
+            not wanted_main_categories
+            or str(profile.get("product_main_category", "") or "").strip() in wanted_main_categories
+        )
     ]
     eligible.sort(key=lambda product_id: (str(profiles[product_id].get("report_no", "") or ""), product_id))
 
@@ -640,6 +646,7 @@ def prepare(args: argparse.Namespace) -> None:
         product_vectors,
         all_products=args.all,
         report_nos=args.report_no or [],
+        main_categories=args.main_category or [],
         sample_size=max(0, int(args.sample_size or 0)),
         per_category=max(0, int(args.per_category or 0)),
         seed=int(args.seed),
@@ -790,6 +797,7 @@ def prepare(args: argparse.Namespace) -> None:
         "runtime": {key: str(value) for key, value in runtime.items()},
         "ingredient_category_profile_path": str(ingredient_profile_path or ""),
         "similarity_algorithm": similarity_algorithm,
+        "selected_main_categories": list(args.main_category or []),
         "profile_count": len(profiles),
         "selected_product_count": len(selected_product_ids),
         "offset": args.offset,
@@ -1973,6 +1981,7 @@ def build_parser() -> argparse.ArgumentParser:
     prepare_parser.add_argument("--sample-size", type=int, default=0, help="Optional total sample cap after stratified selection.")
     prepare_parser.add_argument("--per-category", type=int, default=10, help="Sample count per main category when --all is not set.")
     prepare_parser.add_argument("--report-no", action="append", default=[], help="Specific report_no to include. Can be repeated.")
+    prepare_parser.add_argument("--main-category", action="append", default=[], help="Restrict sampling to a main category. Can be repeated.")
     prepare_parser.add_argument("--offset", type=int, default=0, help="Skip this many selected products before applying --limit.")
     prepare_parser.add_argument("--limit", type=int, default=0, help="Final cap for quick smoke runs.")
     prepare_parser.add_argument("--seed", type=int, default=42)
