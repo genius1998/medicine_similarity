@@ -2714,6 +2714,11 @@ def openai_list(args: argparse.Namespace) -> None:
 
 
 def openai_submit(args: argparse.Namespace) -> None:
+    result = create_or_reuse_openai_batch(args)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+def create_or_reuse_openai_batch(args: argparse.Namespace, client: Any | None = None) -> dict[str, Any]:
     output_dir = resolve_path(args.output_dir)
     jsonl_path = resolve_path(args.jsonl) if args.jsonl else output_dir / DEFAULT_OPENAI_BATCH_JSONL_NAME
     if not jsonl_path.exists():
@@ -2722,10 +2727,16 @@ def openai_submit(args: argparse.Namespace) -> None:
     job_file = resolve_path(args.job_file) if args.job_file else output_dir / DEFAULT_OPENAI_JOB_FILE_NAME
     if job_file.exists() and not args.force:
         job_id = job_file.read_text(encoding="utf-8").strip()
-        print(json.dumps({"job_id": job_id, "job_file": str(job_file), "reused": True}, ensure_ascii=False, indent=2))
-        return
+        return {
+            "job_id": job_id,
+            "job_file": str(job_file),
+            "jsonl": str(jsonl_path),
+            "model": args.model,
+            "reused": True,
+        }
 
-    client = load_openai_client(args.env_path)
+    if client is None:
+        client = load_openai_client(args.env_path)
     display_name = args.name or f"recommendation-quality-judge-openai-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     with jsonl_path.open("rb") as handle:
         input_file = client.files.create(file=handle, purpose="batch")
@@ -2741,20 +2752,15 @@ def openai_submit(args: argparse.Namespace) -> None:
     )
     job_file.parent.mkdir(parents=True, exist_ok=True)
     job_file.write_text(batch.id + "\n", encoding="utf-8")
-    print(
-        json.dumps(
-            {
-                "job_id": batch.id,
-                "status": batch.status,
-                "input_file_id": input_file.id,
-                "job_file": str(job_file),
-                "jsonl": str(jsonl_path),
-                "model": args.model,
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
-    )
+    return {
+        "job_id": batch.id,
+        "status": batch.status,
+        "input_file_id": input_file.id,
+        "job_file": str(job_file),
+        "jsonl": str(jsonl_path),
+        "model": args.model,
+        "reused": False,
+    }
 
 
 def read_file_content_bytes(content: Any) -> bytes:
@@ -2791,16 +2797,7 @@ def download_openai_batch_files(client: Any, batch_data: dict[str, Any], args: a
     return downloaded
 
 
-def openai_check(args: argparse.Namespace) -> None:
-    output_dir = resolve_path(args.output_dir)
-    job_id = args.job
-    if not job_id:
-        job_file = resolve_path(args.job_file) if args.job_file else output_dir / DEFAULT_OPENAI_JOB_FILE_NAME
-        if not job_file.exists():
-            raise FileNotFoundError(job_file)
-        job_id = job_file.read_text(encoding="utf-8").strip()
-
-    client = load_openai_client(args.env_path)
+def wait_for_openai_batch(client: Any, job_id: str, args: argparse.Namespace, output_dir: Path) -> dict[str, Any]:
     watch = bool(getattr(args, "watch", False))
     poll_seconds = max(1, int(getattr(args, "poll_seconds", 30) or 30))
     timeout_seconds = max(0, int(getattr(args, "timeout_seconds", 0) or 0))
@@ -2844,8 +2841,78 @@ def openai_check(args: argparse.Namespace) -> None:
     if watch:
         result["terminal_statuses"] = sorted(OPENAI_TERMINAL_BATCH_STATUSES)
         result["status_history"] = status_history
+    return result
+
+
+def openai_check(args: argparse.Namespace) -> None:
+    output_dir = resolve_path(args.output_dir)
+    job_id = args.job
+    if not job_id:
+        job_file = resolve_path(args.job_file) if args.job_file else output_dir / DEFAULT_OPENAI_JOB_FILE_NAME
+        if not job_file.exists():
+            raise FileNotFoundError(job_file)
+        job_id = job_file.read_text(encoding="utf-8").strip()
+
+    client = load_openai_client(args.env_path)
+    result = wait_for_openai_batch(client, job_id, args, output_dir)
     print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
-    if timed_out:
+    if result["timed_out"]:
+        raise SystemExit(2)
+
+
+def openai_run(args: argparse.Namespace) -> None:
+    output_dir = resolve_path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    client = load_openai_client(args.env_path)
+    submit_result = create_or_reuse_openai_batch(args, client=client)
+
+    wait_args = argparse.Namespace(
+        download=True,
+        download_output=args.download_output,
+        download_errors=True,
+        error_output=args.error_output,
+        watch=True,
+        poll_seconds=int(args.poll_seconds),
+        timeout_seconds=int(args.timeout_seconds),
+    )
+    wait_result = wait_for_openai_batch(client, str(submit_result["job_id"]), wait_args, output_dir)
+
+    finalize_summary_path = output_dir / "openai_finalize_summary.json"
+    finalized = False
+    if wait_result.get("status") == "completed" and not bool(args.skip_finalize):
+        result_jsonl = str(wait_result.get("downloaded", {}).get("output", "") or output_dir / DEFAULT_OPENAI_RESULT_JSONL_NAME)
+        finalize_args = argparse.Namespace(
+            output_dir=str(output_dir),
+            result_jsonl=result_jsonl,
+            snapshot_jsonl=args.snapshot_jsonl,
+            pattern_output_dir=args.pattern_output_dir,
+            ingredient_category_profile=args.ingredient_category_profile,
+            high_score_threshold=float(args.high_score_threshold),
+            max_weak_or_bad_rate=float(args.max_weak_or_bad_rate),
+            max_high_score_weak_or_bad_rate=float(args.max_high_score_weak_or_bad_rate),
+            min_actionable_pattern_weak_count=int(args.min_actionable_pattern_weak_count),
+            min_actionable_pattern_weak_rate=float(args.min_actionable_pattern_weak_rate),
+            max_actionable_pattern_non_weak_affected=int(args.max_actionable_pattern_non_weak_affected),
+            fail_on_review=bool(args.fail_on_review),
+        )
+        finalize_openai_result(finalize_args)
+        finalized = True
+
+    run_summary = {
+        "created_at": now_iso(),
+        "output_dir": str(output_dir),
+        "submitted": submit_result,
+        "wait": wait_result,
+        "finalized": finalized,
+        "finalize_summary_json": str(finalize_summary_path) if finalized else "",
+    }
+    run_summary_path = output_dir / "openai_run_summary.json"
+    run_summary_path.write_text(json.dumps(run_summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps(run_summary, ensure_ascii=False, indent=2, default=str))
+
+    if wait_result.get("timed_out"):
+        raise SystemExit(2)
+    if args.fail_on_incomplete and wait_result.get("status") != "completed":
         raise SystemExit(2)
 
 
@@ -3111,6 +3178,51 @@ def build_parser() -> argparse.ArgumentParser:
     )
     openai_finalize_parser.add_argument("--fail-on-review", action="store_true")
     openai_finalize_parser.set_defaults(func=finalize_openai_result)
+
+    openai_run_parser = subparsers.add_parser(
+        "openai-run",
+        help="Submit or reuse an OpenAI Batch job, watch it, download outputs, and finalize results.",
+    )
+    openai_run_parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
+    openai_run_parser.add_argument("--env-path", default=str(DEFAULT_HEALTH_BATCH_DIR / ".env"))
+    openai_run_parser.add_argument("--jsonl", default="")
+    openai_run_parser.add_argument("--name", default="")
+    openai_run_parser.add_argument("--job-file", default="")
+    openai_run_parser.add_argument("--model", default=OPENAI_MODEL_NAME)
+    openai_run_parser.add_argument("--force", action="store_true")
+    openai_run_parser.add_argument("--download-output", default="")
+    openai_run_parser.add_argument("--error-output", default="")
+    openai_run_parser.add_argument("--poll-seconds", type=int, default=60)
+    openai_run_parser.add_argument("--timeout-seconds", type=int, default=7200)
+    openai_run_parser.add_argument("--snapshot-jsonl", default="")
+    openai_run_parser.add_argument("--pattern-output-dir", default="")
+    openai_run_parser.add_argument("--ingredient-category-profile", default="")
+    openai_run_parser.add_argument("--high-score-threshold", type=float, default=0.65)
+    openai_run_parser.add_argument("--max-weak-or-bad-rate", type=float, default=QUALITY_GATE_MAX_WEAK_OR_BAD_RATE)
+    openai_run_parser.add_argument(
+        "--max-high-score-weak-or-bad-rate",
+        type=float,
+        default=QUALITY_GATE_MAX_HIGH_SCORE_WEAK_OR_BAD_RATE,
+    )
+    openai_run_parser.add_argument(
+        "--min-actionable-pattern-weak-count",
+        type=int,
+        default=QUALITY_GATE_MIN_ACTIONABLE_PATTERN_WEAK_COUNT,
+    )
+    openai_run_parser.add_argument(
+        "--min-actionable-pattern-weak-rate",
+        type=float,
+        default=QUALITY_GATE_MIN_ACTIONABLE_PATTERN_WEAK_RATE,
+    )
+    openai_run_parser.add_argument(
+        "--max-actionable-pattern-non-weak-affected",
+        type=int,
+        default=QUALITY_GATE_MAX_ACTIONABLE_PATTERN_NON_WEAK_AFFECTED,
+    )
+    openai_run_parser.add_argument("--skip-finalize", action="store_true")
+    openai_run_parser.add_argument("--fail-on-review", action="store_true")
+    openai_run_parser.add_argument("--fail-on-incomplete", action="store_true")
+    openai_run_parser.set_defaults(func=openai_run)
 
     openai_cancel_parser = subparsers.add_parser("openai-cancel", help="Cancel a submitted OpenAI Batch job.")
     openai_cancel_parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))

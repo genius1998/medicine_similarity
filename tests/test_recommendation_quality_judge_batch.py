@@ -421,6 +421,102 @@ def test_openai_check_watch_downloads_when_completed(tmp_path, monkeypatch):
     assert result_path.read_text(encoding="utf-8") == '{"custom_id":"recjudge_000001"}\n'
 
 
+def test_openai_run_submits_watches_downloads_and_finalizes(tmp_path, monkeypatch):
+    class FakeFiles:
+        def __init__(self):
+            self.created = False
+
+        def create(self, file, purpose):
+            self.created = True
+            assert purpose == "batch"
+            return SimpleNamespace(id="file_input")
+
+        def content(self, file_id):
+            assert file_id == "file_output"
+            return b'{"custom_id":"recjudge_000001"}\n'
+
+    class FakeBatches:
+        def __init__(self):
+            self.created = False
+
+        def create(self, input_file_id, endpoint, completion_window, metadata):
+            self.created = True
+            assert input_file_id == "file_input"
+            assert endpoint == "/v1/responses"
+            assert completion_window == "24h"
+            assert metadata["model"] == "gpt-5-nano"
+            return SimpleNamespace(id="batch_new", status="validating")
+
+        def retrieve(self, job_id):
+            assert job_id == "batch_new"
+            return {
+                "id": job_id,
+                "status": "completed",
+                "request_counts": {"completed": 1, "failed": 0, "total": 1},
+                "output_file_id": "file_output",
+            }
+
+    fake_files = FakeFiles()
+    fake_batches = FakeBatches()
+    fake_client = SimpleNamespace(files=fake_files, batches=fake_batches)
+    finalize_calls = []
+    monkeypatch.setattr(judge_batch, "load_openai_client", lambda env_path: fake_client)
+    monkeypatch.setattr(judge_batch.time, "sleep", lambda seconds: None)
+
+    def fake_finalize(args):
+        finalize_calls.append((args.output_dir, args.result_jsonl, args.high_score_threshold))
+        Path(args.output_dir, "openai_finalize_summary.json").write_text(
+            json.dumps({"decision": "pass_continue_validation_without_algorithm_change"}),
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(judge_batch, "finalize_openai_result", fake_finalize)
+    output_dir = tmp_path / "run"
+    output_dir.mkdir()
+    (output_dir / "openai_recommendation_judge_batch.jsonl").write_text("{}\n", encoding="utf-8")
+
+    judge_batch.openai_run(
+        SimpleNamespace(
+            output_dir=str(output_dir),
+            env_path="unused.env",
+            jsonl="",
+            name="test run",
+            job_file="",
+            model="gpt-5-nano",
+            force=False,
+            download_output="",
+            error_output="",
+            poll_seconds=1,
+            timeout_seconds=30,
+            snapshot_jsonl="",
+            pattern_output_dir="",
+            ingredient_category_profile="",
+            high_score_threshold=0.65,
+            max_weak_or_bad_rate=0.10,
+            max_high_score_weak_or_bad_rate=0.02,
+            min_actionable_pattern_weak_count=5,
+            min_actionable_pattern_weak_rate=0.50,
+            max_actionable_pattern_non_weak_affected=5,
+            skip_finalize=False,
+            fail_on_review=False,
+            fail_on_incomplete=False,
+        )
+    )
+
+    run_summary = json.loads((output_dir / "openai_run_summary.json").read_text(encoding="utf-8"))
+
+    assert fake_files.created is True
+    assert fake_batches.created is True
+    job_file_text = (output_dir / "openai_recommendation_judge.job.txt").read_text(encoding="utf-8").strip()
+    result_jsonl_text = (output_dir / "openai_recommendation_judge_result.jsonl").read_text(encoding="utf-8")
+    assert job_file_text == "batch_new"
+    assert result_jsonl_text == '{"custom_id":"recjudge_000001"}\n'
+    assert finalize_calls == [(str(output_dir), str(output_dir / "openai_recommendation_judge_result.jsonl"), 0.65)]
+    assert run_summary["submitted"]["job_id"] == "batch_new"
+    assert run_summary["wait"]["status"] == "completed"
+    assert run_summary["finalized"] is True
+
+
 def test_merge_parts_suppresses_retry_covered_errors(tmp_path, monkeypatch):
     output_dir = tmp_path / "merged"
     part_dir = tmp_path / "chunk_part_000"
