@@ -3029,6 +3029,15 @@ def extract_state(output: str) -> str:
     return match.group(1) if match else "UNKNOWN"
 
 
+def read_nonempty_text_file(path: Path, *, label: str) -> str:
+    if not path.exists():
+        raise FileNotFoundError(path)
+    value = path.read_text(encoding="utf-8").strip()
+    if not value:
+        raise RuntimeError(f"{label} is empty: {path}")
+    return value
+
+
 def submit(args: argparse.Namespace) -> None:
     output_dir = resolve_path(args.output_dir)
     health_batch_dir = resolve_path(args.health_batch_dir)
@@ -3199,7 +3208,7 @@ def create_or_reuse_openai_batch(args: argparse.Namespace, client: Any | None = 
     jsonl_path = resolve_path(args.jsonl) if args.jsonl else output_dir / DEFAULT_OPENAI_BATCH_JSONL_NAME
     job_file = resolve_path(args.job_file) if args.job_file else output_dir / DEFAULT_OPENAI_JOB_FILE_NAME
     if job_file.exists() and not args.force:
-        job_id = job_file.read_text(encoding="utf-8").strip()
+        job_id = read_nonempty_text_file(job_file, label="OpenAI Batch job file")
         return {
             "job_id": job_id,
             "job_file": str(job_file),
@@ -3346,9 +3355,7 @@ def openai_check(args: argparse.Namespace) -> None:
     job_id = args.job
     if not job_id:
         job_file = resolve_path(args.job_file) if args.job_file else output_dir / DEFAULT_OPENAI_JOB_FILE_NAME
-        if not job_file.exists():
-            raise FileNotFoundError(job_file)
-        job_id = job_file.read_text(encoding="utf-8").strip()
+        job_id = read_nonempty_text_file(job_file, label="OpenAI Batch job file")
 
     client = load_openai_client(args.env_path)
     result = wait_for_openai_batch(client, job_id, args, output_dir)
@@ -3362,6 +3369,8 @@ def openai_run(args: argparse.Namespace) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     job_file = resolve_path(args.job_file) if args.job_file else output_dir / DEFAULT_OPENAI_JOB_FILE_NAME
     will_reuse_job = job_file.exists() and not bool(args.force)
+    if will_reuse_job:
+        read_nonempty_text_file(job_file, label="OpenAI Batch job file")
     if not will_reuse_job:
         stop_block = validation_stop_submission_block(args)
         if stop_block:
@@ -3442,9 +3451,7 @@ def openai_cancel(args: argparse.Namespace) -> None:
     job_id = args.job
     if not job_id:
         job_file = resolve_path(args.job_file) if args.job_file else output_dir / DEFAULT_OPENAI_JOB_FILE_NAME
-        if not job_file.exists():
-            raise FileNotFoundError(job_file)
-        job_id = job_file.read_text(encoding="utf-8").strip()
+        job_id = read_nonempty_text_file(job_file, label="OpenAI Batch job file")
 
     client = load_openai_client(args.env_path)
     batch = client.batches.cancel(job_id)
