@@ -8,13 +8,13 @@ The latest OpenAI `gpt-5-nano` judge validation passes the quality gate:
 
 | Metric | Value |
 | --- | ---: |
-| Labels | 4,227 / 4,227 |
-| Products | 802 |
-| Batch requests | 575 |
-| Weak/bad count | 315 |
-| Weak/bad rate | 7.45% |
-| High-score weak/bad count | 49 |
-| High-score weak/bad rate | 1.16% |
+| Labels | 4,684 / 4,684 |
+| Products | 882 |
+| Batch requests | 637 |
+| Weak/bad count | 345 |
+| Weak/bad rate | 7.37% |
+| High-score weak/bad count | 50 |
+| High-score weak/bad rate | 1.07% |
 | Actionable pattern count | 0 |
 
 Gate decision:
@@ -30,7 +30,7 @@ The candidate cap patterns are not actionable because they affect too many reaso
 Current merged validation output:
 
 ```text
-output/recommendation_quality_judge_v2_9_openai_validation_current_plus_holdout2
+output/recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted20260606
 ```
 
 Included samples:
@@ -44,6 +44,7 @@ output/recommendation_quality_judge_v2_9_openai_holdout_seed202606051_p5
 output/recommendation_quality_judge_v2_9_openai_targeted_next_seed202606052
 output/recommendation_quality_judge_v2_9_openai_targeted_next_seed202606053
 output/recommendation_quality_judge_v2_9_openai_holdout_seed202606054_p5
+output/recommendation_quality_judge_v2_9_openai_targeted_next_seed20260606
 ```
 
 Retry replacements:
@@ -66,8 +67,9 @@ python scripts\recommendation_quality_judge_batch.py validate-results `
   --parts-glob "output\recommendation_quality_judge_v2_9_openai_targeted_next_seed202606052" `
   --parts-glob "output\recommendation_quality_judge_v2_9_openai_targeted_next_seed202606053" `
   --parts-glob "output\recommendation_quality_judge_v2_9_openai_holdout_seed202606054_p5" `
+  --parts-glob "output\recommendation_quality_judge_v2_9_openai_targeted_next_seed20260606" `
   --retry-glob "output\recommendation_quality_judge_v2_9_openai_chunk_*_retry_*" `
-  --output-dir output\recommendation_quality_judge_v2_9_openai_validation_current_plus_holdout2 `
+  --output-dir output\recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted20260606 `
   --high-score-threshold 0.65
 ```
 
@@ -75,7 +77,7 @@ Write the Markdown report:
 
 ```powershell
 python scripts\recommendation_quality_judge_batch.py validation-report `
-  --validation-dir output\recommendation_quality_judge_v2_9_openai_validation_current_plus_holdout2 `
+  --validation-dir output\recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted20260606 `
   --top-categories 10 `
   --top-patterns 7
 ```
