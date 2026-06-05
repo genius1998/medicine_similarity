@@ -25,6 +25,7 @@ from scripts.recommendation_quality_judge_batch import (  # noqa: E402
     response_from_batch_line,
     select_product_ids,
     summarize_chunks,
+    validation_status_decision,
 )
 
 
@@ -960,9 +961,12 @@ def test_validate_results_orchestrates_summary_analysis_and_gate(tmp_path, monke
 
     assert [item[0] for item in calls] == ["summarize", "analyze", "gate"]
     assert validation_summary["decision"] == "pass_continue_validation_without_algorithm_change"
+    assert validation_summary["recommended_next_action"] == "collect_more_holdout_samples"
     assert (tmp_path / "validation" / "judge_quality_gate.json").exists()
     assert (tmp_path / "validation" / "high_score_weak_diagnostics.json").exists()
+    assert (tmp_path / "validation" / "validation_status.json").exists()
     assert validation_summary["outputs"]["high_score_weak_diagnostics_json"].endswith("high_score_weak_diagnostics.json")
+    assert validation_summary["outputs"]["validation_status_json"].endswith("validation_status.json")
 
 
 def test_finalize_openai_result_orchestrates_apply_analysis_and_gate(tmp_path, monkeypatch):
@@ -1031,8 +1035,10 @@ def test_finalize_openai_result_orchestrates_apply_analysis_and_gate(tmp_path, m
 
     assert [item[0] for item in calls] == ["apply", "analyze", "gate"]
     assert summary["decision"] == "pass_continue_validation_without_algorithm_change"
+    assert summary["recommended_next_action"] == "collect_more_holdout_samples"
     assert (output_dir / "judge_quality_gate.json").exists()
     assert (output_dir / "high_score_weak_diagnostics.json").exists()
+    assert (output_dir / "validation_status.json").exists()
     pattern_summary_json = summary["outputs"]["pattern_summary_json"]
     assert pattern_summary_json.endswith("patterns\\judge_pattern_summary.json") or pattern_summary_json.endswith("patterns/judge_pattern_summary.json")
 
@@ -1116,6 +1122,10 @@ def test_write_validation_report_builds_markdown_from_validation_outputs(tmp_pat
         ),
         encoding="utf-8",
     )
+    (validation_dir / "validation_status.json").write_text(
+        json.dumps({"next_action": "stop_sampling_keep_current_algorithm"}),
+        encoding="utf-8",
+    )
 
     judge_batch.write_validation_report(
         SimpleNamespace(
@@ -1124,6 +1134,7 @@ def test_write_validation_report_builds_markdown_from_validation_outputs(tmp_pat
             pattern_summary_json="",
             quality_gate_json="",
             diagnostics_json="",
+            validation_status_json="",
             output_md="",
             top_categories=1,
             top_patterns=1,
@@ -1139,6 +1150,42 @@ def test_write_validation_report_builds_markdown_from_validation_outputs(tmp_pat
     assert "| candidate | 12 | 5 | 41.67% | 7 |" in report
     assert "## High-Score Weak Diagnostics" in report
     assert "| function_lt_0_40 | 12 | 1 | 8.33% | 11 |" in report
+    assert "Recommended next action: `stop_sampling_keep_current_algorithm`" in report
+
+
+def test_validation_status_decision_stops_when_gate_passes_with_enough_labels():
+    quality_gate = {
+        "decision": "pass_continue_validation_without_algorithm_change",
+        "row_count": 5747,
+    }
+    diagnostics = {
+        "condition_impacts": [
+            {
+                "condition": "broad_condition",
+                "weak_or_bad_count": 24,
+                "weak_or_bad_rate": 0.038,
+                "non_weak_affected_count": 607,
+            }
+        ]
+    }
+
+    status = validation_status_decision(quality_gate, diagnostics, min_label_count=5000)
+
+    assert status["next_action"] == "stop_sampling_keep_current_algorithm"
+    assert "quality_gate_passed_with_sufficient_labels" in status["reasons"]
+    assert status["diagnostic_candidate_count"] == 0
+
+
+def test_validation_status_decision_collects_more_when_labels_are_low():
+    quality_gate = {
+        "decision": "pass_continue_validation_without_algorithm_change",
+        "row_count": 4999,
+    }
+
+    status = validation_status_decision(quality_gate, None, min_label_count=5000)
+
+    assert status["next_action"] == "collect_more_holdout_samples"
+    assert "label_count_below_validation_stop_minimum" in status["reasons"]
 
 
 def test_build_high_score_weak_diagnostics_counts_only_high_score_rows():

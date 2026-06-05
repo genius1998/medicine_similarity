@@ -62,6 +62,7 @@ QUALITY_GATE_MIN_LABEL_COUNT = 50
 QUALITY_GATE_MIN_ACTIONABLE_PATTERN_WEAK_COUNT = 5
 QUALITY_GATE_MIN_ACTIONABLE_PATTERN_WEAK_RATE = 0.50
 QUALITY_GATE_MAX_ACTIONABLE_PATTERN_NON_WEAK_AFFECTED = 5
+VALIDATION_STOP_MIN_LABEL_COUNT = 5000
 _WORKER_CONTEXT: dict[str, Any] = {}
 
 
@@ -2116,6 +2117,88 @@ def quality_gate(args: argparse.Namespace) -> None:
         raise SystemExit(2)
 
 
+def high_score_diagnostic_candidates(
+    diagnostics: dict[str, Any] | None,
+    *,
+    min_weak_or_bad_count: int,
+    min_weak_or_bad_rate: float,
+    max_non_weak_affected: int,
+) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    if not diagnostics:
+        return candidates
+    for row in diagnostics.get("condition_impacts", []) or []:
+        if not isinstance(row, dict):
+            continue
+        weak_count = int(row.get("weak_or_bad_count", 0) or 0)
+        weak_rate = float(row.get("weak_or_bad_rate", 0.0) or 0.0)
+        non_weak_affected = int(row.get("non_weak_affected_count", 0) or 0)
+        if (
+            weak_count >= min_weak_or_bad_count
+            and weak_rate >= min_weak_or_bad_rate
+            and non_weak_affected <= max_non_weak_affected
+        ):
+            candidates.append(dict(row))
+    return candidates
+
+
+def validation_status_decision(
+    quality_gate_result: dict[str, Any],
+    diagnostics: dict[str, Any] | None = None,
+    *,
+    min_label_count: int = VALIDATION_STOP_MIN_LABEL_COUNT,
+    min_condition_weak_count: int = QUALITY_GATE_MIN_ACTIONABLE_PATTERN_WEAK_COUNT,
+    min_condition_weak_rate: float = QUALITY_GATE_MIN_ACTIONABLE_PATTERN_WEAK_RATE,
+    max_condition_non_weak_affected: int = QUALITY_GATE_MAX_ACTIONABLE_PATTERN_NON_WEAK_AFFECTED,
+) -> dict[str, Any]:
+    row_count = int(quality_gate_result.get("row_count", 0) or 0)
+    gate_decision = str(quality_gate_result.get("decision", "") or "")
+    diagnostic_candidates = high_score_diagnostic_candidates(
+        diagnostics,
+        min_weak_or_bad_count=int(min_condition_weak_count),
+        min_weak_or_bad_rate=float(min_condition_weak_rate),
+        max_non_weak_affected=int(max_condition_non_weak_affected),
+    )
+
+    reasons: list[str] = []
+    if gate_decision == "algorithm_change_candidate":
+        next_action = "review_algorithm_change_candidate"
+        reasons.append("quality_gate_found_actionable_pattern")
+    elif gate_decision != "pass_continue_validation_without_algorithm_change":
+        next_action = "collect_more_targeted_samples"
+        reasons.append("quality_gate_requested_more_sampling")
+    elif row_count < int(min_label_count):
+        next_action = "collect_more_holdout_samples"
+        reasons.append("label_count_below_validation_stop_minimum")
+    elif diagnostic_candidates:
+        next_action = "review_high_score_condition_candidate"
+        reasons.append("high_score_diagnostic_condition_has_low_blast_radius")
+    else:
+        next_action = "stop_sampling_keep_current_algorithm"
+        reasons.append("quality_gate_passed_with_sufficient_labels")
+        reasons.append("no_low_blast_radius_high_score_condition_found")
+
+    return {
+        "next_action": next_action,
+        "reasons": reasons,
+        "row_count": row_count,
+        "quality_gate_decision": gate_decision,
+        "diagnostic_candidate_count": len(diagnostic_candidates),
+        "diagnostic_candidates": diagnostic_candidates,
+        "gate": {
+            "min_label_count": int(min_label_count),
+            "min_condition_weak_count": int(min_condition_weak_count),
+            "min_condition_weak_rate": float(min_condition_weak_rate),
+            "max_condition_non_weak_affected": int(max_condition_non_weak_affected),
+        },
+    }
+
+
+def write_validation_status_json(output_path: Path, status: dict[str, Any]) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(status, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def validate_results(args: argparse.Namespace) -> None:
     output_dir = resolve_path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -2140,7 +2223,7 @@ def validate_results(args: argparse.Namespace) -> None:
 
     pattern_summary_path = pattern_dir / "judge_pattern_summary.json"
     diagnostics_json = output_dir / "high_score_weak_diagnostics.json"
-    write_high_score_weak_diagnostics_json(
+    diagnostics = write_high_score_weak_diagnostics_json(
         pattern_dir / "judge_pattern_features.csv",
         diagnostics_json,
         high_score_threshold=float(args.high_score_threshold),
@@ -2157,20 +2240,27 @@ def validate_results(args: argparse.Namespace) -> None:
     gate_result = quality_gate_decision(pattern_summary, gate_args)
     gate_json = output_dir / "judge_quality_gate.json"
     gate_json.write_text(json.dumps(gate_result, ensure_ascii=False, indent=2), encoding="utf-8")
+    validation_status = validation_status_decision(gate_result, diagnostics)
+    validation_status["created_at"] = now_iso()
+    validation_status_json = output_dir / "validation_status.json"
+    write_validation_status_json(validation_status_json, validation_status)
 
     validation_summary = {
         "created_at": now_iso(),
         "decision": gate_result["decision"],
+        "recommended_next_action": validation_status["next_action"],
         "parts_glob": coerce_patterns(args.parts_glob),
         "retry_glob": coerce_patterns(args.retry_glob),
         "high_score_threshold": float(args.high_score_threshold),
         "quality_gate": gate_result,
+        "validation_status": validation_status,
         "outputs": {
             "merged_results_csv": str(results_csv),
             "merged_summary_json": str(output_dir / "openai_chunk_judge_summary.json"),
             "pattern_summary_json": str(pattern_summary_path),
             "quality_gate_json": str(gate_json),
             "high_score_weak_diagnostics_json": str(diagnostics_json),
+            "validation_status_json": str(validation_status_json),
         },
     }
     validation_summary_path = output_dir / "judge_validation_summary.json"
@@ -2208,7 +2298,7 @@ def finalize_openai_result(args: argparse.Namespace) -> None:
 
     pattern_summary_path = pattern_dir / "judge_pattern_summary.json"
     diagnostics_json = output_dir / "high_score_weak_diagnostics.json"
-    write_high_score_weak_diagnostics_json(
+    diagnostics = write_high_score_weak_diagnostics_json(
         pattern_dir / "judge_pattern_features.csv",
         diagnostics_json,
         high_score_threshold=float(args.high_score_threshold),
@@ -2225,14 +2315,20 @@ def finalize_openai_result(args: argparse.Namespace) -> None:
     gate_result = quality_gate_decision(pattern_summary, gate_args)
     gate_json = output_dir / "judge_quality_gate.json"
     gate_json.write_text(json.dumps(gate_result, ensure_ascii=False, indent=2), encoding="utf-8")
+    validation_status = validation_status_decision(gate_result, diagnostics)
+    validation_status["created_at"] = now_iso()
+    validation_status_json = output_dir / "validation_status.json"
+    write_validation_status_json(validation_status_json, validation_status)
 
     finalize_summary = {
         "created_at": now_iso(),
         "decision": gate_result["decision"],
+        "recommended_next_action": validation_status["next_action"],
         "output_dir": str(output_dir),
         "result_jsonl": str(result_jsonl),
         "high_score_threshold": float(args.high_score_threshold),
         "quality_gate": gate_result,
+        "validation_status": validation_status,
         "outputs": {
             "results_csv": str(results_csv),
             "results_jsonl": str(output_dir / "gemini_judge_results.jsonl"),
@@ -2240,6 +2336,7 @@ def finalize_openai_result(args: argparse.Namespace) -> None:
             "pattern_summary_json": str(pattern_summary_path),
             "quality_gate_json": str(gate_json),
             "high_score_weak_diagnostics_json": str(diagnostics_json),
+            "validation_status_json": str(validation_status_json),
         },
     }
     finalize_summary_path = output_dir / "openai_finalize_summary.json"
@@ -2259,6 +2356,7 @@ def build_validation_report(
     pattern_summary: dict[str, Any],
     quality_gate_result: dict[str, Any],
     high_score_diagnostics: dict[str, Any] | None = None,
+    validation_status: dict[str, Any] | None = None,
     *,
     validation_dir: str,
     top_categories: int,
@@ -2331,6 +2429,8 @@ def build_validation_report(
         "| Judgment | Count |",
         "| --- | ---: |",
     ]
+    if validation_status:
+        lines.insert(6, f"- Recommended next action: `{validation_status.get('next_action', '')}`")
     for judgment in ("reasonable", "acceptable_adjacent", "weak", "bad"):
         lines.append(f"| {judgment} | {int(judgment_counts.get(judgment, 0))} |")
 
@@ -2435,6 +2535,11 @@ def write_validation_report(args: argparse.Namespace) -> None:
         if args.diagnostics_json
         else validation_dir / "high_score_weak_diagnostics.json"
     )
+    validation_status_path = (
+        resolve_path(args.validation_status_json)
+        if args.validation_status_json
+        else validation_dir / "validation_status.json"
+    )
     output_md = resolve_path(args.output_md) if args.output_md else validation_dir / "judge_validation_report.md"
     for path in (merged_summary_path, pattern_summary_path, quality_gate_path):
         if not path.exists():
@@ -2448,11 +2553,17 @@ def write_validation_report(args: argparse.Namespace) -> None:
         if diagnostics_path.exists()
         else None
     )
+    validation_status = (
+        json.loads(validation_status_path.read_text(encoding="utf-8"))
+        if validation_status_path.exists()
+        else None
+    )
     report = build_validation_report(
         merged_summary,
         pattern_summary,
         quality_gate_result,
         high_score_diagnostics,
+        validation_status,
         validation_dir=str(validation_dir),
         top_categories=int(args.top_categories),
         top_patterns=int(args.top_patterns),
@@ -2641,6 +2752,36 @@ def diagnose_high_score_weak(args: argparse.Namespace) -> None:
         top_categories=int(args.top_categories),
     )
     print(json.dumps(diagnostics, ensure_ascii=False, indent=2))
+
+
+def validation_status(args: argparse.Namespace) -> None:
+    validation_dir = resolve_path(args.validation_dir)
+    quality_gate_path = (
+        resolve_path(args.quality_gate_json)
+        if args.quality_gate_json
+        else validation_dir / "judge_quality_gate.json"
+    )
+    diagnostics_path = (
+        resolve_path(args.diagnostics_json)
+        if args.diagnostics_json
+        else validation_dir / "high_score_weak_diagnostics.json"
+    )
+    output_json = resolve_path(args.output_json) if args.output_json else validation_dir / "validation_status.json"
+    if not quality_gate_path.exists():
+        raise FileNotFoundError(quality_gate_path)
+    quality_gate_result = json.loads(quality_gate_path.read_text(encoding="utf-8"))
+    diagnostics = json.loads(diagnostics_path.read_text(encoding="utf-8")) if diagnostics_path.exists() else None
+    status = validation_status_decision(
+        quality_gate_result,
+        diagnostics,
+        min_label_count=int(args.min_label_count),
+        min_condition_weak_count=int(args.min_condition_weak_count),
+        min_condition_weak_rate=float(args.min_condition_weak_rate),
+        max_condition_non_weak_affected=int(args.max_condition_non_weak_affected),
+    )
+    status["created_at"] = now_iso()
+    write_validation_status_json(output_json, status)
+    print(json.dumps(status, ensure_ascii=False, indent=2))
 
 
 def category_judgment_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:
@@ -3366,6 +3507,7 @@ def build_parser() -> argparse.ArgumentParser:
     report_parser.add_argument("--pattern-summary-json", default="")
     report_parser.add_argument("--quality-gate-json", default="")
     report_parser.add_argument("--diagnostics-json", default="")
+    report_parser.add_argument("--validation-status-json", default="")
     report_parser.add_argument("--output-md", default="")
     report_parser.add_argument("--top-categories", type=int, default=10)
     report_parser.add_argument("--top-patterns", type=int, default=10)
@@ -3381,6 +3523,32 @@ def build_parser() -> argparse.ArgumentParser:
     diagnose_parser.add_argument("--high-score-threshold", type=float, default=0.65)
     diagnose_parser.add_argument("--top-categories", type=int, default=12)
     diagnose_parser.set_defaults(func=diagnose_high_score_weak)
+
+    validation_status_parser = subparsers.add_parser(
+        "validation-status",
+        help="Recommend whether to stop sampling, collect more labels, or review an algorithm change.",
+    )
+    validation_status_parser.add_argument("--validation-dir", required=True)
+    validation_status_parser.add_argument("--quality-gate-json", default="")
+    validation_status_parser.add_argument("--diagnostics-json", default="")
+    validation_status_parser.add_argument("--output-json", default="")
+    validation_status_parser.add_argument("--min-label-count", type=int, default=VALIDATION_STOP_MIN_LABEL_COUNT)
+    validation_status_parser.add_argument(
+        "--min-condition-weak-count",
+        type=int,
+        default=QUALITY_GATE_MIN_ACTIONABLE_PATTERN_WEAK_COUNT,
+    )
+    validation_status_parser.add_argument(
+        "--min-condition-weak-rate",
+        type=float,
+        default=QUALITY_GATE_MIN_ACTIONABLE_PATTERN_WEAK_RATE,
+    )
+    validation_status_parser.add_argument(
+        "--max-condition-non-weak-affected",
+        type=int,
+        default=QUALITY_GATE_MAX_ACTIONABLE_PATTERN_NON_WEAK_AFFECTED,
+    )
+    validation_status_parser.set_defaults(func=validation_status)
 
     next_sample_parser = subparsers.add_parser(
         "plan-next-sample",

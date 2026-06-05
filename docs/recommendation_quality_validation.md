@@ -23,6 +23,12 @@ Gate decision:
 pass_continue_validation_without_algorithm_change
 ```
 
+Recommended next action:
+
+```text
+stop_sampling_keep_current_algorithm
+```
+
 The candidate cap patterns are not actionable because they affect too many reasonable or acceptable-adjacent recommendations relative to the weak/bad cases they catch.
 
 Latest high-score weak diagnostics also support keeping the current algorithm:
@@ -87,7 +93,7 @@ python scripts\recommendation_quality_judge_batch.py validate-results `
   --high-score-threshold 0.65
 ```
 
-This workflow also writes `high_score_weak_diagnostics.json` from the generated pattern features.
+This workflow also writes `high_score_weak_diagnostics.json` from the generated pattern features and `validation_status.json` from the quality gate plus diagnostics.
 
 Write the Markdown report:
 
@@ -104,6 +110,13 @@ The report includes `high_score_weak_diagnostics.json` automatically when that f
 python scripts\recommendation_quality_judge_batch.py diagnose-high-score-weak `
   --validation-dir output\recommendation_quality_judge_v2_9_openai_validation_current_plus_holdout202606062 `
   --high-score-threshold 0.65
+```
+
+Regenerate only the stop/continue status:
+
+```powershell
+python scripts\recommendation_quality_judge_batch.py validation-status `
+  --validation-dir output\recommendation_quality_judge_v2_9_openai_validation_current_plus_holdout202606062
 ```
 
 ## OpenAI Batch Safety Check
@@ -175,6 +188,12 @@ Continue with the current algorithm when all are true:
 - Overall weak/bad rate is at or below `10%`.
 - High-score weak/bad rate is at or below `2%`.
 - No candidate pattern has high weak/bad concentration with low non-weak blast radius.
+
+Stop routine sampling and keep the current algorithm when all are true:
+
+- Quality gate decision is `pass_continue_validation_without_algorithm_change`.
+- Judge label count is at least `5,000`.
+- High-score diagnostics find no low-blast-radius condition candidate.
 
 Only consider an algorithm change when a pattern meets all of these:
 
