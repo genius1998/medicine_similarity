@@ -17,6 +17,7 @@ from scripts.recommendation_quality_judge_batch import (  # noqa: E402
     extract_response_text,
     merge_parts,
     parse_model_json,
+    next_sample_plan,
     pattern_features_for_row,
     pattern_impact_rows,
     quality_gate_decision,
@@ -667,3 +668,43 @@ def test_validate_results_orchestrates_summary_analysis_and_gate(tmp_path, monke
     assert [item[0] for item in calls] == ["summarize", "analyze", "gate"]
     assert validation_summary["decision"] == "pass_continue_validation_without_algorithm_change"
     assert (tmp_path / "validation" / "judge_quality_gate.json").exists()
+
+
+def test_next_sample_plan_selects_high_weak_rate_categories_before_fallback():
+    summary = {
+        "category_judgment_counts": {
+            "A|reasonable": 20,
+            "A|acceptable_adjacent": 60,
+            "A|weak": 20,
+            "B|reasonable": 40,
+            "B|acceptable_adjacent": 55,
+            "B|weak": 5,
+            "C|reasonable": 10,
+            "C|acceptable_adjacent": 80,
+            "C|weak": 10,
+            "D|reasonable": 8,
+            "D|acceptable_adjacent": 1,
+            "D|weak": 1,
+        }
+    }
+    args = SimpleNamespace(
+        summary_json="summary.json",
+        min_labels=50,
+        min_weak_rate=0.10,
+        max_categories=3,
+        per_category=7,
+        seed=123,
+        sample_output_dir="output/next",
+        top_k=10,
+        workers=4,
+        progress_every=10,
+    )
+
+    plan = next_sample_plan(summary, args)
+
+    assert [row["category"] for row in plan["selected_categories"]] == ["A", "C", "B"]
+    assert plan["selected_categories"][0]["selection_reason"] == "weak_rate_above_threshold"
+    assert plan["selected_categories"][2]["selection_reason"] == "weak_count_fallback"
+    assert "--main-category" in plan["prepare_command"]
+    assert "A" in plan["prepare_command"]
+    assert "D" not in [row["category"] for row in plan["selected_categories"]]

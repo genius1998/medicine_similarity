@@ -2165,6 +2165,167 @@ def validate_results(args: argparse.Namespace) -> None:
         raise SystemExit(2)
 
 
+def category_judgment_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    counts: dict[str, Counter[str]] = defaultdict(Counter)
+    for key, count in (summary.get("category_judgment_counts", {}) or {}).items():
+        text = str(key or "")
+        if "|" not in text:
+            continue
+        category, judgment = text.rsplit("|", 1)
+        counts[category][judgment] += int(count or 0)
+
+    rows: list[dict[str, Any]] = []
+    for category, judgment_counts in sorted(counts.items()):
+        reasonable = int(judgment_counts.get("reasonable", 0))
+        acceptable_adjacent = int(judgment_counts.get("acceptable_adjacent", 0))
+        weak = int(judgment_counts.get("weak", 0))
+        bad = int(judgment_counts.get("bad", 0))
+        total = reasonable + acceptable_adjacent + weak + bad
+        weak_or_bad = weak + bad
+        rows.append(
+            {
+                "category": category,
+                "total_count": total,
+                "reasonable_count": reasonable,
+                "acceptable_adjacent_count": acceptable_adjacent,
+                "weak_count": weak,
+                "bad_count": bad,
+                "weak_or_bad_count": weak_or_bad,
+                "weak_or_bad_rate": round(float(weak_or_bad / total), 4) if total else 0.0,
+            }
+        )
+    return rows
+
+
+def shell_quote_arg(value: str) -> str:
+    text = str(value)
+    return '"' + text.replace('"', '\\"') + '"'
+
+
+def next_sample_plan(summary: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    rows = category_judgment_rows(summary)
+    min_labels = int(args.min_labels)
+    min_weak_rate = float(args.min_weak_rate)
+    max_categories = int(args.max_categories)
+    eligible = [
+        row
+        for row in rows
+        if int(row["total_count"]) >= min_labels and float(row["weak_or_bad_rate"]) >= min_weak_rate
+    ]
+    eligible.sort(key=lambda row: (-float(row["weak_or_bad_rate"]), -int(row["weak_or_bad_count"]), str(row["category"])))
+
+    selected: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in eligible:
+        item = dict(row)
+        item["selection_reason"] = "weak_rate_above_threshold"
+        selected.append(item)
+        seen.add(str(row["category"]))
+        if len(selected) >= max_categories:
+            break
+
+    if len(selected) < max_categories:
+        fallback = [
+            row
+            for row in rows
+            if int(row["total_count"]) >= min_labels
+            and int(row["weak_or_bad_count"]) > 0
+            and str(row["category"]) not in seen
+        ]
+        fallback.sort(key=lambda row: (-int(row["weak_or_bad_count"]), -float(row["weak_or_bad_rate"]), str(row["category"])))
+        for row in fallback:
+            item = dict(row)
+            item["selection_reason"] = "weak_count_fallback"
+            selected.append(item)
+            seen.add(str(row["category"]))
+            if len(selected) >= max_categories:
+                break
+
+    seed = int(args.seed or 0)
+    if seed <= 0:
+        seed = int(datetime.now().strftime("%Y%m%d"))
+    sample_output_dir = str(args.sample_output_dir or "").strip()
+    if not sample_output_dir:
+        sample_output_dir = str(ROOT_DIR / "output" / f"recommendation_quality_judge_v2_9_openai_targeted_next_seed{seed}")
+    command = [
+        "python",
+        "scripts\\recommendation_quality_judge_batch.py",
+        "prepare",
+        "--output-dir",
+        sample_output_dir,
+        "--per-category",
+        str(int(args.per_category)),
+        "--seed",
+        str(seed),
+        "--top-k",
+        str(int(args.top_k)),
+        "--workers",
+        str(int(args.workers)),
+        "--progress-every",
+        str(int(args.progress_every)),
+    ]
+    for row in selected:
+        command.extend(["--main-category", str(row["category"])])
+
+    return {
+        "created_at": now_iso(),
+        "source_summary": str(args.summary_json),
+        "min_labels": min_labels,
+        "min_weak_rate": min_weak_rate,
+        "max_categories": max_categories,
+        "selected_category_count": len(selected),
+        "selected_categories": selected,
+        "prepare_command": command,
+        "prepare_command_powershell": " ".join(shell_quote_arg(item) if " " in item or "\\" in item else item for item in command),
+        "all_category_rows": rows,
+    }
+
+
+def plan_next_sample(args: argparse.Namespace) -> None:
+    summary_path = resolve_path(args.summary_json)
+    output_dir = resolve_path(args.output_dir)
+    if not summary_path.exists():
+        raise FileNotFoundError(summary_path)
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    plan = next_sample_plan(summary, args)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    plan_json = output_dir / "judge_next_sample_plan.json"
+    selected_csv = output_dir / "judge_next_sample_categories.csv"
+    all_csv = output_dir / "judge_category_judgment_rates.csv"
+    plan_json.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_csv(
+        selected_csv,
+        [
+            "category",
+            "total_count",
+            "reasonable_count",
+            "acceptable_adjacent_count",
+            "weak_count",
+            "bad_count",
+            "weak_or_bad_count",
+            "weak_or_bad_rate",
+            "selection_reason",
+        ],
+        list(plan["selected_categories"]),
+    )
+    write_csv(
+        all_csv,
+        [
+            "category",
+            "total_count",
+            "reasonable_count",
+            "acceptable_adjacent_count",
+            "weak_count",
+            "bad_count",
+            "weak_or_bad_count",
+            "weak_or_bad_rate",
+        ],
+        list(plan["all_category_rows"]),
+    )
+    print(json.dumps(plan, ensure_ascii=False, indent=2))
+
+
 def run_command(command: list[str], cwd: Path, *, allow_failure: bool = False) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
@@ -2517,6 +2678,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     validate_parser.add_argument("--fail-on-review", action="store_true")
     validate_parser.set_defaults(func=validate_results)
+
+    next_sample_parser = subparsers.add_parser(
+        "plan-next-sample",
+        help="Recommend main categories for the next targeted judge sample from a merged judge summary.",
+    )
+    next_sample_parser.add_argument("--summary-json", required=True)
+    next_sample_parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
+    next_sample_parser.add_argument("--min-labels", type=int, default=50)
+    next_sample_parser.add_argument("--min-weak-rate", type=float, default=0.08)
+    next_sample_parser.add_argument("--max-categories", type=int, default=8)
+    next_sample_parser.add_argument("--per-category", type=int, default=10)
+    next_sample_parser.add_argument("--seed", type=int, default=0)
+    next_sample_parser.add_argument("--sample-output-dir", default="")
+    next_sample_parser.add_argument("--top-k", type=int, default=DEFAULT_TOP_K)
+    next_sample_parser.add_argument("--workers", type=int, default=4)
+    next_sample_parser.add_argument("--progress-every", type=int, default=10)
+    next_sample_parser.set_defaults(func=plan_next_sample)
 
     submit_parser = subparsers.add_parser("submit", help="Submit the prepared JSONL through D:\\health_batch_project helpers.")
     submit_parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
