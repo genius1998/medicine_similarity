@@ -673,6 +673,54 @@ def test_semantic_v2_caps_generic_nutrient_only_cross_main_match():
     assert same_non_nutrient_detail["score_adjustments"][0]["type"] == "generic_nutrient_only_same_main_score_cap"
 
 
+def test_semantic_v2_caps_no_core_weak_single_shared_with_extra_for_other_main():
+    other = "\uae30\ud0c0"
+    relaxation = "\uc218\uba74/\uae34\uc7a5\uc644\ud654"
+    l_theanine = "L-\ud14c\uc544\ub2cc"
+    calcium = "\uce7c\uc298"
+    base = profile(other, primary=[l_theanine])
+    base["product_name"] = "l-theanine base"
+    target_with_extra = profile(other, primary=[l_theanine], secondary=[calcium])
+    target_with_extra["product_name"] = "l-theanine with calcium"
+    target_exact = profile(other, primary=[l_theanine])
+    target_exact["product_name"] = "l-theanine exact"
+    ingredient_profiles = {
+        l_theanine: {
+            "ingredient_main_category": relaxation,
+            "ingredient_sub_function_categories": ["\ud53c\ub85c\uac1c\uc120"],
+            "ingredient_type": "functional",
+            "vector_include": True,
+            "is_excipient": False,
+        },
+        calcium: {
+            "ingredient_main_category": "\ubf08 \uac74\uac15",
+            "ingredient_sub_function_categories": ["\uc601\uc591\ubcf4\ucda9"],
+            "ingredient_type": "nutrient",
+            "vector_include": True,
+            "is_excipient": False,
+        },
+    }
+
+    capped_score, _shared, capped_detail = calculate_semantic_weighted_jaccard_v2(
+        base,
+        target_with_extra,
+        ingredient_profiles,
+    )
+    exact_score, _exact_shared, exact_detail = calculate_semantic_weighted_jaccard_v2(
+        base,
+        target_exact,
+        ingredient_profiles,
+    )
+
+    assert capped_score == 0.64
+    assert capped_detail["score_adjustments"][0]["type"] == "no_core_weak_single_shared_with_extra_score_cap"
+    assert exact_score > 0.64
+    assert not any(
+        item["type"] == "no_core_weak_single_shared_with_extra_score_cap"
+        for item in exact_detail["score_adjustments"]
+    )
+
+
 def test_semantic_v2_caps_nutrition_main_generic_nutrient_only_match():
     nutrition = "\uc601\uc591\ubcf4\ucda9"
     vitamin_c = "\ube44\ud0c0\ubbfc C"

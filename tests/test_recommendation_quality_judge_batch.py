@@ -10,6 +10,7 @@ if str(ROOT_DIR) not in sys.path:
 
 from scripts.recommendation_quality_judge_batch import (  # noqa: E402
     build_batch_requests,
+    build_openai_batch_requests,
     build_snapshot_item,
     compact_profile,
     extract_response_text,
@@ -87,6 +88,56 @@ def test_build_batch_requests_contains_json_response_config():
     prompt = requests[0]["request"]["contents"][0]["parts"][0]["text"]
     assert "reasonable|acceptable_adjacent|weak|bad" in prompt
     assert "홍삼" in prompt
+
+
+def test_build_openai_batch_requests_uses_responses_json_schema():
+    snapshot = {
+        "key": "recjudge_000001",
+        "base_product": compact_profile(
+            {
+                "report_no": "B1",
+                "product_name": "base",
+                "product_main_category": "硫댁뿭",
+                "primary_ingredients": ["?띿궪"],
+            }
+        ),
+        "recommendations": [
+            {
+                "rank": 1,
+                "target_profile": compact_profile(
+                    {
+                        "report_no": "T1",
+                        "product_name": "target",
+                        "product_main_category": "硫댁뿭",
+                        "primary_ingredients": ["?띿궪"],
+                    }
+                ),
+                "similarity_score": 0.9,
+                "function_similarity_score": 1.0,
+                "core_match_score": 1.0,
+                "substitutability": "high",
+                "recommendation_quality": "strong_match",
+                "recommendation_review_reason": "",
+                "shared_ingredients": ["?띿궪"],
+                "shared_categories": ["硫댁뿭"],
+                "semantic_core_overlap": ["?띿궪"],
+                "semantic_core_reason": "full_semantic_core_coverage",
+                "score_adjustments": [],
+                "local_risk_flags": [],
+                "algorithm_reason": "?띿궪 怨듯넻",
+            }
+        ],
+    }
+
+    requests = build_openai_batch_requests([snapshot])
+
+    assert requests[0]["custom_id"] == "recjudge_000001"
+    assert requests[0]["method"] == "POST"
+    assert requests[0]["url"] == "/v1/responses"
+    assert requests[0]["body"]["model"] == "gpt-5-nano"
+    assert requests[0]["body"]["text"]["format"]["type"] == "json_schema"
+    assert requests[0]["body"]["text"]["format"]["strict"] is True
+    assert requests[0]["body"]["reasoning"]["effort"] == "minimal"
 
 
 def test_build_batch_requests_skips_empty_recommendations():
@@ -194,6 +245,49 @@ def test_parse_batch_inline_response_text_json():
     parsed = parse_model_json(extract_response_text(response))
 
     assert parsed["labels"][0]["judgment"] == "reasonable"
+
+
+def test_parse_openai_batch_response_text_json():
+    payload = {
+        "custom_id": "recjudge_000001",
+        "response": {
+            "status_code": 200,
+            "body": {
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": json.dumps(
+                                    {
+                                        "base_report_no": "B1",
+                                        "labels": [
+                                            {
+                                                "rank": 1,
+                                                "target_report_no": "T1",
+                                                "judgment": "reasonable",
+                                                "confidence": 0.9,
+                                                "reason": "same core ingredient",
+                                                "risk_flags": [],
+                                                "suggested_rule": "",
+                                            }
+                                        ],
+                                        "overall_notes": "",
+                                    }
+                                ),
+                            }
+                        ],
+                    }
+                ]
+            },
+        },
+    }
+
+    response = response_from_batch_line(payload)
+    parsed = parse_model_json(extract_response_text(response))
+
+    assert parsed["labels"][0]["target_report_no"] == "T1"
 
 
 def test_merge_parts_suppresses_retry_covered_errors(tmp_path, monkeypatch):

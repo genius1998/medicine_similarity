@@ -47,8 +47,12 @@ DEFAULT_OUTPUT_DIR = ROOT_DIR / "output" / "recommendation_quality_judge"
 DEFAULT_HEALTH_BATCH_DIR = Path(r"D:\health_batch_project")
 DEFAULT_BATCH_JSONL_NAME = "gemini_recommendation_judge_batch.jsonl"
 DEFAULT_RESULT_JSONL_NAME = "gemini_recommendation_judge_result.jsonl"
+DEFAULT_OPENAI_BATCH_JSONL_NAME = "openai_recommendation_judge_batch.jsonl"
+DEFAULT_OPENAI_RESULT_JSONL_NAME = "openai_recommendation_judge_result.jsonl"
+DEFAULT_OPENAI_JOB_FILE_NAME = "openai_recommendation_judge.job.txt"
 JUDGMENTS = {"reasonable", "acceptable_adjacent", "weak", "bad"}
 MODEL_NAME = "gemini-2.5-flash-lite"
+OPENAI_MODEL_NAME = "gpt-5-nano"
 _WORKER_CONTEXT: dict[str, Any] = {}
 
 
@@ -445,6 +449,57 @@ def judge_prompt(snapshot_item: dict[str, Any]) -> str:
     )
 
 
+def openai_judge_prompt(snapshot_item: dict[str, Any]) -> str:
+    candidates = [
+        {
+            "rank": rec["rank"],
+            "target_product": rec["target_profile"],
+            "algorithm_scores": {
+                "similarity_score": rec["similarity_score"],
+                "function_similarity_score": rec["function_similarity_score"],
+                "core_match_score": rec["core_match_score"],
+                "substitutability": rec["substitutability"],
+                "recommendation_quality": rec.get("recommendation_quality", ""),
+                "recommendation_review_reason": rec.get("recommendation_review_reason", ""),
+            },
+            "match_evidence": {
+                "shared_ingredients": rec["shared_ingredients"],
+                "shared_categories": rec["shared_categories"],
+                "semantic_core_overlap": rec["semantic_core_overlap"],
+                "semantic_core_reason": rec["semantic_core_reason"],
+                "score_adjustments": rec["score_adjustments"],
+                "local_risk_flags": rec["local_risk_flags"],
+                "algorithm_reason": rec["algorithm_reason"],
+            },
+        }
+        for rec in snapshot_item.get("recommendations", []) or []
+    ]
+    payload = {
+        "base_product": snapshot_item["base_product"],
+        "candidate_count": len(candidates),
+        "candidates": candidates,
+    }
+    return (
+        "You are auditing health supplement recommendation quality.\n"
+        "Evaluate whether each candidate is a reasonable recommendation for the base product.\n\n"
+        "Judgment labels:\n"
+        "- reasonable: same functional goal and strong overlap in core functional ingredients or strong semantic evidence.\n"
+        "- acceptable_adjacent: not a direct substitute, but close enough as an adjacent or supporting recommendation.\n"
+        "- weak: some signal exists, but it is too weak for a top recommendation.\n"
+        "- bad: functional goal, core ingredients, or category are clearly mismatched, or only generic nutrients overlap.\n\n"
+        "Rules:\n"
+        "1. Product name similarity alone is not sufficient evidence.\n"
+        "2. Generic nutrients such as vitamins/minerals alone should be judged conservatively.\n"
+        "3. If main categories differ, require strong sub-category or core ingredient overlap for acceptable_adjacent or better.\n"
+        "4. Do not claim disease treatment, disease prevention, drug substitution, or medical efficacy.\n"
+        f"5. Return exactly {len(candidates)} labels, one for every candidate. Do not omit any candidate.\n"
+        "6. For each label, copy rank and target_product.report_no exactly from the input candidate.\n"
+        "7. Return JSON only, matching the schema. No markdown.\n\n"
+        "Input JSON:\n"
+        + json.dumps(payload, ensure_ascii=False, indent=2)
+    )
+
+
 def build_batch_requests(snapshot_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     requests: list[dict[str, Any]] = []
     for item in snapshot_rows:
@@ -460,6 +515,83 @@ def build_batch_requests(snapshot_rows: list[dict[str, Any]]) -> list[dict[str, 
                         "response_mime_type": "application/json",
                         "max_output_tokens": 2048,
                     },
+                },
+            }
+        )
+    return requests
+
+
+def openai_judge_response_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "base_report_no": {"type": "string"},
+            "labels": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "rank": {"type": "integer"},
+                        "target_report_no": {"type": "string"},
+                        "judgment": {
+                            "type": "string",
+                            "enum": ["reasonable", "acceptable_adjacent", "weak", "bad"],
+                        },
+                        "confidence": {"type": "number"},
+                        "reason": {"type": "string"},
+                        "risk_flags": {"type": "array", "items": {"type": "string"}},
+                        "suggested_rule": {"type": "string"},
+                    },
+                    "required": [
+                        "rank",
+                        "target_report_no",
+                        "judgment",
+                        "confidence",
+                        "reason",
+                        "risk_flags",
+                        "suggested_rule",
+                    ],
+                },
+            },
+            "overall_notes": {"type": "string"},
+        },
+        "required": ["base_report_no", "labels", "overall_notes"],
+    }
+
+
+def build_openai_batch_requests(
+    snapshot_rows: list[dict[str, Any]],
+    *,
+    model: str = OPENAI_MODEL_NAME,
+    max_output_tokens: int = 4096,
+) -> list[dict[str, Any]]:
+    response_schema = openai_judge_response_schema()
+    requests: list[dict[str, Any]] = []
+    for item in snapshot_rows:
+        if not item.get("recommendations"):
+            continue
+        requests.append(
+            {
+                "custom_id": item["key"],
+                "method": "POST",
+                "url": "/v1/responses",
+                "body": {
+                    "model": model,
+                    "input": openai_judge_prompt(item),
+                    "reasoning": {"effort": "minimal"},
+                    "max_output_tokens": max_output_tokens,
+                    "text": {
+                        "verbosity": "low",
+                        "format": {
+                            "type": "json_schema",
+                            "name": "recommendation_quality_judge",
+                            "schema": response_schema,
+                            "strict": True,
+                        },
+                    },
+                    "store": False,
                 },
             }
         )
@@ -590,9 +722,11 @@ def prepare(args: argparse.Namespace) -> None:
                 )
 
     batch_requests = build_batch_requests(snapshot_rows)
+    openai_batch_requests = build_openai_batch_requests(snapshot_rows)
     snapshot_jsonl = output_dir / "recommendation_snapshot.jsonl"
     snapshot_csv = output_dir / "recommendation_snapshot.csv"
     batch_jsonl = output_dir / DEFAULT_BATCH_JSONL_NAME
+    openai_batch_jsonl = output_dir / DEFAULT_OPENAI_BATCH_JSONL_NAME
     request_map = {
         item["key"]: {
             "base_product_id": item["base_product_id"],
@@ -633,6 +767,7 @@ def prepare(args: argparse.Namespace) -> None:
         flatten_snapshot(snapshot_rows),
     )
     write_jsonl(batch_jsonl, batch_requests)
+    write_jsonl(openai_batch_jsonl, openai_batch_requests)
     (output_dir / "request_map.json").write_text(json.dumps(request_map, ensure_ascii=False, indent=2), encoding="utf-8")
     write_csv(
         output_dir / "failed_products.csv",
@@ -671,6 +806,9 @@ def prepare(args: argparse.Namespace) -> None:
         "local_risk_flag_counts": dict(risk_counts),
         "batch_request_count": len(batch_requests),
         "batch_jsonl": str(batch_jsonl),
+        "openai_batch_request_count": len(openai_batch_requests),
+        "openai_batch_jsonl": str(openai_batch_jsonl),
+        "openai_model": OPENAI_MODEL_NAME,
         "snapshot_jsonl": str(snapshot_jsonl),
         "snapshot_csv": str(snapshot_csv),
         "request_map": str(output_dir / "request_map.json"),
@@ -683,8 +821,12 @@ def prepare(args: argparse.Namespace) -> None:
 
 
 def response_from_batch_line(line_obj: dict[str, Any]) -> dict[str, Any] | None:
-    if isinstance(line_obj.get("response"), dict):
-        return line_obj["response"]
+    response = line_obj.get("response")
+    if isinstance(response, dict):
+        body = response.get("body")
+        if isinstance(body, dict):
+            return body
+        return response
     inline_response = line_obj.get("inlineResponse") or line_obj.get("inline_response")
     if isinstance(inline_response, dict) and isinstance(inline_response.get("response"), dict):
         return inline_response["response"]
@@ -694,6 +836,33 @@ def response_from_batch_line(line_obj: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def extract_response_text(response: dict[str, Any]) -> str:
+    output_text = response.get("output_text")
+    if output_text:
+        return str(output_text).strip()
+    output = response.get("output") or []
+    output_parts: list[str] = []
+    for item in output:
+        if not isinstance(item, dict):
+            continue
+        for content in item.get("content") or []:
+            if not isinstance(content, dict):
+                continue
+            text = content.get("text")
+            if text:
+                output_parts.append(str(text))
+    if output_parts:
+        return "\n".join(output_parts).strip()
+    choices = response.get("choices") or []
+    choice_parts: list[str] = []
+    for choice in choices:
+        if not isinstance(choice, dict):
+            continue
+        message = choice.get("message") or {}
+        content = message.get("content")
+        if isinstance(content, str) and content:
+            choice_parts.append(content)
+    if choice_parts:
+        return "\n".join(choice_parts).strip()
     candidates = response.get("candidates") or []
     parts: list[str] = []
     for candidate in candidates:
@@ -782,9 +951,10 @@ def apply_results(args: argparse.Namespace) -> None:
     snapshot_by_key = snapshot_indexes(read_jsonl(snapshot_jsonl))
     parsed_rows: list[dict[str, Any]] = []
     error_rows: list[dict[str, Any]] = []
+    label_counts_by_key: Counter[str] = Counter()
     raw_rows = read_jsonl(result_jsonl)
     for line_number, line_obj in enumerate(raw_rows, start=1):
-        key = str(line_obj.get("key", "") or "")
+        key = str(line_obj.get("key", "") or line_obj.get("custom_id", "") or "")
         try:
             if line_obj.get("error"):
                 raise ValueError(json.dumps(line_obj["error"], ensure_ascii=False))
@@ -799,6 +969,7 @@ def apply_results(args: argparse.Namespace) -> None:
             snapshot_item = snapshot_by_key.get(key)
             if not snapshot_item:
                 raise ValueError(f"unknown key: {key}")
+            label_counts_by_key[key] += len(labels)
             base = snapshot_item.get("base_product", {})
             for raw_label in labels:
                 label = normalize_label(raw_label if isinstance(raw_label, dict) else {})
@@ -864,6 +1035,24 @@ def apply_results(args: argparse.Namespace) -> None:
     category_counts = Counter()
     suggested_rule_counts = Counter()
     high_score_bad_or_weak: list[dict[str, Any]] = []
+    expected_label_counts = {
+        key: len(item.get("recommendations", []) or [])
+        for key, item in snapshot_by_key.items()
+        if item.get("recommendations")
+    }
+    label_count_mismatches = [
+        {
+            "key": key,
+            "expected": expected_count,
+            "actual": int(label_counts_by_key.get(key, 0)),
+        }
+        for key, expected_count in sorted(expected_label_counts.items())
+        if int(label_counts_by_key.get(key, 0)) != expected_count
+    ]
+    expected_label_count = sum(expected_label_counts.values())
+    actual_label_count = sum(label_counts_by_key.values())
+    missing_label_count = sum(max(0, item["expected"] - item["actual"]) for item in label_count_mismatches)
+    extra_label_count = sum(max(0, item["actual"] - item["expected"]) for item in label_count_mismatches)
     for row in parsed_rows:
         category_counts[(row["base_main_category"], row["judge_judgment"])] += 1
         if row.get("suggested_rule"):
@@ -896,6 +1085,15 @@ def apply_results(args: argparse.Namespace) -> None:
             "results_csv": str(result_csv),
             "results_jsonl": str(result_rows_jsonl),
             "errors_csv": str(errors_csv),
+        },
+        "label_coverage": {
+            "expected_label_count": expected_label_count,
+            "actual_label_count": int(actual_label_count),
+            "missing_label_count": int(missing_label_count),
+            "extra_label_count": int(extra_label_count),
+            "coverage_rate": round(float(actual_label_count / expected_label_count), 4) if expected_label_count else 0.0,
+            "mismatch_count": len(label_count_mismatches),
+            "mismatches": label_count_mismatches[:30],
         },
     }
     summary_path = output_dir / "gemini_judge_summary.json"
@@ -943,9 +1141,11 @@ def refresh_snapshot(args: argparse.Namespace) -> None:
         item["recommendations"] = refreshed_recommendations
 
     batch_requests = build_batch_requests(snapshot_rows)
+    openai_batch_requests = build_openai_batch_requests(snapshot_rows)
     snapshot_jsonl = output_dir / "recommendation_snapshot.jsonl"
     snapshot_csv = output_dir / "recommendation_snapshot.csv"
     batch_jsonl = output_dir / DEFAULT_BATCH_JSONL_NAME
+    openai_batch_jsonl = output_dir / DEFAULT_OPENAI_BATCH_JSONL_NAME
     request_map = {
         item["key"]: {
             "base_product_id": item.get("base_product_id", ""),
@@ -989,6 +1189,7 @@ def refresh_snapshot(args: argparse.Namespace) -> None:
         flatten_snapshot(snapshot_rows),
     )
     write_jsonl(batch_jsonl, batch_requests)
+    write_jsonl(openai_batch_jsonl, openai_batch_requests)
     (output_dir / "request_map.json").write_text(json.dumps(request_map, ensure_ascii=False, indent=2), encoding="utf-8")
 
     summary = {
@@ -1002,6 +1203,9 @@ def refresh_snapshot(args: argparse.Namespace) -> None:
         "local_risk_flag_counts": dict(risk_counts),
         "batch_request_count": len(batch_requests),
         "batch_jsonl": str(batch_jsonl),
+        "openai_batch_request_count": len(openai_batch_requests),
+        "openai_batch_jsonl": str(openai_batch_jsonl),
+        "openai_model": OPENAI_MODEL_NAME,
         "snapshot_jsonl": str(snapshot_jsonl),
         "snapshot_csv": str(snapshot_csv),
         "request_map": str(output_dir / "request_map.json"),
@@ -1307,6 +1511,147 @@ def check(args: argparse.Namespace) -> None:
     print(json.dumps({"job_name": job_name, "state": extract_state(proc.stdout or "")}, ensure_ascii=False, indent=2))
 
 
+def load_openai_client(env_path: str | Path):
+    try:
+        from dotenv import load_dotenv
+        from openai import OpenAI
+    except ImportError as exc:
+        raise RuntimeError("openai and python-dotenv packages are required for OpenAI Batch commands") from exc
+
+    resolved_env = Path(env_path)
+    if not resolved_env.is_absolute():
+        resolved_env = ROOT_DIR / resolved_env
+    load_dotenv(dotenv_path=resolved_env, override=True)
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError(f"OPENAI_API_KEY is not set in {resolved_env}")
+    return OpenAI(api_key=api_key)
+
+
+def model_to_dict(obj: Any) -> dict[str, Any]:
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    if isinstance(obj, dict):
+        return obj
+    return json.loads(json.dumps(obj, default=str))
+
+
+def openai_submit(args: argparse.Namespace) -> None:
+    output_dir = resolve_path(args.output_dir)
+    jsonl_path = resolve_path(args.jsonl) if args.jsonl else output_dir / DEFAULT_OPENAI_BATCH_JSONL_NAME
+    if not jsonl_path.exists():
+        raise FileNotFoundError(jsonl_path)
+
+    job_file = resolve_path(args.job_file) if args.job_file else output_dir / DEFAULT_OPENAI_JOB_FILE_NAME
+    if job_file.exists() and not args.force:
+        job_id = job_file.read_text(encoding="utf-8").strip()
+        print(json.dumps({"job_id": job_id, "job_file": str(job_file), "reused": True}, ensure_ascii=False, indent=2))
+        return
+
+    client = load_openai_client(args.env_path)
+    display_name = args.name or f"recommendation-quality-judge-openai-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    with jsonl_path.open("rb") as handle:
+        input_file = client.files.create(file=handle, purpose="batch")
+    batch = client.batches.create(
+        input_file_id=input_file.id,
+        endpoint="/v1/responses",
+        completion_window="24h",
+        metadata={
+            "name": display_name[:512],
+            "script": "recommendation_quality_judge_batch",
+            "model": args.model,
+        },
+    )
+    job_file.parent.mkdir(parents=True, exist_ok=True)
+    job_file.write_text(batch.id + "\n", encoding="utf-8")
+    print(
+        json.dumps(
+            {
+                "job_id": batch.id,
+                "status": batch.status,
+                "input_file_id": input_file.id,
+                "job_file": str(job_file),
+                "jsonl": str(jsonl_path),
+                "model": args.model,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
+def read_file_content_bytes(content: Any) -> bytes:
+    if hasattr(content, "read"):
+        data = content.read()
+        if isinstance(data, bytes):
+            return data
+        return str(data).encode("utf-8")
+    data = getattr(content, "content", None)
+    if isinstance(data, bytes):
+        return data
+    text = getattr(content, "text", None)
+    if isinstance(text, str):
+        return text.encode("utf-8")
+    if isinstance(content, bytes):
+        return content
+    return str(content).encode("utf-8")
+
+
+def openai_check(args: argparse.Namespace) -> None:
+    output_dir = resolve_path(args.output_dir)
+    job_id = args.job
+    if not job_id:
+        job_file = resolve_path(args.job_file) if args.job_file else output_dir / DEFAULT_OPENAI_JOB_FILE_NAME
+        if not job_file.exists():
+            raise FileNotFoundError(job_file)
+        job_id = job_file.read_text(encoding="utf-8").strip()
+
+    client = load_openai_client(args.env_path)
+    batch = client.batches.retrieve(job_id)
+    batch_data = model_to_dict(batch)
+    downloaded: dict[str, str] = {}
+    if args.download and batch.output_file_id:
+        result_path = resolve_path(args.download_output) if args.download_output else output_dir / DEFAULT_OPENAI_RESULT_JSONL_NAME
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        result_path.write_bytes(read_file_content_bytes(client.files.content(batch.output_file_id)))
+        downloaded["output"] = str(result_path)
+    if args.download_errors and batch.error_file_id:
+        error_path = resolve_path(args.error_output) if args.error_output else output_dir / "openai_recommendation_judge_errors_raw.jsonl"
+        error_path.parent.mkdir(parents=True, exist_ok=True)
+        error_path.write_bytes(read_file_content_bytes(client.files.content(batch.error_file_id)))
+        downloaded["errors"] = str(error_path)
+
+    print(
+        json.dumps(
+            {
+                "job_id": batch.id,
+                "status": batch.status,
+                "request_counts": batch_data.get("request_counts"),
+                "output_file_id": batch.output_file_id,
+                "error_file_id": batch.error_file_id,
+                "downloaded": downloaded,
+            },
+            ensure_ascii=False,
+            indent=2,
+            default=str,
+        )
+    )
+
+
+def openai_cancel(args: argparse.Namespace) -> None:
+    output_dir = resolve_path(args.output_dir)
+    job_id = args.job
+    if not job_id:
+        job_file = resolve_path(args.job_file) if args.job_file else output_dir / DEFAULT_OPENAI_JOB_FILE_NAME
+        if not job_file.exists():
+            raise FileNotFoundError(job_file)
+        job_id = job_file.read_text(encoding="utf-8").strip()
+
+    client = load_openai_client(args.env_path)
+    batch = client.batches.cancel(job_id)
+    print(json.dumps({"job_id": batch.id, "status": batch.status}, ensure_ascii=False, indent=2))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Prepare and parse Gemini Batch recommendation quality judge jobs.")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1376,6 +1721,34 @@ def build_parser() -> argparse.ArgumentParser:
     check_parser.add_argument("--download-output", default="")
     check_parser.add_argument("--allow-failure", action="store_true")
     check_parser.set_defaults(func=check)
+
+    openai_submit_parser = subparsers.add_parser("openai-submit", help="Submit the prepared OpenAI Batch JSONL.")
+    openai_submit_parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
+    openai_submit_parser.add_argument("--env-path", default=str(DEFAULT_HEALTH_BATCH_DIR / ".env"))
+    openai_submit_parser.add_argument("--jsonl", default="")
+    openai_submit_parser.add_argument("--name", default="")
+    openai_submit_parser.add_argument("--job-file", default="")
+    openai_submit_parser.add_argument("--model", default=OPENAI_MODEL_NAME)
+    openai_submit_parser.add_argument("--force", action="store_true")
+    openai_submit_parser.set_defaults(func=openai_submit)
+
+    openai_check_parser = subparsers.add_parser("openai-check", help="Check or download a submitted OpenAI Batch job.")
+    openai_check_parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
+    openai_check_parser.add_argument("--env-path", default=str(DEFAULT_HEALTH_BATCH_DIR / ".env"))
+    openai_check_parser.add_argument("--job", default="")
+    openai_check_parser.add_argument("--job-file", default="")
+    openai_check_parser.add_argument("--download", action="store_true")
+    openai_check_parser.add_argument("--download-output", default="")
+    openai_check_parser.add_argument("--download-errors", action="store_true")
+    openai_check_parser.add_argument("--error-output", default="")
+    openai_check_parser.set_defaults(func=openai_check)
+
+    openai_cancel_parser = subparsers.add_parser("openai-cancel", help="Cancel a submitted OpenAI Batch job.")
+    openai_cancel_parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
+    openai_cancel_parser.add_argument("--env-path", default=str(DEFAULT_HEALTH_BATCH_DIR / ".env"))
+    openai_cancel_parser.add_argument("--job", default="")
+    openai_cancel_parser.add_argument("--job-file", default="")
+    openai_cancel_parser.set_defaults(func=openai_cancel)
     return parser
 
 
