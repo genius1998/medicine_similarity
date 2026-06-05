@@ -137,6 +137,8 @@ python scripts\recommendation_quality_judge_batch.py openai-run `
 
 `openai-run` reuses the existing job file by default. `--require-no-active` only blocks a new submission when there is no reusable job file. Use `--force` only when intentionally submitting a replacement job.
 
+The `plan-next-sample` output also includes `openai_run_command_powershell` so the next targeted sample can be prepared first and then run with the same safety preflight.
+
 ## Decision Rule
 
 Continue with the current algorithm when all are true:

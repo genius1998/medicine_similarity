@@ -2502,6 +2502,23 @@ def next_sample_plan(summary: dict[str, Any], args: argparse.Namespace) -> dict[
     for row in selected:
         command.extend(["--main-category", str(row["category"])])
 
+    openai_run_command = [
+        "python",
+        "scripts\\recommendation_quality_judge_batch.py",
+        "openai-run",
+        "--output-dir",
+        sample_output_dir,
+        "--env-path",
+        str(DEFAULT_HEALTH_BATCH_DIR / ".env"),
+        "--require-no-active",
+        "--poll-seconds",
+        "60",
+        "--timeout-seconds",
+        "7200",
+        "--high-score-threshold",
+        "0.65",
+    ]
+
     return {
         "created_at": now_iso(),
         "source_summary": str(args.summary_json),
@@ -2512,6 +2529,8 @@ def next_sample_plan(summary: dict[str, Any], args: argparse.Namespace) -> dict[
         "selected_categories": selected,
         "prepare_command": command,
         "prepare_command_powershell": " ".join(shell_quote_arg(item) if " " in item or "\\" in item else item for item in command),
+        "openai_run_command": openai_run_command,
+        "openai_run_command_powershell": " ".join(shell_quote_arg(item) if " " in item or "\\" in item else item for item in openai_run_command),
         "all_category_rows": rows,
     }
 

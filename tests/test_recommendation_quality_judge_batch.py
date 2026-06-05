@@ -1111,4 +1111,7 @@ def test_next_sample_plan_selects_high_weak_rate_categories_before_fallback():
     assert plan["selected_categories"][2]["selection_reason"] == "weak_count_fallback"
     assert "--main-category" in plan["prepare_command"]
     assert "A" in plan["prepare_command"]
+    assert plan["openai_run_command"][:3] == ["python", "scripts\\recommendation_quality_judge_batch.py", "openai-run"]
+    assert "--require-no-active" in plan["openai_run_command"]
+    assert "output/next" in plan["openai_run_command"]
     assert "D" not in [row["category"] for row in plan["selected_categories"]]
