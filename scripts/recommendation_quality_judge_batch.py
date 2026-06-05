@@ -58,6 +58,7 @@ OPENAI_ACTIVE_BATCH_STATUSES = {"validating", "in_progress", "finalizing", "canc
 OPENAI_TERMINAL_BATCH_STATUSES = {"completed", "failed", "expired", "cancelled"}
 QUALITY_GATE_MAX_WEAK_OR_BAD_RATE = 0.10
 QUALITY_GATE_MAX_HIGH_SCORE_WEAK_OR_BAD_RATE = 0.02
+QUALITY_GATE_MIN_LABEL_COUNT = 50
 QUALITY_GATE_MIN_ACTIONABLE_PATTERN_WEAK_COUNT = 5
 QUALITY_GATE_MIN_ACTIONABLE_PATTERN_WEAK_RATE = 0.50
 QUALITY_GATE_MAX_ACTIONABLE_PATTERN_NON_WEAK_AFFECTED = 5
@@ -2036,6 +2037,7 @@ def analyze_patterns(args: argparse.Namespace) -> None:
 
 def quality_gate_decision(summary: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
     row_count = int(summary.get("row_count", 0) or 0)
+    min_label_count = int(getattr(args, "min_label_count", QUALITY_GATE_MIN_LABEL_COUNT))
     weak_or_bad_rate = float(summary.get("weak_or_bad_rate", 0.0) or 0.0)
     high_score_weak_or_bad_count = int(summary.get("high_score_weak_or_bad_count", 0) or 0)
     high_score_weak_or_bad_rate = (
@@ -2058,7 +2060,10 @@ def quality_gate_decision(summary: dict[str, Any], args: argparse.Namespace) -> 
             actionable_patterns.append(pattern)
 
     reasons: list[str] = []
-    if actionable_patterns:
+    if row_count < min_label_count:
+        decision = "review_collect_more_targeted_samples"
+        reasons.append("label_count_below_quality_gate_minimum")
+    elif actionable_patterns:
         decision = "algorithm_change_candidate"
         reasons.append("at_least_one_pattern_has_high_weak_rate_with_low_non_weak_impact")
     elif (
@@ -2088,6 +2093,7 @@ def quality_gate_decision(summary: dict[str, Any], args: argparse.Namespace) -> 
         "actionable_pattern_count": len(actionable_patterns),
         "actionable_patterns": actionable_patterns,
         "gate": {
+            "min_label_count": min_label_count,
             "min_actionable_pattern_weak_count": int(args.min_actionable_pattern_weak_count),
             "min_actionable_pattern_weak_rate": float(args.min_actionable_pattern_weak_rate),
             "max_actionable_pattern_non_weak_affected": int(args.max_actionable_pattern_non_weak_affected),
@@ -2137,6 +2143,7 @@ def validate_results(args: argparse.Namespace) -> None:
     gate_args = argparse.Namespace(
         max_weak_or_bad_rate=float(args.max_weak_or_bad_rate),
         max_high_score_weak_or_bad_rate=float(args.max_high_score_weak_or_bad_rate),
+        min_label_count=int(args.min_label_count),
         min_actionable_pattern_weak_count=int(args.min_actionable_pattern_weak_count),
         min_actionable_pattern_weak_rate=float(args.min_actionable_pattern_weak_rate),
         max_actionable_pattern_non_weak_affected=int(args.max_actionable_pattern_non_weak_affected),
@@ -2197,6 +2204,7 @@ def finalize_openai_result(args: argparse.Namespace) -> None:
     gate_args = argparse.Namespace(
         max_weak_or_bad_rate=float(args.max_weak_or_bad_rate),
         max_high_score_weak_or_bad_rate=float(args.max_high_score_weak_or_bad_rate),
+        min_label_count=int(args.min_label_count),
         min_actionable_pattern_weak_count=int(args.min_actionable_pattern_weak_count),
         min_actionable_pattern_weak_rate=float(args.min_actionable_pattern_weak_rate),
         max_actionable_pattern_non_weak_affected=int(args.max_actionable_pattern_non_weak_affected),
@@ -2936,6 +2944,7 @@ def openai_run(args: argparse.Namespace) -> None:
             high_score_threshold=float(args.high_score_threshold),
             max_weak_or_bad_rate=float(args.max_weak_or_bad_rate),
             max_high_score_weak_or_bad_rate=float(args.max_high_score_weak_or_bad_rate),
+            min_label_count=int(args.min_label_count),
             min_actionable_pattern_weak_count=int(args.min_actionable_pattern_weak_count),
             min_actionable_pattern_weak_rate=float(args.min_actionable_pattern_weak_rate),
             max_actionable_pattern_non_weak_affected=int(args.max_actionable_pattern_non_weak_affected),
@@ -3060,6 +3069,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=QUALITY_GATE_MAX_HIGH_SCORE_WEAK_OR_BAD_RATE,
     )
+    quality_gate_parser.add_argument("--min-label-count", type=int, default=QUALITY_GATE_MIN_LABEL_COUNT)
     quality_gate_parser.add_argument(
         "--min-actionable-pattern-weak-count",
         type=int,
@@ -3093,6 +3103,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=QUALITY_GATE_MAX_HIGH_SCORE_WEAK_OR_BAD_RATE,
     )
+    validate_parser.add_argument("--min-label-count", type=int, default=QUALITY_GATE_MIN_LABEL_COUNT)
     validate_parser.add_argument(
         "--min-actionable-pattern-weak-count",
         type=int,
@@ -3208,6 +3219,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=QUALITY_GATE_MAX_HIGH_SCORE_WEAK_OR_BAD_RATE,
     )
+    openai_finalize_parser.add_argument("--min-label-count", type=int, default=QUALITY_GATE_MIN_LABEL_COUNT)
     openai_finalize_parser.add_argument(
         "--min-actionable-pattern-weak-count",
         type=int,
@@ -3251,6 +3263,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=QUALITY_GATE_MAX_HIGH_SCORE_WEAK_OR_BAD_RATE,
     )
+    openai_run_parser.add_argument("--min-label-count", type=int, default=QUALITY_GATE_MIN_LABEL_COUNT)
     openai_run_parser.add_argument(
         "--min-actionable-pattern-weak-count",
         type=int,

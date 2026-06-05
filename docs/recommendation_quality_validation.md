@@ -141,8 +141,11 @@ The `plan-next-sample` output also includes `openai_run_command_powershell` so t
 
 ## Decision Rule
 
+The quality gate requires at least `50` judge labels by default. Smaller smoke runs are useful for checking OpenAI Batch submission, download, and finalize wiring, but they should not be treated as an accept/reject decision for the recommendation algorithm.
+
 Continue with the current algorithm when all are true:
 
+- Judge label count is at least `50`.
 - Overall weak/bad rate is at or below `10%`.
 - High-score weak/bad rate is at or below `2%`.
 - No candidate pattern has high weak/bad concentration with low non-weak blast radius.
@@ -154,3 +157,5 @@ Only consider an algorithm change when a pattern meets all of these:
 - Non-weak affected count is at most `5`.
 
 If the aggregate rates fail but no low-blast-radius pattern appears, collect more targeted samples instead of adding a broad cap.
+
+If the label count is below `50`, collect a larger targeted sample before interpreting aggregate weak/bad rates.

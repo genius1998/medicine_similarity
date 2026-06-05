@@ -464,7 +464,7 @@ def test_openai_run_submits_watches_downloads_and_finalizes(tmp_path, monkeypatc
     monkeypatch.setattr(judge_batch.time, "sleep", lambda seconds: None)
 
     def fake_finalize(args):
-        finalize_calls.append((args.output_dir, args.result_jsonl, args.high_score_threshold))
+        finalize_calls.append((args.output_dir, args.result_jsonl, args.high_score_threshold, args.min_label_count))
         Path(args.output_dir, "openai_finalize_summary.json").write_text(
             json.dumps({"decision": "pass_continue_validation_without_algorithm_change"}),
             encoding="utf-8",
@@ -494,6 +494,7 @@ def test_openai_run_submits_watches_downloads_and_finalizes(tmp_path, monkeypatc
             high_score_threshold=0.65,
             max_weak_or_bad_rate=0.10,
             max_high_score_weak_or_bad_rate=0.02,
+            min_label_count=50,
             min_actionable_pattern_weak_count=5,
             min_actionable_pattern_weak_rate=0.50,
             max_actionable_pattern_non_weak_affected=5,
@@ -513,7 +514,7 @@ def test_openai_run_submits_watches_downloads_and_finalizes(tmp_path, monkeypatc
     result_jsonl_text = (output_dir / "openai_recommendation_judge_result.jsonl").read_text(encoding="utf-8")
     assert job_file_text == "batch_new"
     assert result_jsonl_text == '{"custom_id":"recjudge_000001"}\n'
-    assert finalize_calls == [(str(output_dir), str(output_dir / "openai_recommendation_judge_result.jsonl"), 0.65)]
+    assert finalize_calls == [(str(output_dir), str(output_dir / "openai_recommendation_judge_result.jsonl"), 0.65, 50)]
     assert run_summary["submitted"]["job_id"] == "batch_new"
     assert run_summary["wait"]["status"] == "completed"
     assert run_summary["finalized"] is True
@@ -561,6 +562,7 @@ def test_openai_run_require_no_active_blocks_new_submit(tmp_path, monkeypatch):
                 high_score_threshold=0.65,
                 max_weak_or_bad_rate=0.10,
                 max_high_score_weak_or_bad_rate=0.02,
+                min_label_count=50,
                 min_actionable_pattern_weak_count=5,
                 min_actionable_pattern_weak_rate=0.50,
                 max_actionable_pattern_non_weak_affected=5,
@@ -785,6 +787,7 @@ def test_quality_gate_passes_when_rates_are_low_and_patterns_are_not_actionable(
     args = SimpleNamespace(
         max_weak_or_bad_rate=0.10,
         max_high_score_weak_or_bad_rate=0.02,
+        min_label_count=50,
         min_actionable_pattern_weak_count=5,
         min_actionable_pattern_weak_rate=0.50,
         max_actionable_pattern_non_weak_affected=5,
@@ -814,6 +817,7 @@ def test_quality_gate_flags_low_blast_radius_algorithm_candidate():
     args = SimpleNamespace(
         max_weak_or_bad_rate=0.10,
         max_high_score_weak_or_bad_rate=0.02,
+        min_label_count=50,
         min_actionable_pattern_weak_count=5,
         min_actionable_pattern_weak_rate=0.50,
         max_actionable_pattern_non_weak_affected=5,
@@ -842,6 +846,7 @@ def test_quality_gate_requests_more_sampling_when_rates_exceed_gate_without_acti
     args = SimpleNamespace(
         max_weak_or_bad_rate=0.10,
         max_high_score_weak_or_bad_rate=0.02,
+        min_label_count=50,
         min_actionable_pattern_weak_count=5,
         min_actionable_pattern_weak_rate=0.50,
         max_actionable_pattern_non_weak_affected=5,
@@ -865,6 +870,29 @@ def test_quality_gate_requests_more_sampling_when_rates_exceed_gate_without_acti
     assert result["decision"] == "review_collect_more_targeted_samples"
     assert "overall_weak_rate_exceeds_gate" in result["reasons"]
     assert "high_score_weak_rate_exceeds_gate" in result["reasons"]
+
+
+def test_quality_gate_requests_more_sampling_for_tiny_samples():
+    args = SimpleNamespace(
+        max_weak_or_bad_rate=0.10,
+        max_high_score_weak_or_bad_rate=0.02,
+        min_label_count=50,
+        min_actionable_pattern_weak_count=5,
+        min_actionable_pattern_weak_rate=0.50,
+        max_actionable_pattern_non_weak_affected=5,
+    )
+    summary = {
+        "row_count": 7,
+        "weak_or_bad_rate": 0.0,
+        "high_score_weak_or_bad_count": 0,
+        "pattern_impacts": [],
+    }
+
+    result = quality_gate_decision(summary, args)
+
+    assert result["decision"] == "review_collect_more_targeted_samples"
+    assert "label_count_below_quality_gate_minimum" in result["reasons"]
+    assert result["gate"]["min_label_count"] == 50
 
 
 def test_validate_results_orchestrates_summary_analysis_and_gate(tmp_path, monkeypatch):
@@ -894,7 +922,7 @@ def test_validate_results_orchestrates_summary_analysis_and_gate(tmp_path, monke
         )
 
     def fake_quality_gate_decision(summary, args):
-        calls.append(("gate", summary["row_count"], args.max_weak_or_bad_rate))
+        calls.append(("gate", summary["row_count"], args.max_weak_or_bad_rate, args.min_label_count))
         return {
             "decision": "pass_continue_validation_without_algorithm_change",
             "row_count": summary["row_count"],
@@ -914,6 +942,7 @@ def test_validate_results_orchestrates_summary_analysis_and_gate(tmp_path, monke
             high_score_threshold=0.65,
             max_weak_or_bad_rate=0.10,
             max_high_score_weak_or_bad_rate=0.02,
+            min_label_count=50,
             min_actionable_pattern_weak_count=5,
             min_actionable_pattern_weak_rate=0.50,
             max_actionable_pattern_non_weak_affected=5,
@@ -956,7 +985,7 @@ def test_finalize_openai_result_orchestrates_apply_analysis_and_gate(tmp_path, m
         )
 
     def fake_quality_gate_decision(summary, args):
-        calls.append(("gate", summary["row_count"], args.max_weak_or_bad_rate))
+        calls.append(("gate", summary["row_count"], args.max_weak_or_bad_rate, args.min_label_count))
         return {
             "decision": "pass_continue_validation_without_algorithm_change",
             "row_count": summary["row_count"],
@@ -977,6 +1006,7 @@ def test_finalize_openai_result_orchestrates_apply_analysis_and_gate(tmp_path, m
             high_score_threshold=0.65,
             max_weak_or_bad_rate=0.10,
             max_high_score_weak_or_bad_rate=0.02,
+            min_label_count=50,
             min_actionable_pattern_weak_count=5,
             min_actionable_pattern_weak_rate=0.50,
             max_actionable_pattern_non_weak_affected=5,
