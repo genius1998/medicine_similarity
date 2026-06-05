@@ -67,6 +67,8 @@ def test_similarity_algorithm_default_is_semantic_v2_but_v1_is_still_selectable(
     assert normalize_similarity_algorithm("v2.5") == SIMILARITY_ALGORITHM_V2
     assert normalize_similarity_algorithm("v2.6") == SIMILARITY_ALGORITHM_V2
     assert normalize_similarity_algorithm("v2.7") == SIMILARITY_ALGORITHM_V2
+    assert normalize_similarity_algorithm("v2.8") == SIMILARITY_ALGORITHM_V2
+    assert normalize_similarity_algorithm("v2.9") == SIMILARITY_ALGORITHM_V2
     assert normalize_similarity_algorithm("v1") == SIMILARITY_ALGORITHM_V1
 
 
@@ -673,21 +675,29 @@ def test_semantic_v2_caps_generic_nutrient_only_cross_main_match():
     assert same_non_nutrient_detail["score_adjustments"][0]["type"] == "generic_nutrient_only_same_main_score_cap"
 
 
-def test_semantic_v2_caps_no_core_weak_single_shared_with_extra_for_other_main():
+def test_semantic_v2_caps_no_core_weak_shared_with_extra_for_same_main():
     other = "\uae30\ud0c0"
     relaxation = "\uc218\uba74/\uae34\uc7a5\uc644\ud654"
     l_theanine = "L-\ud14c\uc544\ub2cc"
+    seaweed = "\uac10\ud0dc\ucd94\ucd9c\ubb3c"
     calcium = "\uce7c\uc298"
-    base = profile(other, primary=[l_theanine])
+    base = profile(other, primary=[l_theanine], secondary=[seaweed])
     base["product_name"] = "l-theanine base"
-    target_with_extra = profile(other, primary=[l_theanine], secondary=[calcium])
+    target_with_extra = profile(other, primary=[l_theanine], secondary=[seaweed, calcium])
     target_with_extra["product_name"] = "l-theanine with calcium"
-    target_exact = profile(other, primary=[l_theanine])
+    target_exact = profile(other, primary=[l_theanine], secondary=[seaweed])
     target_exact["product_name"] = "l-theanine exact"
     ingredient_profiles = {
         l_theanine: {
             "ingredient_main_category": relaxation,
             "ingredient_sub_function_categories": ["\ud53c\ub85c\uac1c\uc120"],
+            "ingredient_type": "functional",
+            "vector_include": True,
+            "is_excipient": False,
+        },
+        seaweed: {
+            "ingredient_main_category": other,
+            "ingredient_sub_function_categories": [],
             "ingredient_type": "functional",
             "vector_include": True,
             "is_excipient": False,
@@ -713,12 +723,53 @@ def test_semantic_v2_caps_no_core_weak_single_shared_with_extra_for_other_main()
     )
 
     assert capped_score == 0.64
-    assert capped_detail["score_adjustments"][0]["type"] == "no_core_weak_single_shared_with_extra_score_cap"
+    assert capped_detail["score_adjustments"][0]["type"] == "no_core_weak_shared_with_extra_score_cap"
     assert exact_score > 0.64
     assert not any(
-        item["type"] == "no_core_weak_single_shared_with_extra_score_cap"
+        item["type"] == "no_core_weak_shared_with_extra_score_cap"
         for item in exact_detail["score_adjustments"]
     )
+
+
+def test_semantic_v2_caps_no_core_weak_bone_subset_match():
+    bone = "\ubf08 \uac74\uac15"
+    nutrition = "\uc601\uc591\ubcf4\ucda9"
+    lipid = "\ud608\uc911\uc9c0\uc9c8"
+    vitamin_d = "\ube44\ud0c0\ubbfc D"
+    calcium = "\uce7c\uc298"
+    lecithin = "\ub808\uc2dc\ud2f4"
+    base = profile(bone, primary=[vitamin_d, calcium], secondary=[lecithin])
+    base["product_name"] = "calcium 600mg"
+    target = profile(bone, primary=[vitamin_d], secondary=[lecithin])
+    target["product_name"] = "vitamin d only"
+    ingredient_profiles = {
+        vitamin_d: {
+            "ingredient_main_category": nutrition,
+            "ingredient_sub_function_categories": [bone],
+            "ingredient_type": "nutrient",
+            "vector_include": True,
+            "is_excipient": False,
+        },
+        calcium: {
+            "ingredient_main_category": bone,
+            "ingredient_sub_function_categories": [nutrition],
+            "ingredient_type": "nutrient",
+            "vector_include": True,
+            "is_excipient": False,
+        },
+        lecithin: {
+            "ingredient_main_category": lipid,
+            "ingredient_sub_function_categories": [],
+            "ingredient_type": "functional",
+            "vector_include": True,
+            "is_excipient": False,
+        },
+    }
+
+    score, _shared, detail = calculate_semantic_weighted_jaccard_v2(base, target, ingredient_profiles)
+
+    assert score == 0.64
+    assert detail["score_adjustments"][0]["type"] == "no_core_weak_shared_with_extra_score_cap"
 
 
 def test_semantic_v2_caps_nutrition_main_generic_nutrient_only_match():

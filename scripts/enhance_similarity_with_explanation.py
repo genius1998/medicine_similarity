@@ -32,7 +32,8 @@ SIMILARITY_ALGORITHM_V2_4 = "semantic_weighted_jaccard_v2_4"
 SIMILARITY_ALGORITHM_V2_5 = "semantic_weighted_jaccard_v2_5"
 SIMILARITY_ALGORITHM_V2_6 = "semantic_weighted_jaccard_v2_6"
 SIMILARITY_ALGORITHM_V2_7 = "semantic_weighted_jaccard_v2_7"
-SIMILARITY_ALGORITHM_V2 = "semantic_weighted_jaccard_v2_8"
+SIMILARITY_ALGORITHM_V2_8 = "semantic_weighted_jaccard_v2_8"
+SIMILARITY_ALGORITHM_V2 = "semantic_weighted_jaccard_v2_9"
 SIMILARITY_ALGORITHM_VERSION = SIMILARITY_ALGORITHM_V2
 SIMILARITY_ALGORITHM_ALIASES = {
     "v1": SIMILARITY_ALGORITHM_V1,
@@ -55,6 +56,8 @@ SIMILARITY_ALGORITHM_ALIASES = {
     "v2_7": SIMILARITY_ALGORITHM_V2,
     "v2.8": SIMILARITY_ALGORITHM_V2,
     "v2_8": SIMILARITY_ALGORITHM_V2,
+    "v2.9": SIMILARITY_ALGORITHM_V2,
+    "v2_9": SIMILARITY_ALGORITHM_V2,
     SIMILARITY_ALGORITHM_V2_LEGACY: SIMILARITY_ALGORITHM_V2,
     SIMILARITY_ALGORITHM_V2_1: SIMILARITY_ALGORITHM_V2,
     SIMILARITY_ALGORITHM_V2_2: SIMILARITY_ALGORITHM_V2,
@@ -63,6 +66,7 @@ SIMILARITY_ALGORITHM_ALIASES = {
     SIMILARITY_ALGORITHM_V2_5: SIMILARITY_ALGORITHM_V2,
     SIMILARITY_ALGORITHM_V2_6: SIMILARITY_ALGORITHM_V2,
     SIMILARITY_ALGORITHM_V2_7: SIMILARITY_ALGORITHM_V2,
+    SIMILARITY_ALGORITHM_V2_8: SIMILARITY_ALGORITHM_V2,
     SIMILARITY_ALGORITHM_V2: SIMILARITY_ALGORITHM_V2,
     "semantic": SIMILARITY_ALGORITHM_V2,
     "semantic_jaccard": SIMILARITY_ALGORITHM_V2,
@@ -74,6 +78,7 @@ SIMILARITY_ALGORITHM_ALIASES = {
     "semantic_v2_6": SIMILARITY_ALGORITHM_V2,
     "semantic_v2_7": SIMILARITY_ALGORITHM_V2,
     "semantic_v2_8": SIMILARITY_ALGORITHM_V2,
+    "semantic_v2_9": SIMILARITY_ALGORITHM_V2,
 }
 DEFAULT_TOP_K = 10
 DEFAULT_CANDIDATE_LIMIT = 1000
@@ -98,8 +103,8 @@ NO_CORE_LOW_SHARED_SCORE_CAP = 0.64
 NO_CORE_LOW_SHARED_MAX_SHARED_KEYS = 2
 NO_CORE_LOW_SHARED_MAX_WEAK_SHARED_KEYS = 3
 NO_CORE_LOW_SHARED_MIN_BASE_ONLY_KEYS = 3
-NO_CORE_WEAK_SINGLE_SHARED_WITH_EXTRA_SCORE_CAP = 0.64
-NO_CORE_WEAK_SINGLE_SHARED_WITH_EXTRA_MAX_SHARED_KEYS = 1
+NO_CORE_WEAK_SHARED_WITH_EXTRA_SCORE_CAP = 0.64
+NO_CORE_WEAK_SHARED_WITH_EXTRA_MAX_SHARED_KEYS = 2
 CROSS_MAIN_SHARED_SUBCATEGORY_ONLY_SCORE_CAP = 0.64
 NUTRITION_SUBTYPE_MISMATCH_SCORE_CAP = 0.52
 NUTRITION_GENERIC_LOW_CORE_COVERAGE_SCORE_CAP = 0.64
@@ -1442,20 +1447,20 @@ def calculate_semantic_weighted_jaccard_v2(
         if not key.startswith("__") and float(target_vector.get(key, 0.0) or 0.0) > 0.0 and key not in shared_keys
     ]
     if (
-        score > NO_CORE_WEAK_SINGLE_SHARED_WITH_EXTRA_SCORE_CAP
+        score > NO_CORE_WEAK_SHARED_WITH_EXTRA_SCORE_CAP
         and base_main_category == target_main_category
-        and base_main_category in NON_SPECIFIC_CATEGORY_LABELS
         and not (core_coverage.get("shared_core_semantic_keys", []) or [])
         and weak_signal_only_shared
-        and len(shared_keys) <= NO_CORE_WEAK_SINGLE_SHARED_WITH_EXTRA_MAX_SHARED_KEYS
+        and len(shared_keys) <= NO_CORE_WEAK_SHARED_WITH_EXTRA_MAX_SHARED_KEYS
+        and len(base_only_semantic_keys) < NO_CORE_LOW_SHARED_MIN_BASE_ONLY_KEYS
         and (base_only_semantic_keys or target_only_semantic_keys)
     ):
         original_score = score
-        score = min(score, NO_CORE_WEAK_SINGLE_SHARED_WITH_EXTRA_SCORE_CAP)
+        score = min(score, NO_CORE_WEAK_SHARED_WITH_EXTRA_SCORE_CAP)
         score_adjustments.append(
             {
-                "type": "no_core_weak_single_shared_with_extra_score_cap",
-                "cap": NO_CORE_WEAK_SINGLE_SHARED_WITH_EXTRA_SCORE_CAP,
+                "type": "no_core_weak_shared_with_extra_score_cap",
+                "cap": NO_CORE_WEAK_SHARED_WITH_EXTRA_SCORE_CAP,
                 "original_score": round(float(original_score), 6),
                 "main_category": base_main_category,
                 "shared_keys": shared_keys,
