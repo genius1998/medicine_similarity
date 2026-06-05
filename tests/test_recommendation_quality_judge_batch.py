@@ -319,6 +319,56 @@ def test_parse_openai_batch_response_text_json():
     assert parsed["labels"][0]["target_report_no"] == "T1"
 
 
+def test_openai_list_filters_active_batches_and_writes_json(tmp_path, monkeypatch):
+    class FakeBatches:
+        def __init__(self):
+            self.limit = None
+
+        def list(self, **kwargs):
+            self.limit = kwargs.get("limit")
+            return [
+                {
+                    "id": "batch_active",
+                    "status": "in_progress",
+                    "created_at": 1,
+                    "request_counts": {"completed": 3, "failed": 0, "total": 5},
+                    "metadata": {"name": "active validation"},
+                    "input_file_id": "file_input",
+                },
+                {
+                    "id": "batch_done",
+                    "status": "completed",
+                    "created_at": 2,
+                    "completed_at": 3,
+                    "request_counts": {"completed": 7, "failed": 0, "total": 7},
+                    "metadata": {"name": "done validation"},
+                },
+            ]
+
+    fake_batches = FakeBatches()
+    fake_client = SimpleNamespace(batches=fake_batches)
+    monkeypatch.setattr(judge_batch, "load_openai_client", lambda env_path: fake_client)
+    output_json = tmp_path / "openai_batches.json"
+
+    judge_batch.openai_list(
+        SimpleNamespace(
+            env_path="unused.env",
+            limit=10,
+            active_only=True,
+            output_json=str(output_json),
+        )
+    )
+
+    result = json.loads(output_json.read_text(encoding="utf-8"))
+
+    assert fake_batches.limit == 10
+    assert result["count"] == 1
+    assert result["batches"][0]["id"] == "batch_active"
+    assert result["batches"][0]["metadata_name"] == "active validation"
+    assert result["batches"][0]["request_counts"]["total"] == 5
+    assert "validating" in result["active_statuses"]
+
+
 def test_merge_parts_suppresses_retry_covered_errors(tmp_path, monkeypatch):
     output_dir = tmp_path / "merged"
     part_dir = tmp_path / "chunk_part_000"

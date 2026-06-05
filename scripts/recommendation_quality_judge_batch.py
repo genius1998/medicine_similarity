@@ -54,6 +54,7 @@ DEFAULT_OPENAI_JOB_FILE_NAME = "openai_recommendation_judge.job.txt"
 JUDGMENTS = {"reasonable", "acceptable_adjacent", "weak", "bad"}
 MODEL_NAME = "gemini-2.5-flash-lite"
 OPENAI_MODEL_NAME = "gpt-5-nano"
+OPENAI_ACTIVE_BATCH_STATUSES = {"validating", "in_progress", "finalizing", "cancelling"}
 QUALITY_GATE_MAX_WEAK_OR_BAD_RATE = 0.10
 QUALITY_GATE_MAX_HIGH_SCORE_WEAK_OR_BAD_RATE = 0.02
 QUALITY_GATE_MIN_ACTIONABLE_PATTERN_WEAK_COUNT = 5
@@ -2601,6 +2602,55 @@ def model_to_dict(obj: Any) -> dict[str, Any]:
     return json.loads(json.dumps(obj, default=str))
 
 
+def openai_batch_rows(batches: Any, *, active_only: bool) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for batch in batches:
+        data = model_to_dict(batch)
+        status = str(data.get("status", "") or "")
+        if active_only and status not in OPENAI_ACTIVE_BATCH_STATUSES:
+            continue
+        metadata = data.get("metadata", {}) or {}
+        request_counts = data.get("request_counts", {}) or {}
+        rows.append(
+            {
+                "id": data.get("id", ""),
+                "status": status,
+                "created_at": data.get("created_at", ""),
+                "completed_at": data.get("completed_at", ""),
+                "failed_at": data.get("failed_at", ""),
+                "expires_at": data.get("expires_at", ""),
+                "request_counts": request_counts,
+                "metadata_name": metadata.get("name", "") if isinstance(metadata, dict) else "",
+                "input_file_id": data.get("input_file_id", ""),
+                "output_file_id": data.get("output_file_id", ""),
+                "error_file_id": data.get("error_file_id", ""),
+            }
+        )
+    return rows
+
+
+def openai_list(args: argparse.Namespace) -> None:
+    client = load_openai_client(args.env_path)
+    kwargs: dict[str, Any] = {}
+    if int(args.limit) > 0:
+        kwargs["limit"] = int(args.limit)
+    batches = client.batches.list(**kwargs)
+    rows = openai_batch_rows(batches, active_only=bool(args.active_only))
+    result = {
+        "active_only": bool(args.active_only),
+        "limit": int(args.limit),
+        "active_statuses": sorted(OPENAI_ACTIVE_BATCH_STATUSES),
+        "count": len(rows),
+        "batches": rows,
+    }
+    output_json = str(args.output_json or "").strip()
+    if output_json:
+        output_path = resolve_path(output_json)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+
+
 def openai_submit(args: argparse.Namespace) -> None:
     output_dir = resolve_path(args.output_dir)
     jsonl_path = resolve_path(args.jsonl) if args.jsonl else output_dir / DEFAULT_OPENAI_BATCH_JSONL_NAME
@@ -2910,6 +2960,13 @@ def build_parser() -> argparse.ArgumentParser:
     openai_submit_parser.add_argument("--model", default=OPENAI_MODEL_NAME)
     openai_submit_parser.add_argument("--force", action="store_true")
     openai_submit_parser.set_defaults(func=openai_submit)
+
+    openai_list_parser = subparsers.add_parser("openai-list", help="List recent OpenAI Batch jobs without printing secrets.")
+    openai_list_parser.add_argument("--env-path", default=str(DEFAULT_HEALTH_BATCH_DIR / ".env"))
+    openai_list_parser.add_argument("--limit", type=int, default=20)
+    openai_list_parser.add_argument("--active-only", action="store_true")
+    openai_list_parser.add_argument("--output-json", default="")
+    openai_list_parser.set_defaults(func=openai_list)
 
     openai_check_parser = subparsers.add_parser("openai-check", help="Check or download a submitted OpenAI Batch job.")
     openai_check_parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))

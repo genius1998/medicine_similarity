@@ -80,6 +80,28 @@ python scripts\recommendation_quality_judge_batch.py validation-report `
   --top-patterns 7
 ```
 
+## OpenAI Batch Safety Check
+
+Before submitting another OpenAI Batch job, check whether any active jobs are already running:
+
+```powershell
+python scripts\recommendation_quality_judge_batch.py openai-list `
+  --env-path D:\health_batch_project\.env `
+  --active-only `
+  --limit 20
+```
+
+Treat these statuses as active:
+
+```text
+validating
+in_progress
+finalizing
+cancelling
+```
+
+Do not resubmit the same validation sample while an active job is still present. The `openai-submit` command also reuses the existing job file by default unless `--force` is explicitly provided.
+
 ## Decision Rule
 
 Continue with the current algorithm when all are true:
