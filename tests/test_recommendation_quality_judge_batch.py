@@ -772,6 +772,71 @@ def test_validate_results_orchestrates_summary_analysis_and_gate(tmp_path, monke
     assert (tmp_path / "validation" / "judge_quality_gate.json").exists()
 
 
+def test_finalize_openai_result_orchestrates_apply_analysis_and_gate(tmp_path, monkeypatch):
+    calls = []
+    output_dir = tmp_path / "part"
+    output_dir.mkdir()
+    result_jsonl = output_dir / "openai_recommendation_judge_result.jsonl"
+    result_jsonl.write_text("{}\n", encoding="utf-8")
+
+    def fake_apply(args):
+        calls.append(("apply", args.output_dir, args.result_jsonl, args.high_score_threshold))
+        Path(args.output_dir, "gemini_judge_results.csv").write_text("base_report_no,target_report_no\n", encoding="utf-8")
+
+    def fake_analyze(args):
+        calls.append(("analyze", args.results_csv, args.output_dir, args.high_score_threshold))
+        pattern_dir = Path(args.output_dir)
+        pattern_dir.mkdir(parents=True, exist_ok=True)
+        (pattern_dir / "judge_pattern_summary.json").write_text(
+            json.dumps(
+                {
+                    "row_count": 10,
+                    "weak_or_bad_rate": 0.1,
+                    "high_score_weak_or_bad_count": 1,
+                    "pattern_impacts": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def fake_quality_gate_decision(summary, args):
+        calls.append(("gate", summary["row_count"], args.max_weak_or_bad_rate))
+        return {
+            "decision": "pass_continue_validation_without_algorithm_change",
+            "row_count": summary["row_count"],
+            "weak_or_bad_rate": summary["weak_or_bad_rate"],
+        }
+
+    monkeypatch.setattr(judge_batch, "apply_results", fake_apply)
+    monkeypatch.setattr(judge_batch, "analyze_patterns", fake_analyze)
+    monkeypatch.setattr(judge_batch, "quality_gate_decision", fake_quality_gate_decision)
+
+    judge_batch.finalize_openai_result(
+        SimpleNamespace(
+            output_dir=str(output_dir),
+            result_jsonl="",
+            snapshot_jsonl="",
+            pattern_output_dir="",
+            ingredient_category_profile="",
+            high_score_threshold=0.65,
+            max_weak_or_bad_rate=0.10,
+            max_high_score_weak_or_bad_rate=0.02,
+            min_actionable_pattern_weak_count=5,
+            min_actionable_pattern_weak_rate=0.50,
+            max_actionable_pattern_non_weak_affected=5,
+            fail_on_review=False,
+        )
+    )
+
+    summary = json.loads((output_dir / "openai_finalize_summary.json").read_text(encoding="utf-8"))
+
+    assert [item[0] for item in calls] == ["apply", "analyze", "gate"]
+    assert summary["decision"] == "pass_continue_validation_without_algorithm_change"
+    assert (output_dir / "judge_quality_gate.json").exists()
+    pattern_summary_json = summary["outputs"]["pattern_summary_json"]
+    assert pattern_summary_json.endswith("patterns\\judge_pattern_summary.json") or pattern_summary_json.endswith("patterns/judge_pattern_summary.json")
+
+
 def test_write_validation_report_builds_markdown_from_validation_outputs(tmp_path):
     validation_dir = tmp_path / "validation"
     pattern_dir = validation_dir / "patterns"

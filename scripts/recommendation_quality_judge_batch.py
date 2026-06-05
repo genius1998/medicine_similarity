@@ -2167,6 +2167,67 @@ def validate_results(args: argparse.Namespace) -> None:
         raise SystemExit(2)
 
 
+def finalize_openai_result(args: argparse.Namespace) -> None:
+    output_dir = resolve_path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    result_jsonl = resolve_path(args.result_jsonl) if args.result_jsonl else output_dir / DEFAULT_OPENAI_RESULT_JSONL_NAME
+    if not result_jsonl.exists():
+        raise FileNotFoundError(result_jsonl)
+
+    apply_args = argparse.Namespace(
+        output_dir=str(output_dir),
+        result_jsonl=str(result_jsonl),
+        snapshot_jsonl=args.snapshot_jsonl,
+        high_score_threshold=float(args.high_score_threshold),
+    )
+    apply_results(apply_args)
+
+    results_csv = output_dir / "gemini_judge_results.csv"
+    pattern_dir = resolve_path(args.pattern_output_dir) if args.pattern_output_dir else output_dir / "patterns"
+    analyze_args = argparse.Namespace(
+        results_csv=str(results_csv),
+        output_dir=str(pattern_dir),
+        ingredient_category_profile=args.ingredient_category_profile,
+        high_score_threshold=float(args.high_score_threshold),
+    )
+    analyze_patterns(analyze_args)
+
+    pattern_summary_path = pattern_dir / "judge_pattern_summary.json"
+    pattern_summary = json.loads(pattern_summary_path.read_text(encoding="utf-8"))
+    gate_args = argparse.Namespace(
+        max_weak_or_bad_rate=float(args.max_weak_or_bad_rate),
+        max_high_score_weak_or_bad_rate=float(args.max_high_score_weak_or_bad_rate),
+        min_actionable_pattern_weak_count=int(args.min_actionable_pattern_weak_count),
+        min_actionable_pattern_weak_rate=float(args.min_actionable_pattern_weak_rate),
+        max_actionable_pattern_non_weak_affected=int(args.max_actionable_pattern_non_weak_affected),
+    )
+    gate_result = quality_gate_decision(pattern_summary, gate_args)
+    gate_json = output_dir / "judge_quality_gate.json"
+    gate_json.write_text(json.dumps(gate_result, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    finalize_summary = {
+        "created_at": now_iso(),
+        "decision": gate_result["decision"],
+        "output_dir": str(output_dir),
+        "result_jsonl": str(result_jsonl),
+        "high_score_threshold": float(args.high_score_threshold),
+        "quality_gate": gate_result,
+        "outputs": {
+            "results_csv": str(results_csv),
+            "results_jsonl": str(output_dir / "gemini_judge_results.jsonl"),
+            "errors_csv": str(output_dir / "gemini_judge_errors.csv"),
+            "pattern_summary_json": str(pattern_summary_path),
+            "quality_gate_json": str(gate_json),
+        },
+    }
+    finalize_summary_path = output_dir / "openai_finalize_summary.json"
+    finalize_summary_path.write_text(json.dumps(finalize_summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps(finalize_summary, ensure_ascii=False, indent=2))
+
+    if args.fail_on_review and gate_result["decision"] != "pass_continue_validation_without_algorithm_change":
+        raise SystemExit(2)
+
+
 def format_rate(value: Any) -> str:
     return f"{float(value or 0.0) * 100:.2f}%"
 
@@ -3016,6 +3077,40 @@ def build_parser() -> argparse.ArgumentParser:
     openai_check_parser.add_argument("--poll-seconds", type=int, default=30)
     openai_check_parser.add_argument("--timeout-seconds", type=int, default=0, help="0 means no timeout.")
     openai_check_parser.set_defaults(func=openai_check)
+
+    openai_finalize_parser = subparsers.add_parser(
+        "openai-finalize",
+        help="Apply downloaded OpenAI Batch results, analyze patterns, and run the quality gate.",
+    )
+    openai_finalize_parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
+    openai_finalize_parser.add_argument("--result-jsonl", default="")
+    openai_finalize_parser.add_argument("--snapshot-jsonl", default="")
+    openai_finalize_parser.add_argument("--pattern-output-dir", default="")
+    openai_finalize_parser.add_argument("--ingredient-category-profile", default="")
+    openai_finalize_parser.add_argument("--high-score-threshold", type=float, default=0.65)
+    openai_finalize_parser.add_argument("--max-weak-or-bad-rate", type=float, default=QUALITY_GATE_MAX_WEAK_OR_BAD_RATE)
+    openai_finalize_parser.add_argument(
+        "--max-high-score-weak-or-bad-rate",
+        type=float,
+        default=QUALITY_GATE_MAX_HIGH_SCORE_WEAK_OR_BAD_RATE,
+    )
+    openai_finalize_parser.add_argument(
+        "--min-actionable-pattern-weak-count",
+        type=int,
+        default=QUALITY_GATE_MIN_ACTIONABLE_PATTERN_WEAK_COUNT,
+    )
+    openai_finalize_parser.add_argument(
+        "--min-actionable-pattern-weak-rate",
+        type=float,
+        default=QUALITY_GATE_MIN_ACTIONABLE_PATTERN_WEAK_RATE,
+    )
+    openai_finalize_parser.add_argument(
+        "--max-actionable-pattern-non-weak-affected",
+        type=int,
+        default=QUALITY_GATE_MAX_ACTIONABLE_PATTERN_NON_WEAK_AFFECTED,
+    )
+    openai_finalize_parser.add_argument("--fail-on-review", action="store_true")
+    openai_finalize_parser.set_defaults(func=finalize_openai_result)
 
     openai_cancel_parser = subparsers.add_parser("openai-cancel", help="Cancel a submitted OpenAI Batch job.")
     openai_cancel_parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))

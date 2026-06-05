@@ -115,6 +115,14 @@ python scripts\recommendation_quality_judge_batch.py openai-check `
   --download-errors
 ```
 
+Then finalize the downloaded result locally:
+
+```powershell
+python scripts\recommendation_quality_judge_batch.py openai-finalize `
+  --output-dir output\recommendation_quality_judge_v2_9_openai_targeted_next_seedYYYYMMDD `
+  --high-score-threshold 0.65
+```
+
 ## Decision Rule
 
 Continue with the current algorithm when all are true:
