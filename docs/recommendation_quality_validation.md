@@ -102,6 +102,19 @@ cancelling
 
 Do not resubmit the same validation sample while an active job is still present. The `openai-submit` command also reuses the existing job file by default unless `--force` is explicitly provided.
 
+After submitting a job, wait for completion and download outputs with:
+
+```powershell
+python scripts\recommendation_quality_judge_batch.py openai-check `
+  --output-dir output\recommendation_quality_judge_v2_9_openai_targeted_next_seedYYYYMMDD `
+  --env-path D:\health_batch_project\.env `
+  --watch `
+  --poll-seconds 60 `
+  --timeout-seconds 7200 `
+  --download `
+  --download-errors
+```
+
 ## Decision Rule
 
 Continue with the current algorithm when all are true:

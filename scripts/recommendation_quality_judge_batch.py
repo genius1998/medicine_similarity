@@ -55,6 +55,7 @@ JUDGMENTS = {"reasonable", "acceptable_adjacent", "weak", "bad"}
 MODEL_NAME = "gemini-2.5-flash-lite"
 OPENAI_MODEL_NAME = "gpt-5-nano"
 OPENAI_ACTIVE_BATCH_STATUSES = {"validating", "in_progress", "finalizing", "cancelling"}
+OPENAI_TERMINAL_BATCH_STATUSES = {"completed", "failed", "expired", "cancelled"}
 QUALITY_GATE_MAX_WEAK_OR_BAD_RATE = 0.10
 QUALITY_GATE_MAX_HIGH_SCORE_WEAK_OR_BAD_RATE = 0.02
 QUALITY_GATE_MIN_ACTIONABLE_PATTERN_WEAK_COUNT = 5
@@ -2712,6 +2713,23 @@ def read_file_content_bytes(content: Any) -> bytes:
     return str(content).encode("utf-8")
 
 
+def download_openai_batch_files(client: Any, batch_data: dict[str, Any], args: argparse.Namespace, output_dir: Path) -> dict[str, str]:
+    downloaded: dict[str, str] = {}
+    output_file_id = batch_data.get("output_file_id")
+    error_file_id = batch_data.get("error_file_id")
+    if args.download and output_file_id:
+        result_path = resolve_path(args.download_output) if args.download_output else output_dir / DEFAULT_OPENAI_RESULT_JSONL_NAME
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        result_path.write_bytes(read_file_content_bytes(client.files.content(output_file_id)))
+        downloaded["output"] = str(result_path)
+    if args.download_errors and error_file_id:
+        error_path = resolve_path(args.error_output) if args.error_output else output_dir / "openai_recommendation_judge_errors_raw.jsonl"
+        error_path.parent.mkdir(parents=True, exist_ok=True)
+        error_path.write_bytes(read_file_content_bytes(client.files.content(error_file_id)))
+        downloaded["errors"] = str(error_path)
+    return downloaded
+
+
 def openai_check(args: argparse.Namespace) -> None:
     output_dir = resolve_path(args.output_dir)
     job_id = args.job
@@ -2722,35 +2740,52 @@ def openai_check(args: argparse.Namespace) -> None:
         job_id = job_file.read_text(encoding="utf-8").strip()
 
     client = load_openai_client(args.env_path)
-    batch = client.batches.retrieve(job_id)
-    batch_data = model_to_dict(batch)
+    watch = bool(getattr(args, "watch", False))
+    poll_seconds = max(1, int(getattr(args, "poll_seconds", 30) or 30))
+    timeout_seconds = max(0, int(getattr(args, "timeout_seconds", 0) or 0))
+    start_time = time.monotonic()
+    poll_count = 0
+    status_history: list[dict[str, Any]] = []
+    timed_out = False
+    batch_data: dict[str, Any] = {}
     downloaded: dict[str, str] = {}
-    if args.download and batch.output_file_id:
-        result_path = resolve_path(args.download_output) if args.download_output else output_dir / DEFAULT_OPENAI_RESULT_JSONL_NAME
-        result_path.parent.mkdir(parents=True, exist_ok=True)
-        result_path.write_bytes(read_file_content_bytes(client.files.content(batch.output_file_id)))
-        downloaded["output"] = str(result_path)
-    if args.download_errors and batch.error_file_id:
-        error_path = resolve_path(args.error_output) if args.error_output else output_dir / "openai_recommendation_judge_errors_raw.jsonl"
-        error_path.parent.mkdir(parents=True, exist_ok=True)
-        error_path.write_bytes(read_file_content_bytes(client.files.content(batch.error_file_id)))
-        downloaded["errors"] = str(error_path)
 
-    print(
-        json.dumps(
+    while True:
+        batch = client.batches.retrieve(job_id)
+        batch_data = model_to_dict(batch)
+        poll_count += 1
+        status = str(batch_data.get("status", "") or "")
+        status_history.append(
             {
-                "job_id": batch.id,
-                "status": batch.status,
+                "status": status,
                 "request_counts": batch_data.get("request_counts"),
-                "output_file_id": batch.output_file_id,
-                "error_file_id": batch.error_file_id,
-                "downloaded": downloaded,
-            },
-            ensure_ascii=False,
-            indent=2,
-            default=str,
+            }
         )
-    )
+        downloaded = download_openai_batch_files(client, batch_data, args, output_dir)
+        elapsed_seconds = int(time.monotonic() - start_time)
+        timed_out = bool(watch and timeout_seconds and elapsed_seconds >= timeout_seconds and status not in OPENAI_TERMINAL_BATCH_STATUSES)
+        if not watch or status in OPENAI_TERMINAL_BATCH_STATUSES or timed_out:
+            break
+        time.sleep(poll_seconds)
+
+    result = {
+        "job_id": batch_data.get("id", job_id),
+        "status": batch_data.get("status", ""),
+        "request_counts": batch_data.get("request_counts"),
+        "output_file_id": batch_data.get("output_file_id"),
+        "error_file_id": batch_data.get("error_file_id"),
+        "downloaded": downloaded,
+        "watch": watch,
+        "poll_count": poll_count,
+        "elapsed_seconds": int(time.monotonic() - start_time),
+        "timed_out": timed_out,
+    }
+    if watch:
+        result["terminal_statuses"] = sorted(OPENAI_TERMINAL_BATCH_STATUSES)
+        result["status_history"] = status_history
+    print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+    if timed_out:
+        raise SystemExit(2)
 
 
 def openai_cancel(args: argparse.Namespace) -> None:
@@ -2977,6 +3012,9 @@ def build_parser() -> argparse.ArgumentParser:
     openai_check_parser.add_argument("--download-output", default="")
     openai_check_parser.add_argument("--download-errors", action="store_true")
     openai_check_parser.add_argument("--error-output", default="")
+    openai_check_parser.add_argument("--watch", action="store_true")
+    openai_check_parser.add_argument("--poll-seconds", type=int, default=30)
+    openai_check_parser.add_argument("--timeout-seconds", type=int, default=0, help="0 means no timeout.")
     openai_check_parser.set_defaults(func=openai_check)
 
     openai_cancel_parser = subparsers.add_parser("openai-cancel", help="Cancel a submitted OpenAI Batch job.")

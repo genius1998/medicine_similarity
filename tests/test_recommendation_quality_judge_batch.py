@@ -369,6 +369,58 @@ def test_openai_list_filters_active_batches_and_writes_json(tmp_path, monkeypatc
     assert "validating" in result["active_statuses"]
 
 
+def test_openai_check_watch_downloads_when_completed(tmp_path, monkeypatch):
+    class FakeBatches:
+        def __init__(self):
+            self.calls = 0
+
+        def retrieve(self, job_id):
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "id": job_id,
+                    "status": "in_progress",
+                    "request_counts": {"completed": 1, "failed": 0, "total": 2},
+                }
+            return {
+                "id": job_id,
+                "status": "completed",
+                "request_counts": {"completed": 2, "failed": 0, "total": 2},
+                "output_file_id": "file_output",
+            }
+
+    class FakeFiles:
+        def content(self, file_id):
+            assert file_id == "file_output"
+            return b'{"custom_id":"recjudge_000001"}\n'
+
+    fake_batches = FakeBatches()
+    fake_client = SimpleNamespace(batches=fake_batches, files=FakeFiles())
+    monkeypatch.setattr(judge_batch, "load_openai_client", lambda env_path: fake_client)
+    monkeypatch.setattr(judge_batch.time, "sleep", lambda seconds: None)
+
+    judge_batch.openai_check(
+        SimpleNamespace(
+            output_dir=str(tmp_path),
+            env_path="unused.env",
+            job="batch_test",
+            job_file="",
+            download=True,
+            download_output="",
+            download_errors=True,
+            error_output="",
+            watch=True,
+            poll_seconds=1,
+            timeout_seconds=30,
+        )
+    )
+
+    result_path = tmp_path / "openai_recommendation_judge_result.jsonl"
+
+    assert fake_batches.calls == 2
+    assert result_path.read_text(encoding="utf-8") == '{"custom_id":"recjudge_000001"}\n'
+
+
 def test_merge_parts_suppresses_retry_covered_errors(tmp_path, monkeypatch):
     output_dir = tmp_path / "merged"
     part_dir = tmp_path / "chunk_part_000"
