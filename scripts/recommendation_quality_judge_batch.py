@@ -3197,13 +3197,13 @@ def create_or_reuse_openai_batch(args: argparse.Namespace, client: Any | None = 
             "reused": True,
         }
 
-    if not jsonl_path.exists():
-        raise FileNotFoundError(jsonl_path)
-
     stop_block = validation_stop_submission_block(args)
     if stop_block:
         print(json.dumps(stop_block, ensure_ascii=False, indent=2))
         raise SystemExit(2)
+
+    if not jsonl_path.exists():
+        raise FileNotFoundError(jsonl_path)
 
     if client is None:
         client = load_openai_client(args.env_path)
