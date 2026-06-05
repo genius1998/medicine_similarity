@@ -910,6 +910,11 @@ def test_validate_results_orchestrates_summary_analysis_and_gate(tmp_path, monke
         calls.append(("analyze", args.results_csv, args.output_dir))
         output_dir = Path(args.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "judge_pattern_features.csv").write_text(
+            "base_main_category,rank,judge_judgment,current_similarity_score,function_similarity_score,"
+            "same_primary_set,shared_core_count,primary_primary_overlap_count\n",
+            encoding="utf-8",
+        )
         (output_dir / "judge_pattern_summary.json").write_text(
             json.dumps(
                 {
@@ -956,6 +961,8 @@ def test_validate_results_orchestrates_summary_analysis_and_gate(tmp_path, monke
     assert [item[0] for item in calls] == ["summarize", "analyze", "gate"]
     assert validation_summary["decision"] == "pass_continue_validation_without_algorithm_change"
     assert (tmp_path / "validation" / "judge_quality_gate.json").exists()
+    assert (tmp_path / "validation" / "high_score_weak_diagnostics.json").exists()
+    assert validation_summary["outputs"]["high_score_weak_diagnostics_json"].endswith("high_score_weak_diagnostics.json")
 
 
 def test_finalize_openai_result_orchestrates_apply_analysis_and_gate(tmp_path, monkeypatch):
@@ -973,6 +980,11 @@ def test_finalize_openai_result_orchestrates_apply_analysis_and_gate(tmp_path, m
         calls.append(("analyze", args.results_csv, args.output_dir, args.high_score_threshold))
         pattern_dir = Path(args.output_dir)
         pattern_dir.mkdir(parents=True, exist_ok=True)
+        (pattern_dir / "judge_pattern_features.csv").write_text(
+            "base_main_category,rank,judge_judgment,current_similarity_score,function_similarity_score,"
+            "same_primary_set,shared_core_count,primary_primary_overlap_count\n",
+            encoding="utf-8",
+        )
         (pattern_dir / "judge_pattern_summary.json").write_text(
             json.dumps(
                 {
@@ -1020,6 +1032,7 @@ def test_finalize_openai_result_orchestrates_apply_analysis_and_gate(tmp_path, m
     assert [item[0] for item in calls] == ["apply", "analyze", "gate"]
     assert summary["decision"] == "pass_continue_validation_without_algorithm_change"
     assert (output_dir / "judge_quality_gate.json").exists()
+    assert (output_dir / "high_score_weak_diagnostics.json").exists()
     pattern_summary_json = summary["outputs"]["pattern_summary_json"]
     assert pattern_summary_json.endswith("patterns\\judge_pattern_summary.json") or pattern_summary_json.endswith("patterns/judge_pattern_summary.json")
 
@@ -1083,6 +1096,26 @@ def test_write_validation_report_builds_markdown_from_validation_outputs(tmp_pat
         ),
         encoding="utf-8",
     )
+    (validation_dir / "high_score_weak_diagnostics.json").write_text(
+        json.dumps(
+            {
+                "high_score_row_count": 80,
+                "high_score_weak_or_bad_count": 1,
+                "within_high_score_weak_or_bad_rate": 0.0125,
+                "overall_high_score_weak_or_bad_rate": 0.01,
+                "condition_impacts": [
+                    {
+                        "condition": "function_lt_0_40",
+                        "matched_count": 12,
+                        "weak_or_bad_count": 1,
+                        "weak_or_bad_rate": 0.0833,
+                        "non_weak_affected_count": 11,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
 
     judge_batch.write_validation_report(
         SimpleNamespace(
@@ -1090,6 +1123,7 @@ def test_write_validation_report_builds_markdown_from_validation_outputs(tmp_pat
             summary_json="",
             pattern_summary_json="",
             quality_gate_json="",
+            diagnostics_json="",
             output_md="",
             top_categories=1,
             top_patterns=1,
@@ -1103,6 +1137,8 @@ def test_write_validation_report_builds_markdown_from_validation_outputs(tmp_pat
     assert "| Label coverage | 100 / 100 |" in report
     assert "| A | 15 | 5 | 33.33% |" in report
     assert "| candidate | 12 | 5 | 41.67% | 7 |" in report
+    assert "## High-Score Weak Diagnostics" in report
+    assert "| function_lt_0_40 | 12 | 1 | 8.33% | 11 |" in report
 
 
 def test_build_high_score_weak_diagnostics_counts_only_high_score_rows():

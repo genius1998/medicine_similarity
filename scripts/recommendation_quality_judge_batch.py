@@ -2139,6 +2139,12 @@ def validate_results(args: argparse.Namespace) -> None:
     analyze_patterns(analyze_args)
 
     pattern_summary_path = pattern_dir / "judge_pattern_summary.json"
+    diagnostics_json = output_dir / "high_score_weak_diagnostics.json"
+    write_high_score_weak_diagnostics_json(
+        pattern_dir / "judge_pattern_features.csv",
+        diagnostics_json,
+        high_score_threshold=float(args.high_score_threshold),
+    )
     pattern_summary = json.loads(pattern_summary_path.read_text(encoding="utf-8"))
     gate_args = argparse.Namespace(
         max_weak_or_bad_rate=float(args.max_weak_or_bad_rate),
@@ -2164,6 +2170,7 @@ def validate_results(args: argparse.Namespace) -> None:
             "merged_summary_json": str(output_dir / "openai_chunk_judge_summary.json"),
             "pattern_summary_json": str(pattern_summary_path),
             "quality_gate_json": str(gate_json),
+            "high_score_weak_diagnostics_json": str(diagnostics_json),
         },
     }
     validation_summary_path = output_dir / "judge_validation_summary.json"
@@ -2200,6 +2207,12 @@ def finalize_openai_result(args: argparse.Namespace) -> None:
     analyze_patterns(analyze_args)
 
     pattern_summary_path = pattern_dir / "judge_pattern_summary.json"
+    diagnostics_json = output_dir / "high_score_weak_diagnostics.json"
+    write_high_score_weak_diagnostics_json(
+        pattern_dir / "judge_pattern_features.csv",
+        diagnostics_json,
+        high_score_threshold=float(args.high_score_threshold),
+    )
     pattern_summary = json.loads(pattern_summary_path.read_text(encoding="utf-8"))
     gate_args = argparse.Namespace(
         max_weak_or_bad_rate=float(args.max_weak_or_bad_rate),
@@ -2226,6 +2239,7 @@ def finalize_openai_result(args: argparse.Namespace) -> None:
             "errors_csv": str(output_dir / "gemini_judge_errors.csv"),
             "pattern_summary_json": str(pattern_summary_path),
             "quality_gate_json": str(gate_json),
+            "high_score_weak_diagnostics_json": str(diagnostics_json),
         },
     }
     finalize_summary_path = output_dir / "openai_finalize_summary.json"
@@ -2244,6 +2258,7 @@ def build_validation_report(
     merged_summary: dict[str, Any],
     pattern_summary: dict[str, Any],
     quality_gate_result: dict[str, Any],
+    high_score_diagnostics: dict[str, Any] | None = None,
     *,
     validation_dir: str,
     top_categories: int,
@@ -2331,6 +2346,33 @@ def build_validation_report(
     if not quality_gate_result.get("reasons"):
         lines.append("- none")
 
+    if high_score_diagnostics:
+        lines.extend(
+            [
+                "",
+                "## High-Score Weak Diagnostics",
+                "",
+                "| Metric | Value |",
+                "| --- | ---: |",
+                f"| High-score rows | {int(high_score_diagnostics.get('high_score_row_count', 0) or 0)} |",
+                f"| High-score weak/bad rows | {int(high_score_diagnostics.get('high_score_weak_or_bad_count', 0) or 0)} |",
+                f"| Within-high-score weak/bad rate | {format_rate(high_score_diagnostics.get('within_high_score_weak_or_bad_rate', 0.0))} |",
+                f"| Overall high-score weak/bad rate | {format_rate(high_score_diagnostics.get('overall_high_score_weak_or_bad_rate', 0.0))} |",
+                "",
+                "| Condition | Matched | Weak/Bad | Weak/Bad Rate | Non-Weak Affected |",
+                "| --- | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for row in high_score_diagnostics.get("condition_impacts", []) or []:
+            if not isinstance(row, dict):
+                continue
+            lines.append(
+                f"| {row.get('condition', '')} | {int(row.get('matched_count', 0) or 0)} | "
+                f"{int(row.get('weak_or_bad_count', 0) or 0)} | "
+                f"{format_rate(row.get('weak_or_bad_rate', 0.0))} | "
+                f"{int(row.get('non_weak_affected_count', 0) or 0)} |"
+            )
+
     lines.extend(
         [
             "",
@@ -2371,9 +2413,11 @@ def build_validation_report(
             f"- Merged summary: `{merged_summary.get('outputs', {}).get('merged_summary_json', 'openai_chunk_judge_summary.json')}`",
             f"- Pattern summary: `{pattern_summary.get('outputs', {}).get('pattern_summary_json', 'patterns/judge_pattern_summary.json')}`",
             "- Quality gate: `judge_quality_gate.json`",
-            "",
         ]
     )
+    if high_score_diagnostics:
+        lines.append("- High-score weak diagnostics: `high_score_weak_diagnostics.json`")
+    lines.append("")
     return "\n".join(lines)
 
 
@@ -2386,6 +2430,11 @@ def write_validation_report(args: argparse.Namespace) -> None:
         else validation_dir / "patterns" / "judge_pattern_summary.json"
     )
     quality_gate_path = resolve_path(args.quality_gate_json) if args.quality_gate_json else validation_dir / "judge_quality_gate.json"
+    diagnostics_path = (
+        resolve_path(args.diagnostics_json)
+        if args.diagnostics_json
+        else validation_dir / "high_score_weak_diagnostics.json"
+    )
     output_md = resolve_path(args.output_md) if args.output_md else validation_dir / "judge_validation_report.md"
     for path in (merged_summary_path, pattern_summary_path, quality_gate_path):
         if not path.exists():
@@ -2394,10 +2443,16 @@ def write_validation_report(args: argparse.Namespace) -> None:
     merged_summary = json.loads(merged_summary_path.read_text(encoding="utf-8"))
     pattern_summary = json.loads(pattern_summary_path.read_text(encoding="utf-8"))
     quality_gate_result = json.loads(quality_gate_path.read_text(encoding="utf-8"))
+    high_score_diagnostics = (
+        json.loads(diagnostics_path.read_text(encoding="utf-8"))
+        if diagnostics_path.exists()
+        else None
+    )
     report = build_validation_report(
         merged_summary,
         pattern_summary,
         quality_gate_result,
+        high_score_diagnostics,
         validation_dir=str(validation_dir),
         top_categories=int(args.top_categories),
         top_patterns=int(args.top_patterns),
@@ -2547,6 +2602,30 @@ def build_high_score_weak_diagnostics(
     }
 
 
+def write_high_score_weak_diagnostics_json(
+    features_csv: Path,
+    output_json: Path,
+    *,
+    high_score_threshold: float,
+    top_categories: int = 12,
+) -> dict[str, Any]:
+    if not features_csv.exists():
+        raise FileNotFoundError(features_csv)
+
+    diagnostics = build_high_score_weak_diagnostics(
+        read_csv_records(features_csv),
+        high_score_threshold=high_score_threshold,
+        top_categories=top_categories,
+    )
+    diagnostics["created_at"] = now_iso()
+    diagnostics["inputs"] = {
+        "features_csv": str(features_csv),
+    }
+    output_json.parent.mkdir(parents=True, exist_ok=True)
+    output_json.write_text(json.dumps(diagnostics, ensure_ascii=False, indent=2), encoding="utf-8")
+    return diagnostics
+
+
 def diagnose_high_score_weak(args: argparse.Namespace) -> None:
     validation_dir = resolve_path(args.validation_dir)
     features_csv = (
@@ -2555,20 +2634,12 @@ def diagnose_high_score_weak(args: argparse.Namespace) -> None:
         else validation_dir / "patterns" / "judge_pattern_features.csv"
     )
     output_json = resolve_path(args.output_json) if args.output_json else validation_dir / "high_score_weak_diagnostics.json"
-    if not features_csv.exists():
-        raise FileNotFoundError(features_csv)
-
-    diagnostics = build_high_score_weak_diagnostics(
-        read_csv_records(features_csv),
+    diagnostics = write_high_score_weak_diagnostics_json(
+        features_csv,
+        output_json,
         high_score_threshold=float(args.high_score_threshold),
         top_categories=int(args.top_categories),
     )
-    diagnostics["created_at"] = now_iso()
-    diagnostics["inputs"] = {
-        "features_csv": str(features_csv),
-    }
-    output_json.parent.mkdir(parents=True, exist_ok=True)
-    output_json.write_text(json.dumps(diagnostics, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(diagnostics, ensure_ascii=False, indent=2))
 
 
@@ -3294,6 +3365,7 @@ def build_parser() -> argparse.ArgumentParser:
     report_parser.add_argument("--summary-json", default="")
     report_parser.add_argument("--pattern-summary-json", default="")
     report_parser.add_argument("--quality-gate-json", default="")
+    report_parser.add_argument("--diagnostics-json", default="")
     report_parser.add_argument("--output-md", default="")
     report_parser.add_argument("--top-categories", type=int, default=10)
     report_parser.add_argument("--top-patterns", type=int, default=10)

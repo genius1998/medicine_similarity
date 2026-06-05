@@ -87,6 +87,8 @@ python scripts\recommendation_quality_judge_batch.py validate-results `
   --high-score-threshold 0.65
 ```
 
+This workflow also writes `high_score_weak_diagnostics.json` from the generated pattern features.
+
 Write the Markdown report:
 
 ```powershell
@@ -96,7 +98,7 @@ python scripts\recommendation_quality_judge_batch.py validation-report `
   --top-patterns 7
 ```
 
-Write the high-score weak diagnostic JSON:
+The report includes `high_score_weak_diagnostics.json` automatically when that file exists. To regenerate only the diagnostic JSON:
 
 ```powershell
 python scripts\recommendation_quality_judge_batch.py diagnose-high-score-weak `
