@@ -441,6 +441,10 @@ def test_openai_run_submits_watches_downloads_and_finalizes(tmp_path, monkeypatc
         def __init__(self):
             self.created = False
 
+        def list(self, **kwargs):
+            assert kwargs["limit"] == 20
+            return []
+
         def create(self, input_file_id, endpoint, completion_window, metadata):
             self.created = True
             assert input_file_id == "file_input"
@@ -503,7 +507,7 @@ def test_openai_run_submits_watches_downloads_and_finalizes(tmp_path, monkeypatc
             skip_finalize=False,
             fail_on_review=False,
             fail_on_incomplete=False,
-            require_no_active=False,
+            require_no_active=True,
             active_check_limit=20,
         )
     )
@@ -518,6 +522,9 @@ def test_openai_run_submits_watches_downloads_and_finalizes(tmp_path, monkeypatc
     assert result_jsonl_text == '{"custom_id":"recjudge_000001"}\n'
     assert finalize_calls == [(str(output_dir), str(output_dir / "openai_recommendation_judge_result.jsonl"), 0.65, 50)]
     assert run_summary["submitted"]["job_id"] == "batch_new"
+    assert run_summary["submitted"]["active_preflight_checked"] is True
+    assert run_summary["active_preflight_checked"] is True
+    assert run_summary["active_preflight_count"] == 0
     assert run_summary["wait"]["status"] == "completed"
     assert run_summary["finalized"] is True
 
@@ -598,6 +605,8 @@ def test_openai_run_reuses_existing_job_without_jsonl_and_finalizes(tmp_path, mo
     assert run_summary["submitted"]["job_id"] == "batch_existing"
     assert run_summary["submitted"]["reused"] is True
     assert run_summary["submitted"]["jsonl_exists"] is False
+    assert run_summary["submitted"]["active_preflight_checked"] is False
+    assert run_summary["active_preflight_checked"] is False
     assert run_summary["wait"]["status"] == "completed"
     assert finalize_calls == [(str(output_dir), str(output_dir / "openai_recommendation_judge_result.jsonl"))]
 

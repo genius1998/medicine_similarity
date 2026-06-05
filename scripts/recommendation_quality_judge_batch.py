@@ -3207,6 +3207,8 @@ def create_or_reuse_openai_batch(args: argparse.Namespace, client: Any | None = 
             "jsonl_exists": jsonl_path.exists(),
             "model": args.model,
             "reused": True,
+            "active_preflight_checked": False,
+            "active_preflight_count": 0,
         }
 
     stop_block = validation_stop_submission_block(args)
@@ -3219,6 +3221,7 @@ def create_or_reuse_openai_batch(args: argparse.Namespace, client: Any | None = 
 
     if client is None:
         client = load_openai_client(args.env_path)
+    active_preflight_checked = bool(getattr(args, "active_preflight_done", False))
     if bool(getattr(args, "require_no_active", False)) and not bool(getattr(args, "active_preflight_done", False)):
         active_block = active_openai_submission_block(
             client,
@@ -3227,6 +3230,7 @@ def create_or_reuse_openai_batch(args: argparse.Namespace, client: Any | None = 
         if active_block:
             print(json.dumps(active_block, ensure_ascii=False, indent=2, default=str))
             raise SystemExit(2)
+        active_preflight_checked = True
 
     display_name = args.name or f"recommendation-quality-judge-openai-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     with jsonl_path.open("rb") as handle:
@@ -3251,6 +3255,8 @@ def create_or_reuse_openai_batch(args: argparse.Namespace, client: Any | None = 
         "jsonl": str(jsonl_path),
         "model": args.model,
         "reused": False,
+        "active_preflight_checked": active_preflight_checked,
+        "active_preflight_count": 0,
     }
 
 
@@ -3354,7 +3360,6 @@ def openai_check(args: argparse.Namespace) -> None:
 def openai_run(args: argparse.Namespace) -> None:
     output_dir = resolve_path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    active_batches: list[dict[str, Any]] = []
     job_file = resolve_path(args.job_file) if args.job_file else output_dir / DEFAULT_OPENAI_JOB_FILE_NAME
     will_reuse_job = job_file.exists() and not bool(args.force)
     if not will_reuse_job:
@@ -3419,7 +3424,8 @@ def openai_run(args: argparse.Namespace) -> None:
         "wait": wait_result,
         "finalized": finalized,
         "finalize_summary_json": str(finalize_summary_path) if finalized else "",
-        "active_preflight_count": len(active_batches),
+        "active_preflight_checked": bool(submit_result.get("active_preflight_checked", False)),
+        "active_preflight_count": int(submit_result.get("active_preflight_count", 0) or 0),
     }
     run_summary_path = output_dir / "openai_run_summary.json"
     run_summary_path.write_text(json.dumps(run_summary, ensure_ascii=False, indent=2), encoding="utf-8")
