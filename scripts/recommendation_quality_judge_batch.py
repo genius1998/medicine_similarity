@@ -3029,13 +3029,18 @@ def extract_state(output: str) -> str:
     return match.group(1) if match else "UNKNOWN"
 
 
+def require_nonempty_text(value: str, *, label: str, source: str = "") -> str:
+    text = str(value or "").strip()
+    if not text:
+        suffix = f": {source}" if source else ""
+        raise RuntimeError(f"{label} is empty{suffix}")
+    return text
+
+
 def read_nonempty_text_file(path: Path, *, label: str) -> str:
     if not path.exists():
         raise FileNotFoundError(path)
-    value = path.read_text(encoding="utf-8").strip()
-    if not value:
-        raise RuntimeError(f"{label} is empty: {path}")
-    return value
+    return require_nonempty_text(path.read_text(encoding="utf-8"), label=label, source=str(path))
 
 
 def submit(args: argparse.Namespace) -> None:
@@ -3079,7 +3084,7 @@ def submit(args: argparse.Namespace) -> None:
 def check(args: argparse.Namespace) -> None:
     output_dir = resolve_path(args.output_dir)
     health_batch_dir = resolve_path(args.health_batch_dir)
-    job_name = args.job
+    job_name = require_nonempty_text(args.job, label="Gemini Batch job name") if args.job else ""
     if not job_name:
         job_file = resolve_path(args.job_file) if args.job_file else output_dir / "gemini_recommendation_judge.job.txt"
         job_name = read_nonempty_text_file(job_file, label="Gemini Batch job file")
@@ -3362,7 +3367,7 @@ def wait_for_openai_batch(client: Any, job_id: str, args: argparse.Namespace, ou
 
 def openai_check(args: argparse.Namespace) -> None:
     output_dir = resolve_path(args.output_dir)
-    job_id = args.job
+    job_id = require_nonempty_text(args.job, label="OpenAI Batch job id") if args.job else ""
     if not job_id:
         job_file = resolve_path(args.job_file) if args.job_file else output_dir / DEFAULT_OPENAI_JOB_FILE_NAME
         job_id = read_nonempty_text_file(job_file, label="OpenAI Batch job file")
@@ -3458,7 +3463,7 @@ def openai_run(args: argparse.Namespace) -> None:
 
 def openai_cancel(args: argparse.Namespace) -> None:
     output_dir = resolve_path(args.output_dir)
-    job_id = args.job
+    job_id = require_nonempty_text(args.job, label="OpenAI Batch job id") if args.job else ""
     if not job_id:
         job_file = resolve_path(args.job_file) if args.job_file else output_dir / DEFAULT_OPENAI_JOB_FILE_NAME
         job_id = read_nonempty_text_file(job_file, label="OpenAI Batch job file")

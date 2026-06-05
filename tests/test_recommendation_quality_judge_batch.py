@@ -378,6 +378,32 @@ def test_gemini_check_rejects_empty_job_file_before_running_helper(tmp_path, mon
         raise AssertionError("empty Gemini job files should not be checked")
 
 
+def test_gemini_check_rejects_blank_explicit_job_before_running_helper(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        judge_batch,
+        "run_command",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("helper command should not run")),
+    )
+
+    try:
+        judge_batch.check(
+            SimpleNamespace(
+                output_dir=str(tmp_path),
+                health_batch_dir=str(tmp_path),
+                job="  ",
+                job_file="",
+                watch=False,
+                download=False,
+                download_output="",
+                allow_failure=False,
+            )
+        )
+    except RuntimeError as exc:
+        assert "Gemini Batch job name is empty" in str(exc)
+    else:
+        raise AssertionError("blank Gemini job names should not be checked")
+
+
 def test_openai_list_filters_active_batches_and_writes_json(tmp_path, monkeypatch):
     class FakeBatches:
         def __init__(self):
@@ -478,6 +504,57 @@ def test_openai_check_watch_downloads_when_completed(tmp_path, monkeypatch):
 
     assert fake_batches.calls == 2
     assert result_path.read_text(encoding="utf-8") == '{"custom_id":"recjudge_000001"}\n'
+
+
+def test_openai_check_rejects_blank_explicit_job_before_loading_client(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        judge_batch,
+        "load_openai_client",
+        lambda env_path: (_ for _ in ()).throw(AssertionError("client should not be loaded")),
+    )
+
+    try:
+        judge_batch.openai_check(
+            SimpleNamespace(
+                output_dir=str(tmp_path),
+                env_path="unused.env",
+                job="  ",
+                job_file="",
+                download=False,
+                download_output="",
+                download_errors=False,
+                error_output="",
+                watch=False,
+                poll_seconds=1,
+                timeout_seconds=0,
+            )
+        )
+    except RuntimeError as exc:
+        assert "OpenAI Batch job id is empty" in str(exc)
+    else:
+        raise AssertionError("blank OpenAI job ids should not be checked")
+
+
+def test_openai_cancel_rejects_blank_explicit_job_before_loading_client(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        judge_batch,
+        "load_openai_client",
+        lambda env_path: (_ for _ in ()).throw(AssertionError("client should not be loaded")),
+    )
+
+    try:
+        judge_batch.openai_cancel(
+            SimpleNamespace(
+                output_dir=str(tmp_path),
+                env_path="unused.env",
+                job="\t",
+                job_file="",
+            )
+        )
+    except RuntimeError as exc:
+        assert "OpenAI Batch job id is empty" in str(exc)
+    else:
+        raise AssertionError("blank OpenAI job ids should not be cancelled")
 
 
 def test_openai_run_submits_watches_downloads_and_finalizes(tmp_path, monkeypatch):
