@@ -3042,16 +3042,28 @@ def submit(args: argparse.Namespace) -> None:
     output_dir = resolve_path(args.output_dir)
     health_batch_dir = resolve_path(args.health_batch_dir)
     jsonl_path = resolve_path(args.jsonl) if args.jsonl else output_dir / DEFAULT_BATCH_JSONL_NAME
+    job_file = resolve_path(args.job_file) if args.job_file else output_dir / "gemini_recommendation_judge.job.txt"
+    if job_file.exists() and not args.force:
+        job_name = read_nonempty_text_file(job_file, label="Gemini Batch job file")
+        print(
+            json.dumps(
+                {
+                    "job_name": job_name,
+                    "job_file": str(job_file),
+                    "jsonl": str(jsonl_path),
+                    "jsonl_exists": jsonl_path.exists(),
+                    "reused": True,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return
+
     if not health_batch_dir.exists():
         raise FileNotFoundError(health_batch_dir)
     if not jsonl_path.exists():
         raise FileNotFoundError(jsonl_path)
-
-    job_file = resolve_path(args.job_file) if args.job_file else output_dir / "gemini_recommendation_judge.job.txt"
-    if job_file.exists() and not args.force:
-        job_name = job_file.read_text(encoding="utf-8").strip()
-        print(json.dumps({"job_name": job_name, "job_file": str(job_file), "reused": True}, ensure_ascii=False, indent=2))
-        return
 
     display_name = args.name or f"recommendation-quality-judge-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     proc = run_command(
@@ -3070,9 +3082,7 @@ def check(args: argparse.Namespace) -> None:
     job_name = args.job
     if not job_name:
         job_file = resolve_path(args.job_file) if args.job_file else output_dir / "gemini_recommendation_judge.job.txt"
-        if not job_file.exists():
-            raise FileNotFoundError(job_file)
-        job_name = job_file.read_text(encoding="utf-8").strip()
+        job_name = read_nonempty_text_file(job_file, label="Gemini Batch job file")
 
     command = ["py", "-3.12", "check_gemini_batch.py", "--job", job_name]
     if args.watch:

@@ -321,6 +321,63 @@ def test_parse_openai_batch_response_text_json():
     assert parsed["labels"][0]["target_report_no"] == "T1"
 
 
+def test_gemini_submit_reuses_existing_job_without_jsonl_or_helper(tmp_path, monkeypatch, capsys):
+    output_dir = tmp_path / "run"
+    output_dir.mkdir()
+    (output_dir / "gemini_recommendation_judge.job.txt").write_text("batches/gemini_existing\n", encoding="utf-8")
+    monkeypatch.setattr(
+        judge_batch,
+        "run_command",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("helper command should not run")),
+    )
+
+    judge_batch.submit(
+        SimpleNamespace(
+            output_dir=str(output_dir),
+            health_batch_dir=str(tmp_path / "missing_helper_dir"),
+            jsonl="",
+            name="",
+            job_file="",
+            force=False,
+        )
+    )
+
+    result = json.loads(capsys.readouterr().out)
+
+    assert result["job_name"] == "batches/gemini_existing"
+    assert result["reused"] is True
+    assert result["jsonl_exists"] is False
+
+
+def test_gemini_check_rejects_empty_job_file_before_running_helper(tmp_path, monkeypatch):
+    output_dir = tmp_path / "run"
+    output_dir.mkdir()
+    (output_dir / "gemini_recommendation_judge.job.txt").write_text("\n", encoding="utf-8")
+    monkeypatch.setattr(
+        judge_batch,
+        "run_command",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("helper command should not run")),
+    )
+
+    try:
+        judge_batch.check(
+            SimpleNamespace(
+                output_dir=str(output_dir),
+                health_batch_dir=str(tmp_path / "missing_helper_dir"),
+                job="",
+                job_file="",
+                watch=False,
+                download=False,
+                download_output="",
+                allow_failure=False,
+            )
+        )
+    except RuntimeError as exc:
+        assert "Gemini Batch job file is empty" in str(exc)
+    else:
+        raise AssertionError("empty Gemini job files should not be checked")
+
+
 def test_openai_list_filters_active_batches_and_writes_json(tmp_path, monkeypatch):
     class FakeBatches:
         def __init__(self):
