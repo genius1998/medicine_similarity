@@ -12,6 +12,7 @@ import scripts.recommendation_quality_judge_batch as judge_batch  # noqa: E402
 from scripts.recommendation_quality_judge_batch import (  # noqa: E402
     build_batch_requests,
     build_openai_batch_requests,
+    build_high_score_weak_diagnostics,
     build_snapshot_item,
     compact_profile,
     extract_response_text,
@@ -1102,6 +1103,74 @@ def test_write_validation_report_builds_markdown_from_validation_outputs(tmp_pat
     assert "| Label coverage | 100 / 100 |" in report
     assert "| A | 15 | 5 | 33.33% |" in report
     assert "| candidate | 12 | 5 | 41.67% | 7 |" in report
+
+
+def test_build_high_score_weak_diagnostics_counts_only_high_score_rows():
+    rows = [
+        {
+            "base_main_category": "A",
+            "rank": "1",
+            "judge_judgment": "weak",
+            "current_similarity_score": "0.80",
+            "function_similarity_score": "0.20",
+            "same_primary_set": "1",
+            "shared_core_count": "1",
+            "primary_primary_overlap_count": "2",
+        },
+        {
+            "base_main_category": "A",
+            "rank": "2",
+            "judge_judgment": "reasonable",
+            "current_similarity_score": "0.90",
+            "function_similarity_score": "0.20",
+            "same_primary_set": "1",
+            "shared_core_count": "1",
+            "primary_primary_overlap_count": "2",
+        },
+        {
+            "base_main_category": "B",
+            "rank": "3",
+            "judge_judgment": "acceptable_adjacent",
+            "current_similarity_score": "0.70",
+            "function_similarity_score": "0.50",
+            "same_primary_set": "0",
+            "shared_core_count": "0",
+            "primary_primary_overlap_count": "0",
+        },
+        {
+            "base_main_category": "B",
+            "rank": "4",
+            "judge_judgment": "weak",
+            "current_similarity_score": "0.50",
+            "function_similarity_score": "0.10",
+            "same_primary_set": "0",
+            "shared_core_count": "0",
+            "primary_primary_overlap_count": "0",
+        },
+    ]
+
+    result = build_high_score_weak_diagnostics(rows, high_score_threshold=0.65)
+
+    assert result["row_count"] == 4
+    assert result["high_score_row_count"] == 3
+    assert result["high_score_weak_or_bad_count"] == 1
+    assert result["overall_high_score_weak_or_bad_rate"] == 0.25
+    assert result["within_high_score_weak_or_bad_rate"] == 0.3333
+    assert result["high_score_weak_by_category"] == [{"category": "A", "count": 1}]
+    assert result["high_score_weak_by_rank"] == [{"rank": "1", "count": 1}]
+    feature_counts = {
+        row["feature"]: row["count"]
+        for row in result["high_score_weak_feature_counts"]
+    }
+    assert feature_counts["function_lt_0_30"] == 1
+    assert feature_counts["same_primary_set"] == 1
+    impacts = {
+        row["condition"]: row
+        for row in result["condition_impacts"]
+    }
+    assert impacts["function_lt_0_30"]["matched_count"] == 2
+    assert impacts["function_lt_0_30"]["weak_or_bad_count"] == 1
+    assert impacts["function_lt_0_30"]["non_weak_affected_count"] == 1
 
 
 def test_next_sample_plan_selects_high_weak_rate_categories_before_fallback():

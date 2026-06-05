@@ -25,6 +25,16 @@ pass_continue_validation_without_algorithm_change
 
 The candidate cap patterns are not actionable because they affect too many reasonable or acceptable-adjacent recommendations relative to the weak/bad cases they catch.
 
+Latest high-score weak diagnostics also support keeping the current algorithm:
+
+- High-score rows: `4,544`
+- High-score weak/bad rows: `63`
+- Within-high-score weak/bad rate: `1.39%`
+- Overall high-score weak/bad rate: `1.10%`
+- `function_similarity < 0.40` would catch `24` weak/bad rows but also affect `607` non-weak rows.
+- `not_same_primary` would catch `19` weak/bad rows but also affect `509` non-weak rows.
+- `same_primary_set` appears in `44` high-score weak/bad rows, so primary-set equality alone is not a reliable accept signal or reject signal.
+
 ## Validation Inputs
 
 Current merged validation output:
@@ -84,6 +94,14 @@ python scripts\recommendation_quality_judge_batch.py validation-report `
   --validation-dir output\recommendation_quality_judge_v2_9_openai_validation_current_plus_holdout202606062 `
   --top-categories 10 `
   --top-patterns 7
+```
+
+Write the high-score weak diagnostic JSON:
+
+```powershell
+python scripts\recommendation_quality_judge_batch.py diagnose-high-score-weak `
+  --validation-dir output\recommendation_quality_judge_v2_9_openai_validation_current_plus_holdout202606062 `
+  --high-score-threshold 0.65
 ```
 
 ## OpenAI Batch Safety Check

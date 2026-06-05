@@ -2408,6 +2408,170 @@ def write_validation_report(args: argparse.Namespace) -> None:
     print(json.dumps({"output_md": str(output_md), "decision": quality_gate_result.get("decision", "")}, ensure_ascii=False, indent=2))
 
 
+def int_feature(row: dict[str, Any], key: str) -> int:
+    return int(score_as_float(row.get(key)))
+
+
+def counter_rows(counter: Counter[str], key_name: str, limit: int = 0) -> list[dict[str, Any]]:
+    rows = [
+        {key_name: key, "count": int(count)}
+        for key, count in counter.most_common()
+    ]
+    if limit > 0:
+        return rows[:limit]
+    return rows
+
+
+def score_bin(score: float) -> str:
+    if score >= 0.90:
+        return ">=0.90"
+    if score >= 0.80:
+        return "0.80-0.89"
+    if score >= 0.70:
+        return "0.70-0.79"
+    return "0.65-0.69"
+
+
+def high_score_diagnostic_conditions() -> list[dict[str, Any]]:
+    return [
+        {
+            "condition": "shared_core_0",
+            "description": "No shared semantic core.",
+            "predicate": lambda row: int_feature(row, "shared_core_count") == 0,
+        },
+        {
+            "condition": "shared_core_1",
+            "description": "Exactly one shared semantic core.",
+            "predicate": lambda row: int_feature(row, "shared_core_count") == 1,
+        },
+        {
+            "condition": "function_lt_0_30",
+            "description": "Function similarity is below 0.30.",
+            "predicate": lambda row: score_as_float(row.get("function_similarity_score")) < 0.30,
+        },
+        {
+            "condition": "function_lt_0_40",
+            "description": "Function similarity is below 0.40.",
+            "predicate": lambda row: score_as_float(row.get("function_similarity_score")) < 0.40,
+        },
+        {
+            "condition": "primary_primary_overlap_0",
+            "description": "No overlap between primary ingredient sets.",
+            "predicate": lambda row: int_feature(row, "primary_primary_overlap_count") == 0,
+        },
+        {
+            "condition": "not_same_primary",
+            "description": "Primary ingredient sets are not identical.",
+            "predicate": lambda row: int_feature(row, "same_primary_set") == 0,
+        },
+        {
+            "condition": "shared_core_le1_and_fn_lt_0_40",
+            "description": "At most one shared semantic core and function similarity below 0.40.",
+            "predicate": lambda row: int_feature(row, "shared_core_count") <= 1
+            and score_as_float(row.get("function_similarity_score")) < 0.40,
+        },
+    ]
+
+
+def build_high_score_weak_diagnostics(
+    feature_rows: list[dict[str, Any]],
+    *,
+    high_score_threshold: float,
+    top_categories: int = 12,
+) -> dict[str, Any]:
+    high_rows = [
+        row for row in feature_rows
+        if score_as_float(row.get("current_similarity_score")) >= high_score_threshold
+    ]
+    high_weak_rows = [
+        row for row in high_rows
+        if str(row.get("judge_judgment", "") or "") in {"weak", "bad"}
+    ]
+
+    category_counts = Counter(str(row.get("base_main_category", "") or "") for row in high_weak_rows)
+    rank_counts = Counter(str(int_feature(row, "rank")) for row in high_weak_rows if str(row.get("rank", "") or "").strip())
+    score_bins = Counter(score_bin(score_as_float(row.get("current_similarity_score"))) for row in high_weak_rows)
+
+    feature_counts: Counter[str] = Counter()
+    for row in high_weak_rows:
+        if int_feature(row, "same_primary_set"):
+            feature_counts["same_primary_set"] += 1
+        if int_feature(row, "shared_core_count") == 0:
+            feature_counts["shared_core_0"] += 1
+        if int_feature(row, "shared_core_count") == 1:
+            feature_counts["shared_core_1"] += 1
+        if score_as_float(row.get("function_similarity_score")) < 0.40:
+            feature_counts["function_lt_0_40"] += 1
+        if score_as_float(row.get("function_similarity_score")) < 0.30:
+            feature_counts["function_lt_0_30"] += 1
+        if int_feature(row, "primary_primary_overlap_count") == 0:
+            feature_counts["primary_primary_overlap_0"] += 1
+        if int_feature(row, "no_primary_primary_overlap_cross_role"):
+            feature_counts["no_primary_primary_overlap_cross_role"] += 1
+
+    condition_impacts: list[dict[str, Any]] = []
+    for rule in high_score_diagnostic_conditions():
+        matched = [row for row in high_rows if rule["predicate"](row)]
+        judgment_counts = Counter(str(row.get("judge_judgment", "") or "") for row in matched)
+        weak_or_bad_count = int(judgment_counts.get("weak", 0)) + int(judgment_counts.get("bad", 0))
+        non_weak_count = len(matched) - weak_or_bad_count
+        condition_impacts.append(
+            {
+                "condition": rule["condition"],
+                "description": rule["description"],
+                "matched_count": len(matched),
+                "weak_or_bad_count": weak_or_bad_count,
+                "weak_or_bad_rate": round(float(weak_or_bad_count / len(matched)), 4) if matched else 0.0,
+                "non_weak_affected_count": non_weak_count,
+            }
+        )
+
+    return {
+        "row_count": len(feature_rows),
+        "high_score_threshold": float(high_score_threshold),
+        "high_score_row_count": len(high_rows),
+        "high_score_weak_or_bad_count": len(high_weak_rows),
+        "overall_high_score_weak_or_bad_rate": round(float(len(high_weak_rows) / len(feature_rows)), 4) if feature_rows else 0.0,
+        "within_high_score_weak_or_bad_rate": round(float(len(high_weak_rows) / len(high_rows)), 4) if high_rows else 0.0,
+        "high_score_weak_by_category": counter_rows(category_counts, "category", top_categories),
+        "high_score_weak_by_rank": sorted(
+            counter_rows(rank_counts, "rank"),
+            key=lambda row: int(row["rank"]),
+        ),
+        "high_score_weak_score_bins": [
+            {"score_bin": key, "count": int(score_bins.get(key, 0))}
+            for key in ("0.65-0.69", "0.70-0.79", "0.80-0.89", ">=0.90")
+        ],
+        "high_score_weak_feature_counts": counter_rows(feature_counts, "feature"),
+        "condition_impacts": condition_impacts,
+    }
+
+
+def diagnose_high_score_weak(args: argparse.Namespace) -> None:
+    validation_dir = resolve_path(args.validation_dir)
+    features_csv = (
+        resolve_path(args.features_csv)
+        if args.features_csv
+        else validation_dir / "patterns" / "judge_pattern_features.csv"
+    )
+    output_json = resolve_path(args.output_json) if args.output_json else validation_dir / "high_score_weak_diagnostics.json"
+    if not features_csv.exists():
+        raise FileNotFoundError(features_csv)
+
+    diagnostics = build_high_score_weak_diagnostics(
+        read_csv_records(features_csv),
+        high_score_threshold=float(args.high_score_threshold),
+        top_categories=int(args.top_categories),
+    )
+    diagnostics["created_at"] = now_iso()
+    diagnostics["inputs"] = {
+        "features_csv": str(features_csv),
+    }
+    output_json.parent.mkdir(parents=True, exist_ok=True)
+    output_json.write_text(json.dumps(diagnostics, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps(diagnostics, ensure_ascii=False, indent=2))
+
+
 def category_judgment_rows(summary: dict[str, Any]) -> list[dict[str, Any]]:
     counts: dict[str, Counter[str]] = defaultdict(Counter)
     for key, count in (summary.get("category_judgment_counts", {}) or {}).items():
@@ -3134,6 +3298,17 @@ def build_parser() -> argparse.ArgumentParser:
     report_parser.add_argument("--top-categories", type=int, default=10)
     report_parser.add_argument("--top-patterns", type=int, default=10)
     report_parser.set_defaults(func=write_validation_report)
+
+    diagnose_parser = subparsers.add_parser(
+        "diagnose-high-score-weak",
+        help="Summarize high-score weak/bad rows and estimate simple diagnostic condition blast radius.",
+    )
+    diagnose_parser.add_argument("--validation-dir", required=True)
+    diagnose_parser.add_argument("--features-csv", default="")
+    diagnose_parser.add_argument("--output-json", default="")
+    diagnose_parser.add_argument("--high-score-threshold", type=float, default=0.65)
+    diagnose_parser.add_argument("--top-categories", type=int, default=12)
+    diagnose_parser.set_defaults(func=diagnose_high_score_weak)
 
     next_sample_parser = subparsers.add_parser(
         "plan-next-sample",
