@@ -8,13 +8,13 @@ The latest OpenAI `gpt-5-nano` judge validation passes the quality gate:
 
 | Metric | Value |
 | --- | ---: |
-| Labels | 50,395 / 50,395 |
-| Products | 9,854 |
-| Batch requests | 7,055 |
-| Weak/bad count | 4,339 |
-| Weak/bad rate | 8.61% |
-| High-score weak/bad count | 669 |
-| High-score weak/bad rate | 1.33% |
+| Labels | 52,002 / 52,002 |
+| Products | 10,254 |
+| Batch requests | 7,316 |
+| Weak/bad count | 4,560 |
+| Weak/bad rate | 8.77% |
+| High-score weak/bad count | 689 |
+| High-score weak/bad rate | 1.32% |
 | Actionable pattern count | 0 |
 
 Gate decision:
@@ -41,22 +41,24 @@ A neutral all-category p50 holdout was then added and split into four OpenAI Bat
 
 One more targeted p45 sample was run after p50 against the highest weak-rate categories: 여성 건강, 영양보충, 수면/긴장완화, 피로개선, 혈중지질, 혈압, 혈당, and 피부 건강. This targeted sample had a standalone weak/bad rate of `12.02%`, as expected from the selected high-risk categories, but its high-score weak/bad rate stayed within the gate at `1.84%` and it found no actionable low-blast-radius pattern. The merged validation still passes the quality gate.
 
+A follow-up targeted p50 sample was then run against the same high-weak categories with a new seed. This sample had a standalone weak/bad rate of `13.75%` and two bad labels, but its high-score weak/bad rate stayed low at `1.25%` and no actionable low-blast-radius pattern was found. The merged validation continues to pass the quality gate, so adding another broad cap would still overfilter many reasonable or acceptable-adjacent recommendations.
+
 Latest high-score weak diagnostics also support keeping the current algorithm:
 
-- High-score rows: `39,281`
-- High-score weak/bad rows: `668`
-- Within-high-score weak/bad rate: `1.70%`
-- Overall high-score weak/bad rate: `1.33%`
-- `function_similarity < 0.40` would catch `279` weak/bad rows but also affect `4,598` non-weak rows.
-- `not_same_primary` would catch `172` weak/bad rows but also affect `4,107` non-weak rows.
-- `same_primary_set` appears in `496` high-score weak/bad rows, so primary-set equality alone is not a reliable accept signal or reject signal.
+- High-score rows: `40,282`
+- High-score weak/bad rows: `688`
+- Within-high-score weak/bad rate: `1.71%`
+- Overall high-score weak/bad rate: `1.32%`
+- `function_similarity < 0.40` would catch `287` weak/bad rows but also affect `4,757` non-weak rows.
+- `not_same_primary` would catch `183` weak/bad rows but also affect `4,314` non-weak rows.
+- `same_primary_set` appears in `505` high-score weak/bad rows, so primary-set equality alone is not a reliable accept signal or reject signal.
 
 ## Validation Inputs
 
 Current merged validation output:
 
 ```text
-output/recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted_holdout202606071_targeted_p45
+output/recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted_holdout202606072_targeted_p50
 ```
 
 Included samples:
@@ -98,6 +100,7 @@ output/recommendation_quality_judge_v2_9_openai_holdout_seed2026060617_p50_part2
 output/recommendation_quality_judge_v2_9_openai_holdout_seed2026060617_p50_part3
 output/recommendation_quality_judge_v2_9_openai_holdout_seed2026060617_p50_part4
 output/recommendation_quality_judge_v2_9_openai_targeted_next_seed202606071
+output/recommendation_quality_judge_v2_9_openai_targeted_next_seed202606072
 ```
 
 Retry replacements:
@@ -152,12 +155,13 @@ python scripts\recommendation_quality_judge_batch.py validate-results `
   --parts-glob "output\recommendation_quality_judge_v2_9_openai_holdout_seed2026060617_p50_part3" `
   --parts-glob "output\recommendation_quality_judge_v2_9_openai_holdout_seed2026060617_p50_part4" `
   --parts-glob "output\recommendation_quality_judge_v2_9_openai_targeted_next_seed202606071" `
+  --parts-glob "output\recommendation_quality_judge_v2_9_openai_targeted_next_seed202606072" `
   --retry-glob "output\recommendation_quality_judge_v2_9_openai_chunk_*_retry_*" `
   --retry-glob "output\recommendation_quality_judge_v2_9_openai_targeted_next_seed202606066_p40_retry_*" `
   --retry-glob "output\recommendation_quality_judge_v2_9_openai_targeted_next_seed202606067_p50_retry_*" `
   --retry-glob "output\recommendation_quality_judge_v2_9_openai_holdout_seed202606068_p15_retry_*" `
   --retry-glob "output\recommendation_quality_judge_v2_9_openai_holdout_seed2026060611_p30_retry_*" `
-  --output-dir output\recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted_holdout202606071_targeted_p45 `
+  --output-dir output\recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted_holdout202606072_targeted_p50 `
   --high-score-threshold 0.65
 ```
 
@@ -167,7 +171,7 @@ Write the Markdown report:
 
 ```powershell
 python scripts\recommendation_quality_judge_batch.py validation-report `
-  --validation-dir output\recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted_holdout202606071_targeted_p45 `
+  --validation-dir output\recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted_holdout202606072_targeted_p50 `
   --top-categories 10 `
   --top-patterns 7
 ```
@@ -176,7 +180,7 @@ The report includes `high_score_weak_diagnostics.json` automatically when that f
 
 ```powershell
 python scripts\recommendation_quality_judge_batch.py diagnose-high-score-weak `
-  --validation-dir output\recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted_holdout202606071_targeted_p45 `
+  --validation-dir output\recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted_holdout202606072_targeted_p50 `
   --high-score-threshold 0.65
 ```
 
@@ -184,7 +188,7 @@ Regenerate only the stop/continue status:
 
 ```powershell
 python scripts\recommendation_quality_judge_batch.py validation-status `
-  --validation-dir output\recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted_holdout202606071_targeted_p45
+  --validation-dir output\recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted_holdout202606072_targeted_p50
 ```
 
 ## OpenAI Batch Safety Check
@@ -215,7 +219,7 @@ When using `openai-submit` directly, pass `--require-no-active` and the current 
 python scripts\recommendation_quality_judge_batch.py openai-submit `
   --output-dir output\recommendation_quality_judge_v2_9_openai_targeted_next_seedYYYYMMDD `
   --env-path D:\health_batch_project\.env `
-  --validation-status-json output\recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted_holdout202606071_targeted_p45\validation_status.json `
+  --validation-status-json output\recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted_holdout202606072_targeted_p50\validation_status.json `
   --require-no-active
 ```
 
@@ -248,7 +252,7 @@ For a prepared output directory, the submit/watch/download/finalize sequence can
 python scripts\recommendation_quality_judge_batch.py openai-run `
   --output-dir output\recommendation_quality_judge_v2_9_openai_targeted_next_seedYYYYMMDD `
   --env-path D:\health_batch_project\.env `
-  --validation-status-json output\recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted_holdout202606071_targeted_p45\validation_status.json `
+  --validation-status-json output\recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted_holdout202606072_targeted_p50\validation_status.json `
   --require-no-active `
   --poll-seconds 60 `
   --timeout-seconds 7200 `
@@ -265,8 +269,8 @@ When a validation status is available, pass it to `plan-next-sample` so a stop d
 
 ```powershell
 python scripts\recommendation_quality_judge_batch.py plan-next-sample `
-  --summary-json output\recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted_holdout202606071_targeted_p45\openai_chunk_judge_summary.json `
-  --validation-status-json output\recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted_holdout202606071_targeted_p45\validation_status.json `
+  --summary-json output\recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted_holdout202606072_targeted_p50\openai_chunk_judge_summary.json `
+  --validation-status-json output\recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted_holdout202606072_targeted_p50\validation_status.json `
   --output-dir output\recommendation_quality_judge_v2_9_openai_next_sample_plan_after_stop
 ```
 
