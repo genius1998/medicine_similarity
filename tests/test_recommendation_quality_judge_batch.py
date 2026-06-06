@@ -321,6 +321,115 @@ def test_parse_openai_batch_response_text_json():
     assert parsed["labels"][0]["target_report_no"] == "T1"
 
 
+def test_apply_results_discards_unmatched_extra_labels(tmp_path):
+    output_dir = tmp_path / "part"
+    output_dir.mkdir()
+    snapshot = {
+        "key": "recjudge_000001",
+        "base_product": {
+            "report_no": "B1",
+            "product_name": "base",
+            "product_main_category": "cat",
+        },
+        "recommendations": [
+            {
+                "rank": 1,
+                "target_profile": {
+                    "report_no": "T1",
+                    "product_name": "target one",
+                    "product_main_category": "cat",
+                },
+                "similarity_score": 0.8,
+                "function_similarity_score": 0.9,
+                "core_match_score": 1.0,
+                "shared_ingredients": ["a"],
+                "shared_categories": ["cat"],
+                "local_risk_flags": [],
+                "local_quality_bucket": "likely_reasonable",
+            },
+            {
+                "rank": 2,
+                "target_profile": {
+                    "report_no": "T2",
+                    "product_name": "target two",
+                    "product_main_category": "cat",
+                },
+                "similarity_score": 0.7,
+                "function_similarity_score": 0.8,
+                "core_match_score": 1.0,
+                "shared_ingredients": ["a"],
+                "shared_categories": ["cat"],
+                "local_risk_flags": [],
+                "local_quality_bucket": "likely_reasonable",
+            },
+        ],
+    }
+    (output_dir / "recommendation_snapshot.jsonl").write_text(json.dumps(snapshot) + "\n", encoding="utf-8")
+    response = {
+        "custom_id": "recjudge_000001",
+        "response": {
+            "body": {
+                "output_text": json.dumps(
+                    {
+                        "base_report_no": "B1",
+                        "labels": [
+                            {
+                                "rank": 1,
+                                "target_report_no": "T1",
+                                "judgment": "reasonable",
+                                "confidence": 0.9,
+                                "reason": "good",
+                                "risk_flags": [],
+                            },
+                            {
+                                "rank": 2,
+                                "target_report_no": "T2",
+                                "judgment": "acceptable_adjacent",
+                                "confidence": 0.8,
+                                "reason": "adjacent",
+                                "risk_flags": [],
+                            },
+                            {
+                                "rank": 3,
+                                "target_report_no": "T3",
+                                "judgment": "weak",
+                                "confidence": 0.6,
+                                "reason": "extra model label",
+                                "risk_flags": [],
+                            },
+                        ],
+                        "overall_notes": "",
+                    }
+                )
+            }
+        },
+    }
+    (output_dir / judge_batch.DEFAULT_RESULT_JSONL_NAME).write_text(json.dumps(response) + "\n", encoding="utf-8")
+
+    judge_batch.apply_results(
+        SimpleNamespace(
+            output_dir=str(output_dir),
+            result_jsonl="",
+            snapshot_jsonl="",
+            high_score_threshold=0.65,
+        )
+    )
+
+    rows = judge_batch.read_csv_records(output_dir / "gemini_judge_results.csv")
+    errors = judge_batch.read_csv_records(output_dir / "gemini_judge_errors.csv")
+    summary = json.loads((output_dir / "gemini_judge_summary.json").read_text(encoding="utf-8"))
+
+    assert [row["target_report_no"] for row in rows] == ["T1", "T2"]
+    assert len(errors) == 1
+    assert "unmatched judge label" in errors[0]["error"]
+    assert summary["result_count"] == 2
+    assert summary["error_count"] == 1
+    assert summary["discarded_label_count"] == 1
+    assert summary["label_coverage"]["expected_label_count"] == 2
+    assert summary["label_coverage"]["actual_label_count"] == 2
+    assert summary["label_coverage"]["mismatch_count"] == 0
+
+
 def test_gemini_submit_reuses_existing_job_without_jsonl_or_helper(tmp_path, monkeypatch, capsys):
     output_dir = tmp_path / "run"
     output_dir.mkdir()

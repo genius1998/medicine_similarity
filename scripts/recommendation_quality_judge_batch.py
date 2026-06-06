@@ -958,6 +958,13 @@ def find_recommendation(snapshot_item: dict[str, Any], label: dict[str, Any]) ->
     return {}
 
 
+def recommendation_identity(rec: dict[str, Any]) -> str:
+    target_report_no = str(rec.get("target_profile", {}).get("report_no", "") or "").strip()
+    if target_report_no:
+        return f"target:{target_report_no}"
+    return f"rank:{int(rec.get('rank', 0) or 0)}"
+
+
 def apply_results(args: argparse.Namespace) -> None:
     output_dir = resolve_path(args.output_dir)
     result_jsonl = resolve_path(args.result_jsonl) if args.result_jsonl else output_dir / DEFAULT_RESULT_JSONL_NAME
@@ -971,6 +978,7 @@ def apply_results(args: argparse.Namespace) -> None:
     parsed_rows: list[dict[str, Any]] = []
     error_rows: list[dict[str, Any]] = []
     label_counts_by_key: Counter[str] = Counter()
+    discarded_label_count_total = 0
     raw_rows = read_jsonl(result_jsonl)
     for line_number, line_obj in enumerate(raw_rows, start=1):
         key = str(line_obj.get("key", "") or line_obj.get("custom_id", "") or "")
@@ -988,11 +996,42 @@ def apply_results(args: argparse.Namespace) -> None:
             snapshot_item = snapshot_by_key.get(key)
             if not snapshot_item:
                 raise ValueError(f"unknown key: {key}")
-            label_counts_by_key[key] += len(labels)
             base = snapshot_item.get("base_product", {})
-            for raw_label in labels:
+            seen_recommendations: set[str] = set()
+            for label_index, raw_label in enumerate(labels, start=1):
                 label = normalize_label(raw_label if isinstance(raw_label, dict) else {})
                 rec = find_recommendation(snapshot_item, label)
+                if not rec:
+                    discarded_label_count_total += 1
+                    error_rows.append(
+                        {
+                            "line_number": line_number,
+                            "key": key,
+                            "error": (
+                                "unmatched judge label "
+                                f"index={label_index} rank={label['rank']} target_report_no={label['target_report_no']}"
+                            ),
+                            "raw": json.dumps(raw_label, ensure_ascii=False)[:4000],
+                        }
+                    )
+                    continue
+                rec_id = recommendation_identity(rec)
+                if rec_id in seen_recommendations:
+                    discarded_label_count_total += 1
+                    error_rows.append(
+                        {
+                            "line_number": line_number,
+                            "key": key,
+                            "error": (
+                                "duplicate judge label "
+                                f"index={label_index} rank={label['rank']} target_report_no={label['target_report_no']}"
+                            ),
+                            "raw": json.dumps(raw_label, ensure_ascii=False)[:4000],
+                        }
+                    )
+                    continue
+                seen_recommendations.add(rec_id)
+                label_counts_by_key[key] += 1
                 target = rec.get("target_profile", {}) if rec else {}
                 parsed_rows.append(
                     {
@@ -1089,6 +1128,7 @@ def apply_results(args: argparse.Namespace) -> None:
         "snapshot_jsonl": str(snapshot_jsonl),
         "result_count": len(parsed_rows),
         "error_count": len(error_rows),
+        "discarded_label_count": int(discarded_label_count_total),
         "judgment_counts": dict(judgment_counts),
         "weak_or_bad_rate": round(
             (judgment_counts.get("weak", 0) + judgment_counts.get("bad", 0)) / len(parsed_rows),
