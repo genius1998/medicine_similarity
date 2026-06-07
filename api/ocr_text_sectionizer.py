@@ -6,6 +6,7 @@ from typing import Dict, List, Tuple
 
 SECTION_KEYWORDS: List[Tuple[str, List[str]]] = [
     ("ingredient_area", ["원재료", "원료명", "원재료명 및 함량", "원료명 및 함량", "주원료"]),
+    ("product_name_area", ["제품명", "상품명", "식품의 유형", "식품유형", "제품의 유형", "제품유형"]),
     ("functional_info_area", ["영양", "기능정보", "영양·기능정보", "기능성분", "기능성 원료"]),
     ("intake_area", ["섭취량", "섭취방법", "섭취 시", "섭취시", "1일 섭취량"]),
     ("warning_area", ["주의사항", "알레르기", "보관방법", "질병의 예방", "의약품이 아닙니다"]),

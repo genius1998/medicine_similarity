@@ -361,3 +361,121 @@ def test_low_signal_cache_match_is_excluded_from_upload_vector(tmp_path):
     assert statuses[0]["is_functional_match"] is True
     assert statuses[0]["vector_include"] is False
     assert statuses[0]["ingredient_type"] == "low_signal_food_base"
+
+
+def test_sparse_specific_category_override_prefers_single_matched_functional_category():
+    service = UploadRecommendationService.__new__(UploadRecommendationService)
+    ingredient = "\uc774\ub204\ub9b0/\uce58\ucee4\ub9ac\ucd94\ucd9c\ubb3c"
+    profile = {
+        "product_main_category": "\uc601\uc591\ubcf4\ucda9",
+        "product_sub_categories": ["\uc7a5 \uac74\uac15"],
+        "llm_sub_function_categories": ["\uc7a5 \uac74\uac15"],
+        "primary_ingredients": [],
+        "secondary_ingredients": [ingredient],
+        "ingredient_scores": [
+            {
+                "ingredient": ingredient,
+                "display_name": "\uce58\ucee4\ub9ac\ubfcc\ub9ac\ucd94\ucd9c\ubd84\ub9d0",
+                "weight": 0.7,
+                "role": "secondary",
+                "category_main": "\uc7a5 \uac74\uac15",
+                "category_sub": "\ud608\uc911\uc9c0\uc9c8",
+            }
+        ],
+    }
+
+    corrected = service._apply_sparse_specific_category_override(profile)
+
+    assert corrected["product_main_category"] == "\uc7a5 \uac74\uac15"
+    assert corrected["primary_ingredients"] == [ingredient]
+    assert corrected["category_override_reason"] == "sparse_specific_ingredient_category"
+
+
+def test_sparse_specific_category_override_keeps_real_nutrition_stack():
+    service = UploadRecommendationService.__new__(UploadRecommendationService)
+    profile = {
+        "product_main_category": "\uc601\uc591\ubcf4\ucda9",
+        "product_sub_categories": ["\uc7a5 \uac74\uac15"],
+        "primary_ingredients": ["\ube44\ud0c0\ubbfc C", "\ube44\ud0c0\ubbfc D"],
+        "secondary_ingredients": ["\uc544\uc5f0", "\uc774\ub204\ub9b0/\uce58\ucee4\ub9ac\ucd94\ucd9c\ubb3c"],
+        "ingredient_scores": [
+            {"ingredient": "\ube44\ud0c0\ubbfc C", "display_name": "\ube44\ud0c0\ubbfc C", "weight": 0.9, "role": "primary", "category_main": "\uc601\uc591\ubcf4\ucda9"},
+            {"ingredient": "\ube44\ud0c0\ubbfc D", "display_name": "\ube44\ud0c0\ubbfc D", "weight": 0.85, "role": "primary", "category_main": "\uc601\uc591\ubcf4\ucda9"},
+            {"ingredient": "\uc544\uc5f0", "display_name": "\uc544\uc5f0", "weight": 0.8, "role": "secondary", "category_main": "\uc601\uc591\ubcf4\ucda9"},
+            {
+                "ingredient": "\uc774\ub204\ub9b0/\uce58\ucee4\ub9ac\ucd94\ucd9c\ubb3c",
+                "display_name": "\uce58\ucee4\ub9ac\ubfcc\ub9ac\ucd94\ucd9c\ubd84\ub9d0",
+                "weight": 0.7,
+                "role": "secondary",
+                "category_main": "\uc7a5 \uac74\uac15",
+            },
+        ],
+    }
+
+    corrected = service._apply_sparse_specific_category_override(profile)
+
+    assert corrected["product_main_category"] == "\uc601\uc591\ubcf4\ucda9"
+    assert "category_override_reason" not in corrected
+
+
+def test_sparse_category_fallback_uses_same_main_keyword_candidates_only():
+    service = UploadRecommendationService.__new__(UploadRecommendationService)
+    service.recommendation_service = SimpleNamespace(
+        profiles={
+            "gut_good": {
+                "report_no": "GUT-1",
+                "product_name": "\ud504\ub85c\ubc14\uc774\uc624\ud2f1\uc2a4 \uc81c\ud488",
+                "product_main_category": "\uc7a5 \uac74\uac15",
+                "primary_ingredients": ["\ud504\ub85c\ubc14\uc774\uc624\ud2f1\uc2a4"],
+                "secondary_ingredients": [],
+                "support_ingredients": [],
+                "is_candidate_enabled": True,
+            },
+            "gut_weak": {
+                "report_no": "GUT-2",
+                "product_name": "\uc7a5 \uac74\uac15 \uc77c\ubc18 \uc81c\ud488",
+                "product_main_category": "\uc7a5 \uac74\uac15",
+                "primary_ingredients": ["\uc77c\ubc18\uc6d0\ub8cc"],
+                "secondary_ingredients": [],
+                "support_ingredients": [],
+                "is_candidate_enabled": True,
+            },
+            "nutrition": {
+                "report_no": "NUT-1",
+                "product_name": "\ube44\ud0c0\ubbfc \uc81c\ud488",
+                "product_main_category": "\uc601\uc591\ubcf4\ucda9",
+                "primary_ingredients": ["\ube44\ud0c0\ubbfc C"],
+                "secondary_ingredients": [],
+                "support_ingredients": [],
+                "is_candidate_enabled": True,
+            },
+        },
+        product_vectors={
+            "gut_good": {"\ud504\ub85c\ubc14\uc774\uc624\ud2f1\uc2a4": 1.0},
+            "gut_weak": {"\uc77c\ubc18\uc6d0\ub8cc": 1.0},
+            "nutrition": {"\ube44\ud0c0\ubbfc C": 1.0},
+        },
+    )
+    temp_profile = {
+        "product_main_category": "\uc7a5 \uac74\uac15",
+        "primary_ingredients": ["\uc774\ub204\ub9b0/\uce58\ucee4\ub9ac\ucd94\ucd9c\ubb3c"],
+        "secondary_ingredients": [],
+        "ingredient_scores": [
+            {
+                "ingredient": "\uc774\ub204\ub9b0/\uce58\ucee4\ub9ac\ucd94\ucd9c\ubb3c",
+                "category_main": "\uc7a5 \uac74\uac15",
+                "weight": 0.7,
+            }
+        ],
+    }
+    candidate_pool = [
+        {"target_product_id": "gut_weak"},
+        {"target_product_id": "nutrition"},
+        {"target_product_id": "gut_good"},
+    ]
+
+    rows = service._build_sparse_category_fallback_rows(temp_profile, candidate_pool, set(), top_k=5)
+
+    assert [row["report_no"] for row in rows] == ["GUT-1"]
+    assert rows[0]["recommendation_quality"] == "category_fallback"
+    assert rows[0]["recommendation_review_reason"] == "sparse_upload_category_fallback"

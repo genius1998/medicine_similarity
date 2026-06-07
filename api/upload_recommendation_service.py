@@ -2402,6 +2402,78 @@ class UploadRecommendationService:
         estimated_profile["product_main_category"] = forced_category
         return estimated_profile
 
+    def _apply_sparse_specific_category_override(self, estimated_profile: dict) -> dict:
+        current_category = str(estimated_profile.get("product_main_category", "") or "").strip()
+        if current_category not in {"", "기타", "영양보충"}:
+            return estimated_profile
+
+        ingredient_scores = [
+            dict(item or {})
+            for item in estimated_profile.get("ingredient_scores", []) or []
+            if str((item or {}).get("ingredient", "") or "").strip()
+        ]
+        if not ingredient_scores:
+            return estimated_profile
+
+        vector_categories = [
+            str(item.get("category_main", "") or "").strip()
+            for item in ingredient_scores
+            if str(item.get("category_main", "") or "").strip() not in {"", "기타"}
+        ]
+        generic_ingredient_count = sum(1 for category in vector_categories if category == "영양보충")
+        if generic_ingredient_count >= 2 or len(vector_categories) > 2:
+            return estimated_profile
+
+        specific_items: List[dict] = []
+        for item in ingredient_scores:
+            category = str(item.get("category_main", "") or "").strip()
+            display_name = str(item.get("display_name") or item.get("ingredient") or "")
+            if category in {"", "기타", "영양보충"}:
+                continue
+            if is_excluded_primary(display_name) or is_excipient(display_name):
+                continue
+            try:
+                weight = float(item.get("weight", 0.0) or 0.0)
+            except Exception:
+                weight = 0.0
+            if weight < 0.35:
+                continue
+            item["weight"] = weight
+            specific_items.append(item)
+
+        specific_categories = {str(item.get("category_main", "") or "") for item in specific_items}
+        if len(specific_categories) != 1:
+            return estimated_profile
+
+        forced_category = next(iter(specific_categories))
+        preferred = [
+            str(item.get("ingredient", "") or "")
+            for item in sorted(specific_items, key=lambda row: (-float(row.get("weight", 0.0) or 0.0), str(row.get("ingredient", "") or "")))
+            if str(item.get("ingredient", "") or "")
+        ]
+        if not preferred:
+            return estimated_profile
+
+        existing_primary = [str(item or "") for item in estimated_profile.get("primary_ingredients", []) if str(item or "")]
+        existing_secondary = [str(item or "") for item in estimated_profile.get("secondary_ingredients", []) if str(item or "")]
+        estimated_profile["product_main_category"] = forced_category
+        estimated_profile["primary_ingredients"] = list(dict.fromkeys([*preferred, *existing_primary]))[:3]
+        estimated_profile["secondary_ingredients"] = [
+            item for item in list(dict.fromkeys([*existing_secondary, *existing_primary])) if item not in estimated_profile["primary_ingredients"]
+        ][:8]
+
+        sub_categories = [
+            str(item or "")
+            for item in estimated_profile.get("product_sub_categories", []) or []
+            if str(item or "") and str(item or "") != forced_category
+        ]
+        if current_category and current_category != "기타" and current_category != forced_category:
+            sub_categories.insert(0, current_category)
+        estimated_profile["product_sub_categories"] = list(dict.fromkeys(sub_categories))[:3]
+        estimated_profile["llm_sub_function_categories"] = list(estimated_profile["product_sub_categories"])
+        estimated_profile["category_override_reason"] = "sparse_specific_ingredient_category"
+        return estimated_profile
+
     def _apply_domain_category_overrides(self, parsed_result: dict, estimated_profile: dict) -> dict:
         product_name_candidate = str(parsed_result.get("product_name_candidate", "") or "")
         normalized_ingredients = list(parsed_result.get("normalized_ingredients", []))
@@ -2454,6 +2526,7 @@ class UploadRecommendationService:
                 "영양보충",
             )
 
+        estimated_profile = self._apply_sparse_specific_category_override(estimated_profile)
         return estimated_profile
 
     def _override_recommendation_reason(self, temp_profile: dict, row: dict) -> str:
@@ -3821,6 +3894,141 @@ class UploadRecommendationService:
             "category_diversity_count": category_diversity_count,
         }
 
+    def _sparse_category_fallback_applicable(self, temp_profile: dict) -> bool:
+        main_category = str(temp_profile.get("product_main_category", "") or "").strip()
+        if main_category in {"", "기타", "영양보충"}:
+            return False
+        ingredient_scores = [
+            dict(item or {})
+            for item in temp_profile.get("ingredient_scores", []) or []
+            if str((item or {}).get("ingredient", "") or "").strip()
+            and str((item or {}).get("category_main", "") or "").strip() not in {"", "기타", "영양보충"}
+        ]
+        if not ingredient_scores or len(ingredient_scores) > 2:
+            return False
+        categories = {str(item.get("category_main", "") or "").strip() for item in ingredient_scores}
+        return len(categories) == 1 and main_category in categories
+
+    def _build_sparse_category_fallback_rows(
+        self,
+        temp_profile: dict,
+        candidate_pool: List[dict],
+        excluded_report_nos: set[str],
+        top_k: int,
+    ) -> List[dict]:
+        if not self._sparse_category_fallback_applicable(temp_profile):
+            return []
+
+        service = self.recommendation_service
+        main_category = str(temp_profile.get("product_main_category", "") or "").strip()
+        category_rule = CATEGORY_HINT_RULES.get(main_category, {})
+        category_keywords = list(category_rule.get("ingredient_keywords", []) or [])
+        if not category_keywords:
+            return []
+
+        fallback_candidates: List[dict] = []
+        seen_report_nos = set(excluded_report_nos)
+        for candidate in candidate_pool:
+            target_product_id = str(candidate.get("target_product_id", "") or "")
+            if not target_product_id or target_product_id not in service.profiles:
+                continue
+            target_profile = service.profiles[target_product_id]
+            if str(target_profile.get("product_main_category", "") or "").strip() != main_category:
+                continue
+            report_no = str(target_profile.get("report_no", "") or "")
+            if not report_no or report_no.startswith("UPLOADED-") or report_no in seen_report_nos:
+                continue
+            if not bool(target_profile.get("is_candidate_enabled", True)):
+                continue
+
+            target_primary_ingredients = list(target_profile.get("primary_ingredients", []))
+            target_secondary_ingredients = list(target_profile.get("secondary_ingredients", []))
+            target_support_ingredients = list(target_profile.get("support_ingredients", []))
+            target_all_ingredients = list(
+                dict.fromkeys(target_primary_ingredients + target_secondary_ingredients + target_support_ingredients)
+            )
+            keyword_hits = count_keyword_matches(target_all_ingredients, category_keywords)
+            if keyword_hits <= 0:
+                continue
+
+            target_vector = service.product_vectors.get(target_product_id, {}) or {}
+            vector_size = len(target_vector) if isinstance(target_vector, dict) else 0
+            fallback_score = round(min(0.29, 0.16 + min(0.08, keyword_hits * 0.02) + min(0.05, vector_size * 0.005)), 6)
+            function_similarity_score = calculate_function_similarity(temp_profile, target_profile)
+            core_match_score = 0.05
+            comparison = {
+                "shared_ingredients": [],
+                "shared_ingredients_raw": [],
+                "base_only_ingredients": list(temp_profile.get("primary_ingredients", []))[:3],
+                "target_only_ingredients": target_all_ingredients[:10],
+                "shared_categories": [main_category],
+                "different_categories": [],
+            }
+            reason = (
+                f"직접 공유 원료는 확인되지 않았지만, OCR에서 확인된 핵심 원료가 {main_category}로 분류되어 "
+                f"같은 기능군의 공식 제품을 참고 후보로 표시합니다."
+            )
+            explanation = build_explanation_json(reason, comparison, "낮음")
+            explanation["similarity_algorithm"] = SIMILARITY_ALGORITHM_VERSION
+            explanation["semantic_weighted_jaccard_v2"] = {
+                "algorithm": SIMILARITY_ALGORITHM_VERSION,
+                "fallback_type": "sparse_upload_category_fallback",
+                "base_semantic_ingredient_count": len(temp_profile.get("ingredient_scores", []) or []),
+                "target_semantic_ingredient_count": vector_size,
+                "shared_semantic_keys": [],
+                "score_adjustments": [
+                    {
+                        "type": "sparse_upload_category_fallback",
+                        "main_category": main_category,
+                        "keyword_hits": keyword_hits,
+                    }
+                ],
+            }
+            seen_report_nos.add(report_no)
+            fallback_candidates.append(
+                {
+                    "rank": 0,
+                    "report_no": report_no,
+                    "target_report_no": report_no,
+                    "product_name": str(target_profile.get("product_name", "") or ""),
+                    "target_product_name": str(target_profile.get("product_name", "") or ""),
+                    "target_product_main_category": main_category,
+                    "similarity_score": fallback_score,
+                    "function_similarity_score": float(function_similarity_score),
+                    "core_match_score": core_match_score,
+                    "substitutability": "낮음",
+                    "recommendation_quality": "category_fallback",
+                    "recommendation_display_eligible": True,
+                    "recommendation_review_reason": "sparse_upload_category_fallback",
+                    "shared_ingredients": [],
+                    "target_primary_ingredients": target_primary_ingredients,
+                    "target_secondary_ingredients": target_secondary_ingredients,
+                    "target_support_ingredients": target_support_ingredients,
+                    "target_all_ingredients": target_all_ingredients,
+                    "target_other_ingredients": target_all_ingredients,
+                    "shared_categories": [main_category],
+                    "reason": reason,
+                    "caution": "직접 공유 원료가 없어 참고용 추천입니다. OCR 원료명과 제품 유형을 확인해주세요.",
+                    "explanation": explanation,
+                    "exact_same_upload": False,
+                    "profile_signature": str(target_profile.get("profile_signature", "") or ""),
+                    "uploaded_match_types": [],
+                    "uploaded_match_labels": [],
+                    "uploaded_status": str(target_profile.get("status", "") or ""),
+                    "uploaded_quality_grade": str(target_profile.get("quality_grade", "") or ""),
+                }
+            )
+
+        fallback_candidates = sorted(
+            fallback_candidates,
+            key=lambda item: (
+                -float(item.get("similarity_score", 0.0) or 0.0),
+                -float(item.get("function_similarity_score", 0.0) or 0.0),
+                str(item.get("target_report_no", "") or ""),
+            ),
+        )
+        return fallback_candidates[:top_k]
+
     def calculate_similar_products_for_temp_vector(
         self,
         temp_vector: Dict[str, float],
@@ -4065,6 +4273,14 @@ class UploadRecommendationService:
             else:
                 if bool(item.get("recommendation_display_eligible", True)):
                     official_rows.append(item)
+
+        if not official_rows:
+            official_rows = self._build_sparse_category_fallback_rows(
+                temp_profile,
+                candidate_pool,
+                {str(item.get("report_no", "") or "") for item in exact_rows + uploaded_rows},
+                top_k,
+            )
 
         uploaded_debug_rows: List[dict] = []
         seen_uploaded_debug_keys = set()
