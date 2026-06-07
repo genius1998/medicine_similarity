@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>성분콕 원료 DB</title>
+  <style>
+    :root {
+      --bg: #f5f5f5;
+      --panel: #ffffff;
+      --ink: #222222;
+      --muted: #666666;
+      --line: #cfcfcf;
+      --line-strong: #b8b8b8;
+      --accent: #1f5b43;
+      --accent-soft: #edf4f0;
+      --warn-bg: #f6f1e4;
+      --warn-line: #d8c9a3;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: "Malgun Gothic", "Apple SD Gothic Neo", sans-serif; background: var(--bg); color: var(--ink); font-size: 14px; line-height: 1.5; }
+    .app-header { border-bottom: 1px solid var(--line-strong); background: #f0f2f1; }
+    .header-inner { max-width: 1500px; margin: 0 auto; padding: 12px 18px; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+    h1 { margin: 0; font-size: 22px; color: #173d2d; }
+    .header-desc, .hint-text, .muted { color: var(--muted); font-size: 12px; line-height: 1.5; }
+    .wrap { max-width: 1500px; margin: 0 auto; padding: 12px 18px 32px; }
+    .top-actions, .button-row, .pager { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .section-box { border: 1px solid var(--line); border-radius: 4px; background: var(--panel); padding: 12px; margin-bottom: 12px; }
+    .section-caption { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid #dddddd; }
+    .section-caption h2 { margin: 0; font-size: 17px; }
+    .button, .button-secondary {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid #aab7b0;
+      border-radius: 4px;
+      padding: 7px 12px;
+      font-size: 13px;
+      font-weight: 700;
+      text-decoration: none;
+      cursor: pointer;
+    }
+    .button { background: var(--accent); border-color: #1b503b; color: #fff; }
+    .button-secondary { background: #f8f8f8; color: #222; }
+    .button-secondary.is-active { background: var(--accent-soft); border-color: #86a493; color: var(--accent); }
+    .search-grid { display: grid; grid-template-columns: minmax(260px, 1.4fr) minmax(160px, 0.45fr) minmax(120px, 0.3fr) auto; gap: 8px; align-items: end; }
+    .field { display: grid; gap: 4px; }
+    .field label { font-size: 12px; color: var(--muted); }
+    input[type="text"], input[type="number"], select {
+      width: 100%;
+      border: 1px solid #bfc5c2;
+      border-radius: 4px;
+      padding: 7px 8px;
+      font-size: 13px;
+      background: #fff;
+    }
+    .meta-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--muted); font-size: 12px; margin-bottom: 10px; }
+    .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 4px; background: #fff; }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    th, td { border: 1px solid #d7d7d7; padding: 8px; vertical-align: top; text-align: left; font-size: 13px; word-break: break-word; }
+    th { background: #f0f0f0; font-weight: 700; color: #333; }
+    .chip { display: inline-flex; align-items: center; padding: 2px 7px; border: 1px solid #c9d8cf; border-radius: 12px; background: var(--accent-soft); color: var(--accent); font-size: 11px; line-height: 1.4; white-space: nowrap; }
+    .chip.warn { background: var(--warn-bg); border-color: var(--warn-line); color: #7b6122; }
+    .pager { justify-content: center; margin-top: 12px; }
+    .empty-panel { color: var(--muted); font-size: 13px; line-height: 1.6; padding: 14px; border: 1px dashed #c9c9c9; border-radius: 4px; background: #fafafa; }
+    @media (max-width: 980px) {
+      .search-grid { grid-template-columns: 1fr; }
+      table { min-width: 980px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="app-header">
+    <div class="header-inner">
+      <div>
+        <h1>성분콕 원료 DB</h1>
+        <div class="header-desc">등록된 기능성 원료, 카테고리, 기능 설명을 페이지 단위로 조회합니다.</div>
+      </div>
+      <div class="top-actions">
+        <a class="button-secondary" href="/home">메인</a>
+        <a class="button-secondary" href="/products">제품 목록</a>
+        {% if current_user and current_user.role == 'admin' %}<a class="button-secondary" href="/admin/ingredients">관리자 원료 관리</a>{% endif %}
+      </div>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <section class="section-box">
+      <div class="section-caption">
+        <div>
+          <h2>검색</h2>
+          <div class="hint-text">원료명, 카테고리, 기능 설명, 기능 문구 기준으로 검색합니다.</div>
+        </div>
+      </div>
+      <form method="get" action="/ingredients" class="search-grid">
+        <div class="field">
+          <label for="q">키워드</label>
+          <input id="q" type="text" name="q" value="{{ ingredient_query }}" placeholder="예: 밀크씨슬, 홍삼, 장 건강">
+        </div>
+        <div class="field">
+          <label for="origin">구분</label>
+          <select id="origin" name="origin">
+            <option value="all" {% if ingredient_origin == 'all' %}selected{% endif %}>전체</option>
+            <option value="existing" {% if ingredient_origin == 'existing' %}selected{% endif %}>기존 원료</option>
+            <option value="new" {% if ingredient_origin == 'new' %}selected{% endif %}>신규 추가</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="page_size">페이지 크기</label>
+          <input id="page_size" type="number" name="page_size" min="10" max="200" value="{{ ingredient_page_size }}">
+        </div>
+        <div class="button-row">
+          <button class="button" type="submit">검색</button>
+          <a class="button-secondary" href="/ingredients">초기화</a>
+        </div>
+      </form>
+    </section>
+
+    <section class="section-box">
+      <div class="section-caption">
+        <div>
+          <h2>원료 목록</h2>
+          <div class="hint-text">신규 추가 원료는 같은 이름의 기존 원료보다 우선 표시됩니다.</div>
+        </div>
+      </div>
+      <div class="meta-row">
+        <div>총 {{ ingredient_catalog_page.total_count }}개 / {{ ingredient_catalog_page.page }}페이지</div>
+        <div>{{ ingredient_catalog_page.page }} / {{ ingredient_catalog_page.total_pages }}</div>
+      </div>
+      {% if ingredient_catalog_page.results %}
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:20%">원료명</th>
+              <th style="width:12%">구분</th>
+              <th style="width:14%">카테고리</th>
+              <th style="width:22%">기능 설명</th>
+              <th style="width:22%">기능 문구</th>
+              <th style="width:10%">출처</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in ingredient_catalog_page.results %}
+            <tr>
+              <td><strong>{{ item.functional_ingredient_name }}</strong></td>
+              <td><span class="chip {% if item.origin_type == 'new' %}warn{% endif %}">{{ item.origin_label }}</span></td>
+              <td>{{ item.category_main or '-' }}{% if item.category_sub %}<br><span class="muted">{{ item.category_sub }}</span>{% endif %}</td>
+              <td>{{ item.function_text or '-' }}</td>
+              <td>{{ item.claim_text or '-' }}</td>
+              <td>{{ item.source or '-' }}<br><span class="muted">{{ '%.3f'|format(item.confidence or 0) }}</span></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="empty-panel">조건에 맞는 원료가 없습니다.</div>
+      {% endif %}
+
+      <div class="pager">
+        <a class="button-secondary" href="/ingredients?q={{ ingredient_query_encoded }}&origin={{ ingredient_origin }}&page={{ ingredient_catalog_page.prev_page }}&page_size={{ ingredient_page_size }}">이전</a>
+        {% for page_no in ingredient_page_numbers %}
+        <a class="button-secondary {% if page_no == ingredient_catalog_page.page %}is-active{% endif %}" href="/ingredients?q={{ ingredient_query_encoded }}&origin={{ ingredient_origin }}&page={{ page_no }}&page_size={{ ingredient_page_size }}">{{ page_no }}</a>
+        {% endfor %}
+        <a class="button-secondary" href="/ingredients?q={{ ingredient_query_encoded }}&origin={{ ingredient_origin }}&page={{ ingredient_catalog_page.next_page }}&page_size={{ ingredient_page_size }}">다음</a>
+      </div>
+    </section>
+  </div>
+</body>
+</html>

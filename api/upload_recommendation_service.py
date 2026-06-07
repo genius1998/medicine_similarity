@@ -2480,6 +2480,195 @@ class UploadRecommendationService:
         ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
         return ranked[0][0] if ranked else ""
 
+    def _find_existing_db_match(self, ingredient_name: str, raw_ingredient: str = "", display_name: str = "") -> Optional[dict]:
+        self._ensure_loaded()
+        runtime = self.recommendation_service.runtime
+        normalized_input = str(ingredient_name or "").strip()
+        raw_input = str(raw_ingredient or normalized_input).strip()
+        display_input = str(display_name or raw_input or normalized_input).strip()
+        input_family = resolve_joint_input_family(display_input, raw_input, normalized_input)
+        mapping_rule = resolve_runtime_mapping_rule(display_input, raw_input, normalized_input)
+        direct_terms = self._resolve_match_terms(normalized_input, raw_input, display_input, input_family)
+        safe_alias_terms = self._resolve_safe_alias_terms(normalized_input, raw_input, display_input, mapping_rule)
+        normalized_raw_exact = normalize_cache_exact_key(normalized_input or raw_input or display_input)
+        raw_normalized_exact = normalize_cache_exact_key(raw_input or display_input or normalized_input)
+
+        def iter_unique_rows(rows: List[sqlite3.Row]) -> List[sqlite3.Row]:
+            seen = set()
+            unique_rows: List[sqlite3.Row] = []
+            for row in rows:
+                key = (
+                    str(row["raw_ingredient"] or ""),
+                    str(row["matched_standard_name"] or ""),
+                    str(row["relation_type"] or ""),
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
+                unique_rows.append(row)
+            return unique_rows
+
+        with sqlite_connection(runtime["sqlite_path"]) as conn:
+            conn.row_factory = sqlite3.Row
+            for row in iter_unique_rows(self._fetch_cache_rows_by_normalized_raw(conn, normalized_raw_exact)):
+                match = self._resolve_cache_row_match(
+                    ingredient_name=normalized_input,
+                    raw_ingredient=raw_input,
+                    display_name=display_input,
+                    row=row,
+                    input_family=input_family,
+                    allow_like=False,
+                    mapping_rule=mapping_rule,
+                    source_override="cache_normalized_exact",
+                )
+                if match:
+                    return match
+
+            if raw_normalized_exact and raw_normalized_exact != normalized_raw_exact:
+                for row in iter_unique_rows(self._fetch_cache_rows_by_normalized_raw(conn, raw_normalized_exact)):
+                    match = self._resolve_cache_row_match(
+                        ingredient_name=normalized_input,
+                        raw_ingredient=raw_input,
+                        display_name=display_input,
+                        row=row,
+                        input_family=input_family,
+                        allow_like=False,
+                        mapping_rule=mapping_rule,
+                        source_override="cache_raw_normalized_exact",
+                    )
+                    if match:
+                        return match
+
+            for row in iter_unique_rows(self._fetch_cache_rows_by_raw(conn, raw_input)):
+                match = self._resolve_cache_row_match(
+                    ingredient_name=normalized_input,
+                    raw_ingredient=raw_input,
+                    display_name=display_input,
+                    row=row,
+                    input_family=input_family,
+                    allow_like=False,
+                    mapping_rule=mapping_rule,
+                    source_override="cache_raw_exact",
+                )
+                if match:
+                    return match
+
+            for direct_name in direct_terms:
+                direct = self._lookup_category_row(direct_name)
+                if not direct:
+                    continue
+                resolved_name = str(direct["functional_ingredient_name"] or "").strip()
+                if not resolved_name or not self._is_allowed_by_mapping_rule(mapping_rule, resolved_name):
+                    continue
+                resolved_family = infer_joint_ingredient_family(resolved_name)
+                if input_family and resolved_family and resolved_family != input_family:
+                    continue
+                return self._build_match_payload(
+                    ingredient_name=normalized_input,
+                    raw_ingredient=raw_input,
+                    display_name=display_input,
+                    functional_ingredient_name=resolved_name,
+                    relation_type="same_ingredient",
+                    confidence=0.99 if input_family else 0.98,
+                    category_row=direct,
+                    match_source="direct_category",
+                    protected_family=input_family,
+                )
+
+            for alias_term in safe_alias_terms:
+                direct = self._lookup_category_row(alias_term)
+                if not direct:
+                    continue
+                resolved_name = str(direct["functional_ingredient_name"] or "").strip()
+                if not resolved_name or not self._is_allowed_by_mapping_rule(mapping_rule, resolved_name):
+                    continue
+                resolved_family = infer_joint_ingredient_family(resolved_name)
+                if input_family and resolved_family and resolved_family != input_family:
+                    continue
+                return self._build_match_payload(
+                    ingredient_name=normalized_input,
+                    raw_ingredient=raw_input,
+                    display_name=display_input,
+                    functional_ingredient_name=resolved_name,
+                    relation_type="same_ingredient",
+                    confidence=0.97 if mapping_rule else 0.96,
+                    category_row=direct,
+                    match_source="safe_alias_exact",
+                    protected_family=input_family,
+                )
+
+            matched_standard_terms = dedupe_strings([*safe_alias_terms, *direct_terms])
+            for term in matched_standard_terms:
+                for row in iter_unique_rows(self._fetch_cache_rows_by_matched_standard(conn, term)):
+                    match = self._resolve_cache_row_match(
+                        ingredient_name=normalized_input,
+                        raw_ingredient=raw_input,
+                        display_name=display_input,
+                        row=row,
+                        input_family=input_family,
+                        allow_like=False,
+                        mapping_rule=mapping_rule,
+                        source_override="cache_matched_standard_exact",
+                    )
+                    if match:
+                        return match
+
+            if not is_like_blocked_input(raw_input, display_input, normalized_input):
+                like_rows: List[sqlite3.Row] = []
+                seen_like = set()
+                for term in direct_terms:
+                    normalized_term = normalize_cache_exact_key(term)
+                    if not normalized_term or is_like_blocked_input(term):
+                        continue
+                    if len(normalized_term) < 5:
+                        continue
+                    for row in self._fetch_cache_rows(conn, term, like=True):
+                        key = (
+                            str(row["raw_ingredient"] or ""),
+                            str(row["matched_standard_name"] or ""),
+                            str(row["relation_type"] or ""),
+                        )
+                        if key in seen_like:
+                            continue
+                        seen_like.add(key)
+                        like_rows.append(row)
+                for row in like_rows:
+                    match = self._resolve_cache_row_match(
+                        ingredient_name=normalized_input,
+                        raw_ingredient=raw_input,
+                        display_name=display_input,
+                        row=row,
+                        input_family=input_family,
+                        allow_like=True,
+                        mapping_rule=mapping_rule,
+                    )
+                    if match:
+                        return match
+
+        return None
+
+    def lookup_existing_ingredient_db_match(self, ingredient_text: str) -> dict:
+        raw_input = str(ingredient_text or "").strip()
+        normalized_input = canonicalize_ingredient_for_matching(raw_input) if raw_input else ""
+        normalized_input = normalized_input or raw_input
+        ingredient_object = {
+            "raw": raw_input,
+            "display_name": raw_input,
+            "normalized_for_matching": normalized_input,
+            "role": "primary",
+        }
+        match = self._find_existing_db_match(normalized_input, raw_ingredient=raw_input, display_name=raw_input) if raw_input else None
+        matches = [match] if match else []
+        if matches:
+            self._annotate_runtime_vector_usage(matches)
+        status = self.build_ingredient_db_match_statuses([ingredient_object], matched_ingredients=matches)[0]
+        return {
+            "query": raw_input,
+            "normalized_query": normalized_input,
+            "matched": bool(match),
+            "match": status,
+        }
+
     def _find_match_in_cache(self, ingredient_name: str, raw_ingredient: str = "", display_name: str = "", request_id: str = "") -> Optional[dict]:
         # Match order:
         # 1) ingredient_match_cache.normalized_raw exact

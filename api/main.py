@@ -194,6 +194,36 @@ def home_page(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request, "home.html", template_context(request))
 
 
+@app.get("/ingredients", response_class=HTMLResponse)
+def ingredient_catalog_page(
+    request: Request,
+    q: str = Query(""),
+    origin: str = Query("all"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=10, le=200),
+) -> HTMLResponse:
+    catalog_page = ops_service.list_ingredient_catalog_page(
+        q=q,
+        origin=origin,
+        page=page,
+        page_size=page_size,
+        sync_pending=False,
+    )
+    total_pages = int(catalog_page.get("total_pages", 1) or 1)
+    current_page = int(catalog_page.get("page", 1) or 1)
+    page_numbers = list(range(max(1, current_page - 2), min(total_pages, current_page + 2) + 1))
+    context = template_context(
+        request,
+        ingredient_catalog_page=catalog_page,
+        ingredient_query=str(q or ""),
+        ingredient_query_encoded=quote_plus(str(q or "")),
+        ingredient_origin=str(catalog_page.get("origin", origin) or "all"),
+        ingredient_page_size=int(catalog_page.get("page_size", page_size) or page_size),
+        ingredient_page_numbers=page_numbers,
+    )
+    return templates.TemplateResponse(request, "ingredients.html", context)
+
+
 @app.get("/login", response_class=HTMLResponse)
 def login_page(request: Request, error: str = Query(""), joined: str = Query("")) -> HTMLResponse:
     user = get_current_user(request)
@@ -523,6 +553,27 @@ def get_catalog_product_detail(request: Request, report_no: str) -> dict:
     if not detail:
         raise HTTPException(status_code=404, detail=f"report_no not found: {report_no}")
     return detail
+
+
+@app.get("/api/ingredients/match")
+def match_ingredient_from_db(q: str = Query(..., min_length=1, max_length=200)) -> dict:
+    return upload_service.lookup_existing_ingredient_db_match(q)
+
+
+@app.get("/api/ingredients")
+def list_ingredients(
+    q: str = Query("", min_length=0),
+    origin: str = Query("all"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+) -> dict:
+    return ops_service.list_ingredient_catalog_page(
+        q=q,
+        origin=origin,
+        page=page,
+        page_size=page_size,
+        sync_pending=False,
+    )
 
 
 @app.get("/api/products/search", response_model=ProductSearchResponse)

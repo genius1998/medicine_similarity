@@ -179,6 +179,60 @@
       background: #f8f8f8;
       color: #222;
     }
+    .ingredient-search {
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) auto auto;
+      gap: 8px;
+      align-items: center;
+    }
+    .ingredient-search input {
+      width: 100%;
+      min-width: 0;
+      border: 1px solid #bfc5c2;
+      border-radius: 4px;
+      padding: 7px 8px;
+      font-size: 13px;
+      background: #fff;
+    }
+    .ingredient-result {
+      margin-top: 10px;
+      border: 1px solid #d7d7d7;
+      border-radius: 4px;
+      background: #fafafa;
+      padding: 10px;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .ingredient-result.is-empty {
+      border-style: dashed;
+      color: var(--muted);
+    }
+    .ingredient-result dl {
+      display: grid;
+      grid-template-columns: 130px minmax(0, 1fr);
+      gap: 6px 10px;
+      margin: 0;
+    }
+    .ingredient-result dt {
+      color: var(--muted);
+      font-weight: 700;
+    }
+    .ingredient-result dd {
+      margin: 0;
+      word-break: break-word;
+    }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 7px;
+      border: 1px solid #c9d8cf;
+      border-radius: 12px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 11px;
+      line-height: 1.4;
+      white-space: nowrap;
+    }
     ul {
       margin: 0;
       padding-left: 18px;
@@ -189,6 +243,8 @@
     @media (max-width: 920px) {
       .layout { grid-template-columns: 1fr; }
       .menu-grid { grid-template-columns: 1fr; }
+      .ingredient-search { grid-template-columns: 1fr; }
+      .ingredient-result dl { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -236,6 +292,21 @@
               <tr><th>추천 기준</th><td>기능성 원료, 제품 카테고리, 제품 프로필 기반 유사도 계산</td></tr>
             </tbody>
           </table>
+        </section>
+
+        <section class="section-box">
+          <div class="section-caption">
+            <div>
+              <h2>원료 DB 매칭 검색</h2>
+              <div class="hint-text">원료명을 입력하면 기존 DB에서 어떤 표준 원료와 카테고리로 매칭되는지 확인합니다.</div>
+            </div>
+          </div>
+          <div class="ingredient-search">
+            <input id="ingredientSearchInput" type="search" placeholder="예: 밀크씨슬, 홍삼농축액, 프로바이오틱스">
+            <button id="ingredientSearchButton" class="button" type="button">검색</button>
+            <a class="button-secondary" href="/ingredients">원료DB 더보기</a>
+          </div>
+          <div id="ingredientSearchResult" class="ingredient-result is-empty">원료명을 입력하고 검색하면 DB 매칭 결과가 표시됩니다.</div>
         </section>
 
         <section class="section-box">
@@ -309,5 +380,76 @@
       </div>
     </section>
   </div>
+  <script>
+    const ingredientInput = document.getElementById("ingredientSearchInput");
+    const ingredientButton = document.getElementById("ingredientSearchButton");
+    const ingredientResult = document.getElementById("ingredientSearchResult");
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function renderIngredientEmpty(message) {
+      ingredientResult.className = "ingredient-result is-empty";
+      ingredientResult.textContent = message;
+    }
+
+    function renderIngredientMatch(payload) {
+      const item = payload.match || {};
+      if (!payload.matched) {
+        renderIngredientEmpty(`"${payload.query || ""}" 원료는 기존 DB에서 매칭되는 표준 원료를 찾지 못했습니다.`);
+        return;
+      }
+      ingredientResult.className = "ingredient-result";
+      const category = [item.category_main, item.category_sub].filter(Boolean).join(" / ") || "-";
+      const functionText = item.function_text || item.claim_text || "-";
+      const vectorText = item.vector_include ? "추천 벡터 반영 가능" : "추천 벡터 제외 또는 보조 정보";
+      ingredientResult.innerHTML = `
+        <dl>
+          <dt>입력 원료</dt><dd>${escapeHtml(payload.query || item.display_name || "-")}</dd>
+          <dt>매칭 원료</dt><dd><strong>${escapeHtml(item.functional_ingredient_name || "-")}</strong></dd>
+          <dt>카테고리</dt><dd><span class="chip">${escapeHtml(category)}</span></dd>
+          <dt>매칭 방식</dt><dd>${escapeHtml(item.match_source || "-")} / ${escapeHtml(item.relation_type || "-")} / 신뢰도 ${Number(item.confidence || 0).toFixed(3)}</dd>
+          <dt>기능</dt><dd>${escapeHtml(functionText)}</dd>
+          <dt>추천 반영</dt><dd>${escapeHtml(vectorText)}</dd>
+        </dl>
+      `;
+    }
+
+    async function searchIngredient() {
+      const query = ingredientInput.value.trim();
+      if (!query) {
+        renderIngredientEmpty("검색할 원료명을 입력하세요.");
+        ingredientInput.focus();
+        return;
+      }
+      ingredientButton.disabled = true;
+      renderIngredientEmpty("검색 중입니다...");
+      try {
+        const response = await fetch(`/api/ingredients/match?q=${encodeURIComponent(query)}`);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        renderIngredientMatch(await response.json());
+      } catch (error) {
+        renderIngredientEmpty("원료 DB 매칭 조회 중 오류가 발생했습니다.");
+      } finally {
+        ingredientButton.disabled = false;
+      }
+    }
+
+    ingredientButton.addEventListener("click", searchIngredient);
+    ingredientInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        searchIngredient();
+      }
+    });
+  </script>
 </body>
 </html>
