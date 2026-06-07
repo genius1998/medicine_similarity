@@ -196,22 +196,37 @@ def select_product_ids(
     *,
     all_products: bool,
     report_nos: list[str],
+    include_report_nos: list[str] | None = None,
     main_categories: list[str],
     sample_size: int,
     per_category: int,
     seed: int,
 ) -> list[str]:
     wanted_main_categories = {str(value or "").strip() for value in main_categories if str(value or "").strip()}
-    eligible = [
+    all_eligible = [
         product_id
         for product_id, profile in profiles.items()
         if product_id in product_vectors and str(profile.get("report_no", "") or "").strip()
-        and (
+    ]
+    all_eligible.sort(key=lambda product_id: (str(profiles[product_id].get("report_no", "") or ""), product_id))
+    eligible = [
+        product_id
+        for product_id in all_eligible
+        if (
             not wanted_main_categories
-            or str(profile.get("product_main_category", "") or "").strip() in wanted_main_categories
+            or str(profiles[product_id].get("product_main_category", "") or "").strip() in wanted_main_categories
         )
     ]
-    eligible.sort(key=lambda product_id: (str(profiles[product_id].get("report_no", "") or ""), product_id))
+    eligible_report_nos = {str(profiles[product_id].get("report_no", "") or "") for product_id in all_eligible}
+    include_wanted = {str(value or "").strip() for value in (include_report_nos or []) if str(value or "").strip()}
+    include_missing = sorted(include_wanted - eligible_report_nos)
+    if include_missing:
+        raise ValueError(f"include_report_no not found: {include_missing[:10]}")
+    include_selected = [
+        product_id
+        for product_id in all_eligible
+        if str(profiles[product_id].get("report_no", "") or "") in include_wanted
+    ]
 
     if report_nos:
         wanted = {str(value or "").strip() for value in report_nos if str(value or "").strip()}
@@ -222,28 +237,42 @@ def select_product_ids(
         return selected
 
     if all_products:
-        return eligible
+        selected = list(include_selected)
+        selected_set = set(selected)
+        selected.extend(product_id for product_id in eligible if product_id not in selected_set)
+        return selected
 
     rng = random.Random(seed)
+    selected: list[str] = list(include_selected)
+    selected_set = set(selected)
     by_category: dict[str, list[str]] = defaultdict(list)
     for product_id in eligible:
+        if product_id in selected_set:
+            continue
         category = str(profiles[product_id].get("product_main_category", "") or "기타").strip() or "기타"
         by_category[category].append(product_id)
 
-    selected: list[str] = []
     for category in sorted(by_category):
         group = list(by_category[category])
         rng.shuffle(group)
-        selected.extend(group[: max(0, per_category)])
+        for product_id in group[: max(0, per_category)]:
+            if product_id not in selected_set:
+                selected.append(product_id)
+                selected_set.add(product_id)
 
     if sample_size > 0:
-        selected_set = set(selected)
+        target_size = max(sample_size, len(include_selected))
         remaining = [product_id for product_id in eligible if product_id not in selected_set]
         rng.shuffle(remaining)
-        selected.extend(remaining[: max(0, sample_size - len(selected))])
-        if len(selected) > sample_size:
-            rng.shuffle(selected)
-            selected = selected[:sample_size]
+        fill = remaining[: max(0, target_size - len(selected))]
+        selected.extend(fill)
+        selected_set.update(fill)
+        if len(selected) > target_size:
+            include_set = set(include_selected)
+            keep = [product_id for product_id in selected if product_id in include_set]
+            optional = [product_id for product_id in selected if product_id not in include_set]
+            rng.shuffle(optional)
+            selected = keep + optional[: max(0, target_size - len(keep))]
 
     selected.sort(key=lambda product_id: (str(profiles[product_id].get("product_main_category", "") or ""), str(profiles[product_id].get("report_no", "") or ""), product_id))
     return selected
@@ -657,6 +686,7 @@ def prepare(args: argparse.Namespace) -> None:
         product_vectors,
         all_products=args.all,
         report_nos=args.report_no or [],
+        include_report_nos=args.include_report_no or [],
         main_categories=args.main_category or [],
         sample_size=max(0, int(args.sample_size or 0)),
         per_category=max(0, int(args.per_category or 0)),
@@ -809,6 +839,7 @@ def prepare(args: argparse.Namespace) -> None:
         "ingredient_category_profile_path": str(ingredient_profile_path or ""),
         "similarity_algorithm": similarity_algorithm,
         "selected_main_categories": list(args.main_category or []),
+        "included_report_nos": list(args.include_report_no or []),
         "profile_count": len(profiles),
         "selected_product_count": len(selected_product_ids),
         "offset": args.offset,
@@ -3524,6 +3555,12 @@ def build_parser() -> argparse.ArgumentParser:
     prepare_parser.add_argument("--sample-size", type=int, default=0, help="Optional total sample cap after stratified selection.")
     prepare_parser.add_argument("--per-category", type=int, default=10, help="Sample count per main category when --all is not set.")
     prepare_parser.add_argument("--report-no", action="append", default=[], help="Specific report_no to include. Can be repeated.")
+    prepare_parser.add_argument(
+        "--include-report-no",
+        action="append",
+        default=[],
+        help="Report_no to force into a sampled batch. Can be repeated.",
+    )
     prepare_parser.add_argument("--main-category", action="append", default=[], help="Restrict sampling to a main category. Can be repeated.")
     prepare_parser.add_argument("--offset", type=int, default=0, help="Skip this many selected products before applying --limit.")
     prepare_parser.add_argument("--limit", type=int, default=0, help="Final cap for quick smoke runs.")

@@ -2,19 +2,19 @@
 
 ## Current Decision
 
-Keep `semantic_weighted_jaccard_v2_9` with the narrow `oral_single_core_broad_target_score_cap`.
+Keep `semantic_weighted_jaccard_v2_9` with the narrow `oral_single_core_broad_target_score_cap` and `lipid_lecithin_single_core_broad_target_score_cap`.
 
 The latest OpenAI `gpt-5-nano` judge validation passes the quality gate:
 
 | Metric | Value |
 | --- | ---: |
-| Labels | 74,746 / 74,746 |
-| Products | 14,955 |
-| Batch requests | 10,521 |
-| Weak/bad count | 6,402 |
-| Weak/bad rate | 8.57% |
-| High-score weak/bad count | 992 |
-| High-score weak/bad rate | 1.33% |
+| Labels | 76,356 / 76,356 |
+| Products | 15,255 |
+| Batch requests | 10,742 |
+| Weak/bad count | 6,533 |
+| Weak/bad rate | 8.56% |
+| High-score weak/bad count | 999 |
+| High-score weak/bad rate | 1.31% |
 | Actionable pattern count | 0 |
 
 Gate decision:
@@ -29,7 +29,7 @@ Recommended next action:
 stop_sampling_keep_current_algorithm
 ```
 
-The candidate cap patterns are not actionable because they affect too many reasonable or acceptable-adjacent recommendations relative to the weak/bad cases they catch.
+Broad candidate cap patterns are not actionable because they affect too many reasonable or acceptable-adjacent recommendations relative to the weak/bad cases they catch.
 
 The targeted p50 sample alone pushed the aggregate weak/bad rate just over the review gate, but it still had no low-blast-radius pattern candidate. Neutral all-category p10, p15, p20, p25, p30, p35, and p40 holdouts were added next. The p40 holdout was split into two OpenAI Batch jobs because the full prepared JSONL exceeded the current `gpt-5-nano` 2M enqueued-token limit. Part 1 had a `4.76%` weak/bad rate, and part 2 had a `10.32%` weak/bad rate, but neither found an actionable low-blast-radius pattern.
 
@@ -73,22 +73,24 @@ A targeted follow-up p40 sample with seed `2026060716` was then run against the 
 
 A high-score weak pattern check p120 sample with seed `2026060717` was then run against 구강 건강 and 피로개선 after unique-pair analysis found two narrow candidates. It covered `240` products and produced `196` OpenAI Batch requests with complete label coverage. The standalone weak/bad rate was `6.44%`, standalone high-score weak/bad rate was `1.75%`, and the broad 피로개선 candidate did not reproduce strongly enough. The 구강 건강 single-core broad-target candidate did reproduce: the confirmed cap applies only when a 구강 건강 base and target share one core semantic ingredient, the base has no unshared semantic ingredient, the target has at least two extra semantic ingredients, and the pre-cap score is in the `0.64` to `0.75` borderline range. Impact analysis on the merged validation applied `oral_single_core_broad_target_score_cap` to only `24` rows: `22` weak rows and `2` acceptable-adjacent rows. It reduced high-score weak/bad rows from `1,014` to `992`, so the cap was added.
 
+A high-score weak pattern follow-up p300 sample with seed `2026060718` was then run against 피로개선, 혈중지질, and 혈행 after unique-pair analysis found several small exact-core candidates. It covered `300` products and produced `221` OpenAI Batch requests with complete label coverage. The standalone weak/bad rate was `8.14%`, standalone high-score weak/bad rate was `1.55%`, and the 매실추출물, 홍경천, and 영지버섯 candidates did not justify a cap because the confirmation sample either had low weak reproduction or too many non-weak rows. The 혈중지질 레시틴 candidate did reproduce strongly enough: `7` unique high-score pairs had `6` weak and `1` acceptable-adjacent labels in the confirmation sample, and cumulative impact applied `lipid_lecithin_single_core_broad_target_score_cap` to only `21` rows: `18` weak rows and `3` acceptable-adjacent rows. The cap applies only when a 혈중지질 base and target share the single core semantic key `레시틴`, the base has no unshared semantic ingredient, the target has exactly one extra semantic ingredient, and the pre-cap score is in the `0.64` to `0.90` range. It reduced merged high-score weak/bad rows from `1,039` to `999`, so the cap was added.
+
 Latest high-score weak diagnostics also support keeping the current algorithm:
 
-- High-score rows: `58,215`
-- High-score weak/bad rows: `992`
-- Within-high-score weak/bad rate: `1.70%`
-- Overall high-score weak/bad rate: `1.33%`
-- `function_similarity < 0.40` would catch `398` weak/bad rows but also affect `6,608` non-weak rows.
-- `not_same_primary` would catch `250` weak/bad rows but also affect `6,101` non-weak rows.
-- `same_primary_set` appears in `742` high-score weak/bad rows, so primary-set equality alone is not a reliable accept signal or reject signal.
+- High-score rows: `59,479`
+- High-score weak/bad rows: `999`
+- Within-high-score weak/bad rate: `1.68%`
+- Overall high-score weak/bad rate: `1.31%`
+- `function_similarity < 0.40` would catch `405` weak/bad rows but also affect `6,710` non-weak rows.
+- `not_same_primary` would catch `258` weak/bad rows but also affect `6,309` non-weak rows.
+- `same_primary_set` appears in `741` high-score weak/bad rows, so primary-set equality alone is not a reliable accept signal or reject signal.
 
 ## Validation Inputs
 
 Current merged validation output:
 
 ```text
-output/recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted_holdout2026060717_patterncheck_p120
+output/recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted_holdout2026060718_patternfollowup_p300_lecithin_cap
 ```
 
 Included samples:
@@ -146,6 +148,7 @@ output/recommendation_quality_judge_v2_9_openai_targeted_lowcoverage_mixed_seed2
 output/recommendation_quality_judge_v2_9_openai_targeted_weakconfirm_seed2026060715_p35
 output/recommendation_quality_judge_v2_9_openai_targeted_followup_seed2026060716_p40
 output/recommendation_quality_judge_v2_9_openai_targeted_patterncheck_seed2026060717_p120
+output/recommendation_quality_judge_v2_9_openai_targeted_patternfollowup_seed2026060718_p300
 ```
 
 Retry replacements:
@@ -221,6 +224,7 @@ python scripts\recommendation_quality_judge_batch.py validate-results `
   --parts-glob "output\recommendation_quality_judge_v2_9_openai_targeted_weakconfirm_seed2026060715_p35" `
   --parts-glob "output\recommendation_quality_judge_v2_9_openai_targeted_followup_seed2026060716_p40" `
   --parts-glob "output\recommendation_quality_judge_v2_9_openai_targeted_patterncheck_seed2026060717_p120" `
+  --parts-glob "output\recommendation_quality_judge_v2_9_openai_targeted_patternfollowup_seed2026060718_p300" `
   --retry-glob "output\recommendation_quality_judge_v2_9_openai_chunk_*_retry_*" `
   --retry-glob "output\recommendation_quality_judge_v2_9_openai_targeted_next_seed202606066_p40_retry_*" `
   --retry-glob "output\recommendation_quality_judge_v2_9_openai_targeted_next_seed202606067_p50_retry_*" `
@@ -231,7 +235,7 @@ python scripts\recommendation_quality_judge_batch.py validate-results `
   --retry-glob "output\recommendation_quality_judge_v2_9_openai_targeted_highweak_seed202606076_p35_retry_*" `
   --retry-glob "output\recommendation_quality_judge_v2_9_openai_targeted_strict_highscore_seed2026060712_p25_retry_*" `
   --retry-glob "output\recommendation_quality_judge_v2_9_openai_targeted_followup_seed2026060716_p40_retry_*" `
-  --output-dir output\recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted_holdout2026060717_patterncheck_p120 `
+  --output-dir output\recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted_holdout2026060718_patternfollowup_p300_lecithin_cap `
   --high-score-threshold 0.65
 ```
 
@@ -241,7 +245,7 @@ Write the Markdown report:
 
 ```powershell
 python scripts\recommendation_quality_judge_batch.py validation-report `
-  --validation-dir output\recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted_holdout2026060717_patterncheck_p120 `
+  --validation-dir output\recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted_holdout2026060718_patternfollowup_p300_lecithin_cap `
   --top-categories 10 `
   --top-patterns 7
 ```
@@ -250,7 +254,7 @@ The report includes `high_score_weak_diagnostics.json` automatically when that f
 
 ```powershell
 python scripts\recommendation_quality_judge_batch.py diagnose-high-score-weak `
-  --validation-dir output\recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted_holdout2026060717_patterncheck_p120 `
+  --validation-dir output\recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted_holdout2026060718_patternfollowup_p300_lecithin_cap `
   --high-score-threshold 0.65
 ```
 
@@ -258,7 +262,7 @@ Regenerate only the stop/continue status:
 
 ```powershell
 python scripts\recommendation_quality_judge_batch.py validation-status `
-  --validation-dir output\recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted_holdout2026060717_patterncheck_p120
+  --validation-dir output\recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted_holdout2026060718_patternfollowup_p300_lecithin_cap
 ```
 
 ## OpenAI Batch Safety Check
@@ -289,7 +293,7 @@ When using `openai-submit` directly, pass `--require-no-active` and the current 
 python scripts\recommendation_quality_judge_batch.py openai-submit `
   --output-dir output\recommendation_quality_judge_v2_9_openai_targeted_next_seedYYYYMMDD `
   --env-path D:\health_batch_project\.env `
-  --validation-status-json output\recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted_holdout2026060717_patterncheck_p120\validation_status.json `
+  --validation-status-json output\recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted_holdout2026060718_patternfollowup_p300_lecithin_cap\validation_status.json `
   --require-no-active
 ```
 
@@ -322,7 +326,7 @@ For a prepared output directory, the submit/watch/download/finalize sequence can
 python scripts\recommendation_quality_judge_batch.py openai-run `
   --output-dir output\recommendation_quality_judge_v2_9_openai_targeted_next_seedYYYYMMDD `
   --env-path D:\health_batch_project\.env `
-  --validation-status-json output\recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted_holdout2026060717_patterncheck_p120\validation_status.json `
+  --validation-status-json output\recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted_holdout2026060718_patternfollowup_p300_lecithin_cap\validation_status.json `
   --require-no-active `
   --poll-seconds 60 `
   --timeout-seconds 7200 `
@@ -339,8 +343,8 @@ When a validation status is available, pass it to `plan-next-sample` so a stop d
 
 ```powershell
 python scripts\recommendation_quality_judge_batch.py plan-next-sample `
-  --summary-json output\recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted_holdout2026060717_patterncheck_p120\openai_chunk_judge_summary.json `
-  --validation-status-json output\recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted_holdout2026060717_patterncheck_p120\validation_status.json `
+  --summary-json output\recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted_holdout2026060718_patternfollowup_p300_lecithin_cap\openai_chunk_judge_summary.json `
+  --validation-status-json output\recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted_holdout2026060718_patternfollowup_p300_lecithin_cap\validation_status.json `
   --output-dir output\recommendation_quality_judge_v2_9_openai_next_sample_plan_after_stop
 ```
 

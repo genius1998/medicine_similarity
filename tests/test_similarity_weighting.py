@@ -1275,6 +1275,77 @@ def test_recommendation_service_marks_cached_oral_single_core_broad_target_ineli
     assert converted["recommendation_review_reason"] == "oral_single_core_broad_target"
 
 
+def test_semantic_v2_caps_lipid_lecithin_single_core_broad_target_match():
+    lipid = "\ud608\uc911\uc9c0\uc9c8"
+    lecithin = "\ub808\uc2dc\ud2f4"
+    vitamin_e = "\ube44\ud0c0\ubbfc E"
+    base = profile(lipid, primary=[lecithin], ingredient_categories={lecithin: lipid})
+    base["product_name"] = "base lecithin"
+    target = profile(
+        lipid,
+        primary=[lecithin],
+        secondary=[vitamin_e],
+        ingredient_categories={lecithin: lipid, vitamin_e: "\uc601\uc591\ubcf4\ucda9"},
+    )
+    target["product_name"] = "target lecithin plus"
+    ingredient_profiles = {
+        lecithin: {
+            "ingredient_main_category": lipid,
+            "ingredient_sub_function_categories": [],
+            "ingredient_type": "functional",
+            "vector_include": True,
+            "is_excipient": False,
+        },
+        vitamin_e: {
+            "ingredient_main_category": "\uc601\uc591\ubcf4\ucda9",
+            "ingredient_sub_function_categories": ["\ud56d\uc0b0\ud654"],
+            "ingredient_type": "nutrient",
+            "vector_include": True,
+            "is_excipient": False,
+        },
+    }
+
+    score, _, detail = calculate_semantic_weighted_jaccard_v2(base, target, ingredient_profiles)
+    metadata = recommendation_quality_metadata(score, detail)
+
+    assert score == 0.64
+    assert detail["score_adjustments"][0]["type"] == "lipid_lecithin_single_core_broad_target_score_cap"
+    assert metadata["recommendation_display_eligible"] is False
+    assert metadata["recommendation_review_reason"] == "lipid_lecithin_single_core_broad_target"
+
+
+def test_recommendation_service_marks_cached_lipid_lecithin_single_core_broad_target_ineligible():
+    lipid = "\ud608\uc911\uc9c0\uc9c8"
+    lecithin = "\ub808\uc2dc\ud2f4"
+    service = RecommendationService.__new__(RecommendationService)
+    service.profiles = {
+        "target::1": profile(lipid, primary=[lecithin], secondary=["extra-a"]),
+    }
+    base_profile = profile(lipid, primary=[lecithin])
+    semantic_detail = {
+        "base_semantic_ingredient_count": 1,
+        "target_semantic_ingredient_count": 2,
+        "shared_semantic_keys": [{"semantic_key": lecithin, "base_weight": 1.0, "target_weight": 1.0}],
+        "core_coverage": {"shared_core_semantic_keys": [lecithin]},
+        "score_adjustments": [],
+    }
+    row = {
+        "target_product_id": "target::1",
+        "target_product_name": "target lecithin plus",
+        "similarity_score": 0.833333,
+        "function_similarity_score": 0.59,
+        "core_match_score": 1.0,
+        "shared_ingredients_json": json.dumps([lecithin], ensure_ascii=False),
+        "shared_categories_json": "[]",
+        "explanation_json": json.dumps({"semantic_weighted_jaccard_v2": semantic_detail}, ensure_ascii=False),
+    }
+
+    converted = service._convert_cache_row(row, 1, base_profile)
+
+    assert converted["recommendation_display_eligible"] is False
+    assert converted["recommendation_review_reason"] == "lipid_lecithin_single_core_broad_target"
+
+
 def test_semantic_v2_caps_cross_main_weak_signal_only_sparse_match():
     lipid = "\ud608\uc911\uc9c0\uc9c8"
     nutrition = "\uc601\uc591\ubcf4\ucda9"

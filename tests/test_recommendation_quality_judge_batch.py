@@ -75,6 +75,30 @@ def test_select_product_ids_filters_by_main_category():
     assert selected == ["p3"]
 
 
+def test_select_product_ids_force_includes_report_nos_in_sample():
+    profiles = {
+        "p1": {"report_no": "1", "product_main_category": "A"},
+        "p2": {"report_no": "2", "product_main_category": "A"},
+        "p3": {"report_no": "3", "product_main_category": "B"},
+        "p4": {"report_no": "4", "product_main_category": "B"},
+    }
+    product_vectors = {key: {"x": 1.0} for key in profiles}
+
+    selected = select_product_ids(
+        profiles,
+        product_vectors,
+        all_products=False,
+        report_nos=[],
+        include_report_nos=["4"],
+        main_categories=["A"],
+        sample_size=1,
+        per_category=1,
+        seed=1,
+    )
+
+    assert selected == ["p4"]
+
+
 def test_build_batch_requests_contains_json_response_config():
     snapshot = {
         "key": "recjudge_000001",

@@ -26,6 +26,7 @@ from scripts.enhance_similarity_with_explanation import (
     refresh_cache_rows,
     resolve_runtime_paths,
     safe_json_loads,
+    semantic_lipid_lecithin_single_core_broad_target,
     semantic_oral_single_core_broad_target,
     SIMILARITY_ALGORITHM_VERSION,
 )
@@ -1112,6 +1113,17 @@ class RecommendationService:
                 "recommendation_quality": "low_confidence_match",
                 "recommendation_display_eligible": False,
                 "recommendation_review_reason": "oral_single_core_broad_target",
+            }
+        if semantic_lipid_lecithin_single_core_broad_target(
+            str((base_profile or {}).get("product_main_category", "") or ""),
+            str(target_profile.get("product_main_category", "") or ""),
+            semantic_detail,
+            similarity_score,
+        ):
+            quality_metadata = {
+                "recommendation_quality": "low_confidence_match",
+                "recommendation_display_eligible": False,
+                "recommendation_review_reason": "lipid_lecithin_single_core_broad_target",
             }
         target_other_ingredients = [
             item
