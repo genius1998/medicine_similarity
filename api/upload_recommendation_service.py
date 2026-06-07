@@ -23,6 +23,7 @@ from api.ingredient_family import (
     infer_joint_ingredient_family,
     joint_family_aliases,
 )
+from api.ingredient_match_llm_client import call_ingredient_match_llm
 from api.ingredient_parse_service import (
     _looks_like_functional_premix,
     canonicalize_ingredient_for_matching,
@@ -34,7 +35,7 @@ from api.ingredient_parse_service import (
     parse_ingredients_from_ocr_text,
     split_ingredients,
 )
-from api.local_llm_client import call_local_llm, extract_json_from_llm_content
+from api.local_llm_client import extract_json_from_llm_content
 from api.ocr_service import extract_text_from_image, save_temp_upload
 from api.recommendation_service import RecommendationService
 from scripts.enhance_similarity_with_explanation import (
@@ -1458,7 +1459,7 @@ class UploadRecommendationService:
                 for item in candidates
             ],
         }
-        content = call_local_llm(json.dumps(payload, ensure_ascii=False, indent=2))
+        content = call_ingredient_match_llm(json.dumps(payload, ensure_ascii=False, indent=2))
         parsed = extract_json_from_llm_content(content)
         if not parsed:
             raise RuntimeError("runtime RAG LLM returned non-JSON content")
@@ -1506,7 +1507,7 @@ class UploadRecommendationService:
                 for item in candidates[:5]
             ],
         }
-        content = call_local_llm(json.dumps(payload, ensure_ascii=False, indent=2))
+        content = call_ingredient_match_llm(json.dumps(payload, ensure_ascii=False, indent=2))
         parsed = extract_json_from_llm_content(content)
         if not parsed:
             raise RuntimeError("new standard metadata LLM returned non-JSON content")
@@ -1563,7 +1564,7 @@ class UploadRecommendationService:
                 for item in candidates
             ],
         }
-        content = call_local_llm(json.dumps(payload, ensure_ascii=False, indent=2))
+        content = call_ingredient_match_llm(json.dumps(payload, ensure_ascii=False, indent=2))
         parsed = extract_json_from_llm_content(content)
         if not parsed:
             raise RuntimeError("runtime RAG LLM returned non-JSON content")

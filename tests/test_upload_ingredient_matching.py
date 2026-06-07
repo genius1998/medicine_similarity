@@ -230,6 +230,32 @@ def test_unrelated_cache_is_revalidated_by_runtime_rag_existing_match_without_al
     assert saved["match_method"] == "runtime_rag_llm_existing"
 
 
+def test_runtime_rag_classifier_uses_ingredient_match_llm_client(tmp_path, monkeypatch):
+    standard = "L-\uc544\ub974\uae30\ub2cc"
+    service = _service_with_cache(tmp_path, rows=[], category_names=[standard])
+    captured = {}
+
+    def fake_call(message):
+        captured["message"] = message
+        return (
+            '{"decision":"existing_match","matched_standard_name":"L-\\uc544\\ub974\\uae30\\ub2cc",'
+            '"relation_type":"same_ingredient","confidence":0.94,"reason":"same ingredient"}'
+        )
+
+    monkeypatch.setattr(upload_module, "call_ingredient_match_llm", fake_call)
+
+    result = service._classify_runtime_rag_candidates_with_llm(
+        ingredient_name=standard,
+        raw_ingredient=standard,
+        display_name=standard,
+        candidates=[{"standard_name": standard, "retrieval_score": 3.0, "embedding_score": 0.8}],
+    )
+
+    assert result["decision"] == "existing_match"
+    assert result["matched_standard_name"] == standard
+    assert f'"standard_name": "{standard}"' in captured["message"]
+
+
 def test_unrelated_cache_revalidation_does_not_create_new_standard(tmp_path, monkeypatch):
     raw = "\uc0ac\uc591\ubc8c\uafc0"
     service = _service_with_cache(
