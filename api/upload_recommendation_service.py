@@ -2657,7 +2657,11 @@ class UploadRecommendationService:
             "normalized_for_matching": normalized_input,
             "role": "primary",
         }
-        match = self._find_existing_db_match(normalized_input, raw_ingredient=raw_input, display_name=raw_input) if raw_input else None
+        match = (
+            self._find_match_in_cache(normalized_input, raw_ingredient=raw_input, display_name=raw_input)
+            if raw_input
+            else None
+        )
         matches = [match] if match else []
         if matches:
             self._annotate_runtime_vector_usage(matches)

@@ -148,18 +148,44 @@ def test_lookup_existing_ingredient_db_match_returns_cache_match(tmp_path):
     assert result["match"]["match_source"] == "cache_normalized_exact"
 
 
-def test_lookup_existing_ingredient_db_match_reports_no_match_without_runtime_fallback(tmp_path, monkeypatch):
+def test_lookup_existing_ingredient_db_match_uses_runtime_fallback(tmp_path, monkeypatch):
     sqlite_path = tmp_path / "ingredients.sqlite"
     seed_ingredient_db(sqlite_path)
+    with sqlite3.connect(sqlite_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO functional_category_map (
+                functional_ingredient_name, category_main, category_sub, function_text,
+                claim_text, source, confidence, notes
+            ) VALUES ('fallback-standard', 'fallback-main', 'fallback-sub', 'fallback function', 'fallback claim', 'test', 0.91, '')
+            """
+        )
     service = UploadRecommendationService(FakeRecommendationService(sqlite_path))
-    monkeypatch.setattr(
-        service,
-        "_try_runtime_rag_fallback",
-        lambda **kwargs: (_ for _ in ()).throw(AssertionError("runtime fallback should not run")),
-    )
 
-    result = service.lookup_existing_ingredient_db_match("없는원료")
+    captured = {}
 
-    assert result["matched"] is False
-    assert result["match"]["functional_match"] is False
-    assert result["match"]["ingredient_type"] == "unmatched"
+    def fake_runtime_fallback(**kwargs):
+        captured.update(kwargs)
+        category_row = service._lookup_category_row("fallback-standard")
+        return service._build_match_payload(
+            ingredient_name=kwargs["ingredient_name"],
+            raw_ingredient=kwargs["raw_ingredient"],
+            display_name=kwargs["display_name"],
+            functional_ingredient_name="fallback-standard",
+            relation_type="same_ingredient",
+            confidence=0.87,
+            category_row=category_row,
+            match_source="runtime_rag_llm_existing",
+            protected_family=kwargs["input_family"],
+        )
+
+    monkeypatch.setattr(service, "_try_runtime_rag_fallback", fake_runtime_fallback)
+
+    result = service.lookup_existing_ingredient_db_match("unseen-proprietary-extract")
+
+    assert captured["raw_ingredient"] == "unseen-proprietary-extract"
+    assert captured["allow_new_standard"] is True
+    assert result["matched"] is True
+    assert result["match"]["functional_ingredient_name"] == "fallback-standard"
+    assert result["match"]["category_main"] == "fallback-main"
+    assert result["match"]["match_source"] == "runtime_rag_llm_existing"

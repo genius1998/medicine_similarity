@@ -298,7 +298,7 @@
           <div class="section-caption">
             <div>
               <h2>원료 DB 매칭 검색</h2>
-              <div class="hint-text">원료명을 입력하면 기존 DB에서 어떤 표준 원료와 카테고리로 매칭되는지 확인합니다.</div>
+              <div class="hint-text">원료명을 입력하면 기존 DB, RAG 후보, LLM 판정을 거쳐 표준 원료와 카테고리를 확인합니다.</div>
             </div>
           </div>
           <div class="ingredient-search">
@@ -306,7 +306,7 @@
             <button id="ingredientSearchButton" class="button" type="button">검색</button>
             <a class="button-secondary" href="/ingredients">원료DB 더보기</a>
           </div>
-          <div id="ingredientSearchResult" class="ingredient-result is-empty">원료명을 입력하고 검색하면 DB 매칭 결과가 표시됩니다.</div>
+          <div id="ingredientSearchResult" class="ingredient-result is-empty">원료명을 입력하고 검색하면 정밀 매칭 결과가 표시됩니다.</div>
         </section>
 
         <section class="section-box">
@@ -402,7 +402,7 @@
     function renderIngredientMatch(payload) {
       const item = payload.match || {};
       if (!payload.matched) {
-        renderIngredientEmpty(`"${payload.query || ""}" 원료는 기존 DB에서 매칭되는 표준 원료를 찾지 못했습니다.`);
+        renderIngredientEmpty(`"${payload.query || ""}" 원료는 정밀 매칭 결과 표준 원료를 찾지 못했습니다.`);
         return;
       }
       ingredientResult.className = "ingredient-result";
@@ -429,7 +429,7 @@
         return;
       }
       ingredientButton.disabled = true;
-      renderIngredientEmpty("검색 중입니다...");
+      renderIngredientEmpty("정밀 매칭 중입니다...");
       try {
         const response = await fetch(`/api/ingredients/match?q=${encodeURIComponent(query)}`);
         if (!response.ok) {
@@ -437,7 +437,7 @@
         }
         renderIngredientMatch(await response.json());
       } catch (error) {
-        renderIngredientEmpty("원료 DB 매칭 조회 중 오류가 발생했습니다.");
+        renderIngredientEmpty("원료 정밀 매칭 조회 중 오류가 발생했습니다.");
       } finally {
         ingredientButton.disabled = false;
       }
