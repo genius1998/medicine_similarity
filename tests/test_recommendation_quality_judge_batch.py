@@ -1732,7 +1732,7 @@ def test_write_validation_report_builds_markdown_from_validation_outputs(tmp_pat
     report = (validation_dir / "judge_validation_report.md").read_text(encoding="utf-8")
 
     assert "pass_continue_validation_without_algorithm_change" in report
-    assert "keep_current_algorithm_without_new_caps" in report
+    assert "keep_current_algorithm" in report
     assert "| Label coverage | 100 / 100 |" in report
     assert "| A | 15 | 5 | 33.33% |" in report
     assert "| candidate | 12 | 5 | 41.67% | 7 |" in report

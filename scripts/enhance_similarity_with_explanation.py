@@ -86,6 +86,7 @@ DEFAULT_MAX_DF_FOR_SEED = 3000
 SEMANTIC_MATCH_CONFIDENCE_MIN = 0.45
 NUTRITION_MAIN_CATEGORY = "\uc601\uc591\ubcf4\ucda9"
 BONE_HEALTH_MAIN_CATEGORY = "\ubf08 \uac74\uac15"
+ORAL_HEALTH_MAIN_CATEGORY = "\uad6c\uac15 \uac74\uac15"
 GENERIC_NUTRIENT_VECTOR_SHARE_CAP = 0.20
 GENERIC_NUTRIENT_ONLY_CROSS_MAIN_SCORE_CAP = 0.45
 GENERIC_NUTRIENT_ONLY_NUTRITION_MAIN_SCORE_CAP = 0.64
@@ -105,6 +106,9 @@ NO_CORE_LOW_SHARED_MAX_WEAK_SHARED_KEYS = 3
 NO_CORE_LOW_SHARED_MIN_BASE_ONLY_KEYS = 3
 NO_CORE_WEAK_SHARED_WITH_EXTRA_SCORE_CAP = 0.64
 NO_CORE_WEAK_SHARED_WITH_EXTRA_MAX_SHARED_KEYS = 2
+ORAL_SINGLE_CORE_BROAD_TARGET_SCORE_CAP = 0.64
+ORAL_SINGLE_CORE_BROAD_TARGET_SCORE_MAX = 0.75
+ORAL_SINGLE_CORE_BROAD_TARGET_MIN_TARGET_ONLY_KEYS = 2
 CROSS_MAIN_SHARED_SUBCATEGORY_ONLY_SCORE_CAP = 0.64
 NUTRITION_SUBTYPE_MISMATCH_SCORE_CAP = 0.52
 NUTRITION_GENERIC_LOW_CORE_COVERAGE_SCORE_CAP = 0.64
@@ -1447,6 +1451,29 @@ def calculate_semantic_weighted_jaccard_v2(
         if not key.startswith("__") and float(target_vector.get(key, 0.0) or 0.0) > 0.0 and key not in shared_keys
     ]
     if (
+        score > ORAL_SINGLE_CORE_BROAD_TARGET_SCORE_CAP
+        and score < ORAL_SINGLE_CORE_BROAD_TARGET_SCORE_MAX
+        and base_main_category == ORAL_HEALTH_MAIN_CATEGORY
+        and target_main_category == ORAL_HEALTH_MAIN_CATEGORY
+        and len(shared_keys) == 1
+        and len(core_coverage.get("shared_core_semantic_keys", []) or []) == 1
+        and not base_only_semantic_keys
+        and len(target_only_semantic_keys) >= ORAL_SINGLE_CORE_BROAD_TARGET_MIN_TARGET_ONLY_KEYS
+    ):
+        original_score = score
+        score = min(score, ORAL_SINGLE_CORE_BROAD_TARGET_SCORE_CAP)
+        score_adjustments.append(
+            {
+                "type": "oral_single_core_broad_target_score_cap",
+                "cap": ORAL_SINGLE_CORE_BROAD_TARGET_SCORE_CAP,
+                "original_score": round(float(original_score), 6),
+                "main_category": base_main_category,
+                "shared_core_semantic_keys": list(core_coverage.get("shared_core_semantic_keys", []) or []),
+                "shared_keys": shared_keys,
+                "target_only_semantic_keys": target_only_semantic_keys,
+            }
+        )
+    if (
         score > NO_CORE_WEAK_SHARED_WITH_EXTRA_SCORE_CAP
         and base_main_category == target_main_category
         and not (core_coverage.get("shared_core_semantic_keys", []) or [])
@@ -1739,6 +1766,39 @@ def semantic_single_core_low_shared_coverage(semantic_explanation: dict | None) 
     return (base_count - len(shared_details)) >= SINGLE_CORE_LOW_SHARED_MIN_BASE_ONLY_KEYS
 
 
+def semantic_oral_single_core_broad_target(
+    base_main_category: str,
+    target_main_category: str,
+    semantic_explanation: dict | None,
+    similarity_score: float,
+) -> bool:
+    score = float(similarity_score or 0.0)
+    if not (
+        ORAL_SINGLE_CORE_BROAD_TARGET_SCORE_CAP < score < ORAL_SINGLE_CORE_BROAD_TARGET_SCORE_MAX
+        and str(base_main_category or "").strip() == ORAL_HEALTH_MAIN_CATEGORY
+        and str(target_main_category or "").strip() == ORAL_HEALTH_MAIN_CATEGORY
+    ):
+        return False
+    explanation = semantic_explanation or {}
+    shared_details = list(explanation.get("shared_semantic_keys", []) or [])
+    core_coverage = explanation.get("core_coverage", {}) or {}
+    shared_core_keys = set(
+        core_coverage.get("shared_core_semantic_keys", [])
+        or core_coverage.get("shared_primary_semantic_keys", [])
+        or []
+    )
+    base_count = int(explanation.get("base_semantic_ingredient_count", 0) or 0)
+    target_count = int(explanation.get("target_semantic_ingredient_count", 0) or 0)
+    base_only_count = max(0, base_count - len(shared_details))
+    target_only_count = max(0, target_count - len(shared_details))
+    return (
+        len(shared_details) == 1
+        and len(shared_core_keys) == 1
+        and base_only_count == 0
+        and target_only_count >= ORAL_SINGLE_CORE_BROAD_TARGET_MIN_TARGET_ONLY_KEYS
+    )
+
+
 def recommendation_quality_metadata(
     similarity_score: float,
     semantic_explanation: dict | None = None,
@@ -1780,6 +1840,8 @@ def recommendation_quality_metadata(
         reason = "generic_nutrient_only_or_dominant"
     elif any("cross_main_shared_subcategory_only" in item for item in adjustment_types):
         reason = "cross_main_shared_subcategory_only"
+    elif any("oral_single_core_broad_target" in item for item in adjustment_types):
+        reason = "oral_single_core_broad_target"
     elif any("low_shared_coverage" in item for item in adjustment_types):
         reason = "low_shared_coverage"
     elif single_core_low_shared_coverage:

@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import sys
 from pathlib import Path
@@ -1187,6 +1188,91 @@ def test_semantic_v2_caps_weak_signal_only_sparse_match():
 
     assert score == 0.64
     assert detail["score_adjustments"][0]["type"] == "weak_signal_only_score_cap"
+
+
+def test_semantic_v2_caps_oral_single_core_broad_target_match():
+    oral = "\uad6c\uac15 \uac74\uac15"
+    nutrition = "\uc601\uc591\ubcf4\ucda9"
+    skin = "\ud53c\ubd80 \uac74\uac15"
+    xylitol = "\uc790\uc77c\ub9ac\ud1a8"
+    calcium = "\uce7c\uc298"
+    weak_functional = "\uc218\uad6d\uc78e\uc5f4\uc218\ucd94\ucd9c\ubb3c"
+    base = profile(oral, primary=[xylitol], ingredient_categories={xylitol: oral})
+    base["product_name"] = "base xylitol stick"
+    target = profile(
+        oral,
+        primary=[xylitol],
+        secondary=[weak_functional, calcium],
+        ingredient_categories={
+            xylitol: oral,
+            weak_functional: skin,
+            calcium: nutrition,
+        },
+    )
+    target["product_name"] = "target broad xylitol plus"
+    ingredient_profiles = {
+        xylitol: {
+            "ingredient_main_category": oral,
+            "ingredient_sub_function_categories": [],
+            "ingredient_type": "functional",
+            "vector_include": True,
+            "is_excipient": False,
+        },
+        calcium: {
+            "ingredient_main_category": nutrition,
+            "ingredient_sub_function_categories": ["\ubf08 \uac74\uac15"],
+            "ingredient_type": "nutrient",
+            "vector_include": True,
+            "is_excipient": False,
+        },
+        weak_functional: {
+            "ingredient_main_category": skin,
+            "ingredient_sub_function_categories": [],
+            "ingredient_type": "functional",
+            "vector_include": True,
+            "is_excipient": False,
+        },
+    }
+
+    score, _, detail = calculate_semantic_weighted_jaccard_v2(base, target, ingredient_profiles)
+    metadata = recommendation_quality_metadata(score, detail)
+
+    assert score == 0.64
+    assert detail["score_adjustments"][0]["type"] == "oral_single_core_broad_target_score_cap"
+    assert metadata["recommendation_display_eligible"] is False
+    assert metadata["recommendation_review_reason"] == "oral_single_core_broad_target"
+
+
+def test_recommendation_service_marks_cached_oral_single_core_broad_target_ineligible():
+    oral = "\uad6c\uac15 \uac74\uac15"
+    xylitol = "\uc790\uc77c\ub9ac\ud1a8"
+    service = RecommendationService.__new__(RecommendationService)
+    service.profiles = {
+        "target::1": profile(oral, primary=[xylitol], secondary=["extra-a", "extra-b"]),
+    }
+    base_profile = profile(oral, primary=[xylitol])
+    semantic_detail = {
+        "base_semantic_ingredient_count": 1,
+        "target_semantic_ingredient_count": 3,
+        "shared_semantic_keys": [{"semantic_key": xylitol, "base_weight": 1.0, "target_weight": 1.0}],
+        "core_coverage": {"shared_core_semantic_keys": [xylitol]},
+        "score_adjustments": [],
+    }
+    row = {
+        "target_product_id": "target::1",
+        "target_product_name": "target broad xylitol plus",
+        "similarity_score": 0.666667,
+        "function_similarity_score": 0.35,
+        "core_match_score": 1.0,
+        "shared_ingredients_json": json.dumps([xylitol], ensure_ascii=False),
+        "shared_categories_json": "[]",
+        "explanation_json": json.dumps({"semantic_weighted_jaccard_v2": semantic_detail}, ensure_ascii=False),
+    }
+
+    converted = service._convert_cache_row(row, 1, base_profile)
+
+    assert converted["recommendation_display_eligible"] is False
+    assert converted["recommendation_review_reason"] == "oral_single_core_broad_target"
 
 
 def test_semantic_v2_caps_cross_main_weak_signal_only_sparse_match():

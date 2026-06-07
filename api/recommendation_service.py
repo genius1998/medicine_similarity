@@ -26,6 +26,7 @@ from scripts.enhance_similarity_with_explanation import (
     refresh_cache_rows,
     resolve_runtime_paths,
     safe_json_loads,
+    semantic_oral_single_core_broad_target,
     SIMILARITY_ALGORITHM_VERSION,
 )
 
@@ -1076,7 +1077,7 @@ class RecommendationService:
             raise KeyError(f"report_no not found: {report_no}")
         return matches[0]
 
-    def _convert_cache_row(self, row: dict, rank: int) -> dict:
+    def _convert_cache_row(self, row: dict, rank: int, base_profile: Optional[dict] = None) -> dict:
         target_product_id = str(row.get("target_product_id", "") or "")
         target_report_no = target_product_id.split("::", 1)[1] if "::" in target_product_id else target_product_id
         target_profile = self.profiles.get(target_product_id, {})
@@ -1101,6 +1102,17 @@ class RecommendationService:
             core_match_score,
             function_similarity_score,
         )
+        if semantic_oral_single_core_broad_target(
+            str((base_profile or {}).get("product_main_category", "") or ""),
+            str(target_profile.get("product_main_category", "") or ""),
+            semantic_detail,
+            similarity_score,
+        ):
+            quality_metadata = {
+                "recommendation_quality": "low_confidence_match",
+                "recommendation_display_eligible": False,
+                "recommendation_review_reason": "oral_single_core_broad_target",
+            }
         target_other_ingredients = [
             item
             for item in target_all_ingredients
@@ -1247,7 +1259,10 @@ class RecommendationService:
             if cache_enabled and not force_refresh:
                 cached_rows = load_cached_rows(conn, base_product_id, top_k, similarity_algorithm)
             if len(cached_rows) >= top_k:
-                raw_recommendations = [self._convert_cache_row(row, idx) for idx, row in enumerate(cached_rows, start=1)]
+                raw_recommendations = [
+                    self._convert_cache_row(row, idx, base_profile)
+                    for idx, row in enumerate(cached_rows, start=1)
+                ]
                 recommendations = self._display_eligible_recommendations(raw_recommendations, top_k)
                 if llm_rerank:
                     try:
@@ -1291,7 +1306,10 @@ class RecommendationService:
                 pass
             if cache_enabled:
                 refresh_cache_rows(conn, base_product_id, rows, similarity_algorithm)
-            raw_recommendations = [self._convert_cache_row(row, idx) for idx, row in enumerate(rows, start=1)]
+            raw_recommendations = [
+                self._convert_cache_row(row, idx, base_profile)
+                for idx, row in enumerate(rows, start=1)
+            ]
             recommendations = self._display_eligible_recommendations(raw_recommendations, top_k)
             if llm_rerank:
                 try:

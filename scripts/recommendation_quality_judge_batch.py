@@ -2409,9 +2409,9 @@ def build_validation_report(
     expected_label_count = int(merged_summary.get("expected_label_count") or label_count)
     coverage_ok = bool(merged_summary.get("coverage_ok", expected_label_count == label_count))
     high_score_weak_count = int(
-        merged_summary.get("current_high_score_weak_or_bad_count")
+        quality_gate_result.get("high_score_weak_or_bad_count")
+        or merged_summary.get("current_high_score_weak_or_bad_count")
         or merged_summary.get("high_score_weak_or_bad_count")
-        or quality_gate_result.get("high_score_weak_or_bad_count")
         or 0
     )
     high_score_weak_rate = (
@@ -2447,7 +2447,7 @@ def build_validation_report(
         f"- Created at: {now_iso()}",
         f"- Validation dir: `{validation_dir}`",
         f"- Decision: `{quality_gate_result.get('decision', '')}`",
-        f"- Algorithm recommendation: `keep_current_algorithm_without_new_caps`"
+        f"- Algorithm recommendation: `keep_current_algorithm`"
         if quality_gate_result.get("decision") == "pass_continue_validation_without_algorithm_change"
         else "- Algorithm recommendation: `review_before_algorithm_change`",
         "",
