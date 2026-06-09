@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from difflib import SequenceMatcher
 import hashlib
 import json
 import logging
@@ -8,6 +7,7 @@ import os
 import re
 import sqlite3
 import time
+from difflib import SequenceMatcher
 from pathlib import Path
 from threading import Lock
 from typing import Dict, List, Optional
@@ -22,6 +22,66 @@ from api.ingredient_family import (
     canonical_joint_family_name,
     infer_joint_ingredient_family,
     joint_family_aliases,
+)
+from api.ingredient_match_constants import (
+    CATEGORY_HINT_RULES,
+    CRITICAL_WARNING_CODES,
+    ENABLE_RUNTIME_RAG_FALLBACK,
+    EXCLUDED_PRIMARY_KEYWORDS,
+    INFO_WARNING_CODES,
+    JOINT_FAMILY_CATEGORY_SUB,
+    LOW_OCR_CONFIDENCE_THRESHOLD,
+    LOW_PARSE_CONFIDENCE_THRESHOLD,
+    LOW_TOP_SIMILARITY_THRESHOLD,
+    MIN_SUFFICIENT_OCR_TEXT_LENGTH,
+    NON_EXCLUDED_PRIMARY_KEYWORDS,
+    NON_FUNCTIONAL_CACHE_RELATION_TYPES,
+    NOTICE_WARNING_CODES,
+    NUTRITION_SUPPLEMENT_INGREDIENT_KEYWORDS,
+    NUTRITION_SUPPLEMENT_PRODUCT_KEYWORDS,
+    ROLE_WEIGHT,
+    RUNTIME_CACHE_LIKE_VECTOR_EXCLUDED_TERMS,
+    RUNTIME_CUSTOM_FUNCTIONAL_TABLE_NAME,
+    RUNTIME_EXCIPIENT_VECTOR_EXCLUDED_TERMS,
+    RUNTIME_LIKE_DISABLED_KEYS,
+    RUNTIME_LOW_SIGNAL_UPLOAD_VECTOR_EXACT_TERMS,
+    RUNTIME_RAG_FALLBACK_SKIP_TERMS,
+    RUNTIME_RAG_NAME_SIMILARITY_MIN,
+    RUNTIME_RAG_TOP_K,
+    RUNTIME_SUSPICIOUS_MAPPING_RULES,
+    RUNTIME_VECTOR_EXCLUSION_REASON_MESSAGES,
+    STRONG_JOINT_INGREDIENT_KEYWORDS,
+    STRONG_JOINT_PRODUCT_KEYWORDS,
+    TOO_MANY_INGREDIENTS_THRESHOLD,
+    VECTOR_ALLOWED_RELATION_TYPES,
+)
+from api.ingredient_match_guards import (
+    append_warning,
+    build_image_hash,
+    build_joint_family_category_row,
+    build_profile_signature,
+    build_upload_signature,
+    contains_any_keyword,
+    contains_exact_guarded_runtime_term,
+    contains_guarded_runtime_term,
+    contains_keyword,
+    contains_normalized_fragment,
+    count_keyword_matches,
+    dedupe_strings,
+    dedupe_warnings,
+    determine_upload_candidate_state,
+    has_sufficient_ocr_text,
+    is_excluded_primary,
+    is_like_blocked_input,
+    is_low_signal_upload_vector_term,
+    looks_like_runtime_measurement_or_symbol,
+    normalize_cache_exact_key,
+    normalize_lookup_key,
+    normalize_warning_severity,
+    normalized_name_similarity,
+    resolve_joint_input_family,
+    resolve_runtime_mapping_rule,
+    split_warning_groups,
 )
 from api.ingredient_match_llm_client import call_ingredient_match_llm
 from api.ingredient_parse_service import (
@@ -38,6 +98,11 @@ from api.ingredient_parse_service import (
 from api.local_llm_client import extract_json_from_llm_content
 from api.ocr_service import extract_text_from_image, save_temp_upload
 from api.recommendation_service import RecommendationService
+from api.request_progress import (  # re-exported for backward compatibility
+    PROGRESS_TTL_SECONDS,
+    get_request_progress,
+    update_request_progress,
+)
 from scripts.enhance_similarity_with_explanation import (
     build_candidate_pool_v2,
     build_explanation_json,
@@ -55,823 +120,7 @@ from scripts.enhance_similarity_with_explanation import (
     SIMILARITY_ALGORITHM_VERSION,
 )
 
-
-CATEGORY_HINT_RULES = {
-    "면역": {
-        "product_keywords": ["홍삼", "고려홍삼", "6년근", "홍삼정", "진세노사이드", "홍삼스틱", "정관장"],
-        "ingredient_keywords": ["홍삼", "홍삼농축액", "진세노사이드", "홍삼근", "홍삼분말"],
-    },
-    "눈 건강": {
-        "product_keywords": ["루테인", "지아잔틴", "눈", "아이", "마리골드", "빌베리", "아스타잔틴", "베타카로틴"],
-        "ingredient_keywords": ["루테인", "지아잔틴", "마리골드꽃추출물", "베타카로틴", "비타민 A", "빌베리추출물", "블루베리", "헤마토코쿠스추출물"],
-    },
-    "관절/연골": {
-        "product_keywords": ["관절", "연골", "콘드로이친", "뮤코다당", "뮤코다당단백", "철갑상어", "철갑상어연골", "MSM", "보스웰리아", "NEM", "난각막", "강황"],
-        "ingredient_keywords": ["콘드로이친", "뮤코다당단백", "철갑상어연골", "MSM", "엠에스엠", "보스웰리아", "난각막", "난각막분말", "난각막가수분해물", "강황추출물", "초록입홍합"],
-    },
-    "장 건강": {
-        "product_keywords": ["유산균", "프로바이오틱스", "락토핏", "장", "대장", "프리바이오틱스", "올리고당"],
-        "ingredient_keywords": ["프로바이오틱스", "유산균", "갈락토올리고당", "프락토올리고당", "난소화성말토덱스트린", "이눌린"],
-    },
-    "혈당": {
-        "product_keywords": ["혈당", "당당자유", "당케어", "고투플러스"],
-        "ingredient_keywords": ["바나바", "바나바잎", "바나바잎추출물", "코로솔산", "난소화성말토덱스트린", "구아바잎추출물", "달맞이꽃종자추출물", "구아검", "이눌린", "식이섬유"],
-    },
-    "체지방": {
-        "product_keywords": ["체지방", "다이어트", "슬림", "컷", "컷팅"],
-        "ingredient_keywords": ["키토산", "키토올리고당", "가르시니아", "hca", "공액리놀레산", "cla", "녹차추출물", "카테킨", "콜레우스포스콜리", "잔티젠"],
-    },
-    "피부 건강": {
-        "product_keywords": ["콜라겐", "피부", "레티놀", "히알루론", "세라마이드", "비오틴"],
-        "ingredient_keywords": ["콜라겐", "저분자콜라겐펩타이드", "콜라겐펩타이드", "비오틴", "비타민 A", "히알루론산", "세라마이드"],
-    },
-    "기억력/인지력": {
-        "product_keywords": ["인지", "기억", "포스파티딜세린", "브레인", "두뇌"],
-        "ingredient_keywords": ["포스파티딜세린", "은행잎", "테아닌", "DHA"],
-    },
-    "뼈 건강": {
-        "product_keywords": ["뼈", "칼슘", "칼마디", "비타민D", "K2"],
-        "ingredient_keywords": ["칼슘", "비타민 D", "비타민 K", "마그네슘"],
-    },
-    "남성 건강": {
-        "product_keywords": ["전립선", "남성", "쏘팔메토", "옥타코사놀", "활력"],
-        "ingredient_keywords": ["쏘팔메토", "쏘팔메토열매추출물", "로르산", "옥타코사놀", "아연", "녹용", "마카", "아르기닌"],
-    },
-    "간 건강": {
-        "product_keywords": ["밀크씨슬", "밀크시슬", "실리마린", "간", "liver", "milk thistle"],
-        "ingredient_keywords": ["밀크씨슬", "밀크시슬", "밀크씨슬추출물", "실리마린", "silymarin", "milk thistle"],
-    },
-}
-
-EXCLUDED_PRIMARY_KEYWORDS = [
-    "히드록시프로필메틸셀룰로오스",
-    "hpmc",
-    "결정셀룰로오스",
-    "미결정셀룰로오스",
-    "스테아린산마그네슘",
-    "이산화규소",
-    "카복시메틸셀룰로오스",
-    "글리세린지방산에스테르",
-    "캡슐기제",
-    "젤라틴",
-    "글리세린",
-    "착색료",
-    "이산화티타늄",
-    "말토덱스트린",
-    "덱스트린",
-]
-
-NON_EXCLUDED_PRIMARY_KEYWORDS = [
-    "난소화성말토덱스트린",
-    "난각막",
-    "난각막분말",
-    "난각막가수분해물",
-    "nem",
-    "demr",
-    "난각칼슘",
-    "난각분말",
-    "계란껍질분말",
-    "프로바이오틱스",
-    "프리바이오틱스",
-    "갈락토올리고당",
-    "프락토올리고당",
-    "이눌린",
-]
-
-ROLE_WEIGHT = {
-    "primary": 1.0,
-    "secondary": 0.72,
-    "support": 0.45,
-}
-
-NON_FUNCTIONAL_CACHE_RELATION_TYPES = {"excipient", "unrelated", "unknown", "error", "same_function_only"}
-
-LOW_OCR_CONFIDENCE_THRESHOLD = 0.6
-LOW_PARSE_CONFIDENCE_THRESHOLD = 0.65
-LOW_TOP_SIMILARITY_THRESHOLD = 0.25
-MIN_SUFFICIENT_OCR_TEXT_LENGTH = 80
-TOO_MANY_INGREDIENTS_THRESHOLD = 20
-
-STRONG_JOINT_PRODUCT_KEYWORDS = [
-    "관절",
-    "연골",
-    "콘드로이친",
-    "뮤코다당",
-    "뮤코다당단백",
-    "철갑상어",
-    "철갑상어연골",
-    "MSM",
-    "보스웰리아",
-    "NEM",
-    "난각막",
-]
-
-STRONG_JOINT_INGREDIENT_KEYWORDS = [
-    "콘드로이친",
-    "뮤코다당단백",
-    "철갑상어연골",
-    "MSM",
-    "엠에스엠",
-    "글루코사민",
-    "NAG",
-    "보스웰리아",
-    "난각막",
-    "난각막분말",
-    "난각막가수분해물",
-    "초록입홍합",
-    "UC-II",
-    "비변성콜라겐",
-]
-
-NUTRITION_SUPPLEMENT_PRODUCT_KEYWORDS = [
-    "멀티",
-    "멀티밸런스",
-    "멀티비타민",
-    "비타민",
-    "미네랄",
-    "요오드",
-]
-
-NUTRITION_SUPPLEMENT_INGREDIENT_KEYWORDS = [
-    "비타민 A",
-    "비타민 B1",
-    "비타민 B2",
-    "비타민 B6",
-    "비타민 B12",
-    "비타민 C",
-    "비타민 D",
-    "비타민 E",
-    "비타민 K",
-    "엽산",
-    "나이아신",
-    "비오틴",
-    "판토텐산",
-    "셀레늄",
-    "아연",
-    "칼슘",
-    "마그네슘",
-    "철분",
-    "요오드",
-    "망간",
-    "크롬",
-    "구리",
-    "몰리브덴",
-    "dl-a-토코페롤",
-]
-
-CRITICAL_WARNING_CODES = {
-    "critical_warning",
-    "ingredient_section_unclear",
-    "ocr_error",
-    "category_conflict_product_name_vs_ingredients",
-    "generic_category_with_named_product",
-    "low_parse_confidence",
-    "low_ocr_confidence",
-    "low_ocr_text_quality",
-    "excipient_in_primary",
-    "mixed_primary_categories",
-    "low_top_similarity_score",
-    "missing_recommendations",
-    "top_reason_category_mismatch",
-    "too_many_normalized_ingredients",
-}
-
-NOTICE_WARNING_CODES = {
-    "notice_warning",
-    "allergen_notice",
-}
-
-INFO_WARNING_CODES = {
-    "info_warning",
-    "ocr_confidence_unavailable",
-}
-
 logger = logging.getLogger(__name__)
-
-PROGRESS_TTL_SECONDS = 900
-_PROGRESS_LOCK = Lock()
-_REQUEST_PROGRESS: Dict[str, dict] = {}
-
-
-def update_request_progress(
-    request_id: str,
-    *,
-    phase: str = "",
-    message: str = "",
-    percent: Optional[float] = None,
-    detail: Optional[str] = None,
-    current_ingredient: Optional[str] = None,
-    current: Optional[int] = None,
-    total: Optional[int] = None,
-    status: str = "running",
-    extra: Optional[dict] = None,
-) -> None:
-    request_id = str(request_id or "").strip()
-    if not request_id:
-        return
-    now = time.time()
-    with _PROGRESS_LOCK:
-        stale_ids = [
-            key
-            for key, value in _REQUEST_PROGRESS.items()
-            if now - float(value.get("updated_at_epoch", now) or now) > PROGRESS_TTL_SECONDS
-        ]
-        for key in stale_ids:
-            _REQUEST_PROGRESS.pop(key, None)
-        previous = dict(_REQUEST_PROGRESS.get(request_id, {}) or {})
-        previous_phase = str(previous.get("phase", "") or "")
-        next_phase = phase or previous_phase
-        payload = {
-            **previous,
-            "request_id": request_id,
-            "phase": next_phase,
-            "message": message or previous.get("message", ""),
-            "detail": detail if detail is not None else ("" if phase and phase != previous_phase else previous.get("detail", "")),
-            "current_ingredient": current_ingredient if current_ingredient is not None else ("" if phase and phase != previous_phase else previous.get("current_ingredient", "")),
-            "status": status or previous.get("status", "running"),
-            "updated_at_epoch": now,
-        }
-        if percent is not None:
-            payload["percent"] = max(0, min(100, round(float(percent), 1)))
-        if current is not None:
-            payload["current"] = int(current)
-        if total is not None:
-            payload["total"] = int(total)
-        if extra:
-            payload["extra"] = {**dict(previous.get("extra", {}) or {}), **extra}
-        _REQUEST_PROGRESS[request_id] = payload
-
-
-def get_request_progress(request_id: str) -> dict:
-    request_id = str(request_id or "").strip()
-    if not request_id:
-        return {"request_id": "", "status": "missing", "percent": 0}
-    with _PROGRESS_LOCK:
-        payload = dict(_REQUEST_PROGRESS.get(request_id, {}) or {})
-    if not payload:
-        return {"request_id": request_id, "status": "unknown", "percent": 0, "message": "No progress record found."}
-    return payload
-
-ENABLE_RUNTIME_RAG_FALLBACK = True
-RUNTIME_CUSTOM_FUNCTIONAL_TABLE_NAME = "runtime_custom_functional_ingredient_map"
-RUNTIME_RAG_TOP_K = 5
-RUNTIME_RAG_NAME_SIMILARITY_MIN = 0.78
-
-RUNTIME_LIKE_DISABLED_KEYS = {
-    "hca",
-    "gaba",
-    "cla",
-    "msm",
-    "epa",
-    "dha",
-    "cpp",
-    "bcaa",
-    "coq10",
-    "mk7",
-    "rg1",
-    "rb1",
-    "rg3",
-    "l테아닌",
-    "테아닌",
-}
-
-VECTOR_ALLOWED_RELATION_TYPES = {
-    "same_ingredient",
-    "marker_compound",
-    "ingredient_group",
-    "nutrient_form",
-}
-
-RUNTIME_CACHE_LIKE_VECTOR_EXCLUDED_TERMS = {
-    "\uc2dd\ubb3c\ud63c\ud569\ub18d\ucd95\uc561",
-    "\uc2dd\ubb3c\ud63c\ud569\ucd94\ucd9c\ubb3c",
-    "\ud63c\ud569\ub18d\ucd95\uc561",
-    "\uc885\uc790\ucd94\ucd9c\ubb3c",
-    "\uad6c\uc5f0\uc0b0",
-    "\uad6c\uc5f0\uc0b0\uc0bc\ub098\ud2b8\ub968",
-    "\uad6c\uc5f0\uc0b0\ub098\ud2b8\ub968",
-    "\uc804\ubd84",
-    "\uc625\uc218\uc218",
-    "\ub9d0\ud1a0\ub371\uc2a4\ud2b8\ub9b0",
-    "\ub371\uc2a4\ud2b8\ub9b0",
-    "\uc815\uc81c\uc218",
-    "\uc8fc\uc815",
-    "\uc5d0\ud0c4\uc62c",
-    "\ud5a5\ub8cc",
-    "\uac10\ubbf8\ub8cc",
-    "\ud63c\ud569\uc81c\uc81c",
-    "200mg",
-    "500mg",
-    "mg",
-    "g",
-    "%",
-    "hpmc",
-    "\ud788\ub4dc\ub85d\uc2dc\ud504\ub85c\ud544\uba54\ud2f8\uc140\ub8f0\ub85c\uc2a4",
-    "\uce74\ubcf5\uc2dc\uba54\ud2f8\uc140\ub8f0\ub85c\uc2a4",
-    "\uc2a4\ud14c\uc544\ub9b0\uc0b0\ub9c8\uadf8\ub124\uc298",
-    "\uc774\uc0b0\ud654\uaddc\uc18c",
-    "\uacb0\uc815\uc140\ub8f0\ub85c\uc2a4",
-    "\uae00\ub9ac\uc138\ub9b0",
-    "d\uc18c\ube44\ud1a8\uc561",
-    "\uc18c\ube44\ud1a8\uc561",
-}
-
-RUNTIME_EXCIPIENT_VECTOR_EXCLUDED_TERMS = {
-    "\ud788\ub4dc\ub85d\uc2dc\ud504\ub85c\ud544\uba54\ud2f8\uc140\ub8f0\ub85c\uc624\uc2a4",
-    "\ud788\ub4dc\ub85d\uc2dc\ud504\ub85c\ud544\uba54\ud2f8\uc140\ub8f0\ub85c\uc2a4",
-    "hpmc",
-    "\uacb0\uc815\uc140\ub8f0\ub85c\uc2a4",
-    "\ubbf8\uacb0\uc815\uc140\ub8f0\ub85c\uc2a4",
-    "\uc774\uc0b0\ud654\uaddc\uc18c",
-    "\uc2a4\ud14c\uc544\ub9b0\uc0b0\ub9c8\uadf8\ub124\uc298",
-    "\uc2a4\ud14c\uc544\ub9b0\uc0b0\uce7c\uc298",
-    "\uce74\ubcf5\uc2dc\uba54\ud2f8\uc140\ub8f0\ub85c\uc2a4",
-    "\uce74\ubcf5\uc2dc\uba54\ud2f8\uc140\ub8f0\ub85c\uc2a4\uce7c\uc298",
-    "\uae00\ub9ac\uc138\ub9b0",
-    "d\uc18c\ube44\ud1a8\uc561",
-    "\uc18c\ube44\ud1a8\uc561",
-    "\ub371\uc2a4\ud2b8\ub9b0",
-    "\ub9d0\ud1a0\ub371\uc2a4\ud2b8\ub9b0",
-    "\uc815\uc81c\uc218",
-    "\uc544\ub77c\ube44\uc544\uac80",
-    "\uc124\ud0d5",
-    "\uc774\uc18c\ub9d0\ud2b8",
-    "\uc5d0\ub9ac\uc2a4\ub9ac\ud1a8",
-    "\uc790\uc77c\ub9ac\ud1a8",
-    "\ud5a5\ub8cc",
-    "\ucc29\ud5a5\ub8cc",
-    "\uac10\ubbf8\ub8cc",
-}
-
-RUNTIME_RAG_FALLBACK_SKIP_TERMS = RUNTIME_EXCIPIENT_VECTOR_EXCLUDED_TERMS | {
-    "\uac00\uacf5\uc720\uc9c0",
-    "\uc720\ub2f9",
-    "\uc720\ub2f9\ud63c\ud569\ubd84\ub9d0",
-    "\uac74\uc870\ud6a8\ubaa8",
-    "\ucc44\uc18c\ud63c\ud569\ubd84\ub9d0",
-    "\ucc44\uc18c\ud638\ud569\ubd84\ub9d0",
-    "\uc57c\ucc44\ud63c\ud569\ubd84\ub9d0",
-    "\uc804\ubd84",
-}
-
-RUNTIME_LOW_SIGNAL_UPLOAD_VECTOR_EXACT_TERMS = {
-    "\uac00\uacf5\uc720\uc9c0",
-    "\uc720\ub2f9",
-    "\uc720\ub2f9\ud63c\ud569\ubd84\ub9d0",
-    "\uac74\uc870\ud6a8\ubaa8",
-    "\ucc44\uc18c\ud63c\ud569\ubd84\ub9d0",
-    "\ucc44\uc18c\ud638\ud569\ubd84\ub9d0",
-    "\uc57c\ucc44\ud63c\ud569\ubd84\ub9d0",
-    "\uc804\ubd84",
-}
-
-RUNTIME_VECTOR_EXCLUSION_REASON_MESSAGES = {
-    "excluded_from_vector_by_cache_like_guard": "cache_like guard excluded this match from the upload vector",
-    "excluded_from_vector_by_excipient_guard": "excipient guard excluded this match from the upload vector",
-    "excluded_from_vector_by_low_signal_upload_guard": "low-signal upload ingredient excluded from the upload vector",
-    "excluded_from_vector_by_relation_guard": "relation type guard excluded this match from the upload vector",
-}
-
-RUNTIME_SUSPICIOUS_MAPPING_RULES = [
-    {
-        "name": "hca",
-        "inputs": ["hca", "hydroxycitricacid", "hydroxycitric"],
-        "allowed": ["가르시니아", "garcinia", "hca"],
-        "blocked": ["녹차", "카테킨", "egcg", "greentea", "greentea"],
-        "safe_aliases": [
-            "가르시니아 캄보지아 껍질추출물 60HCA",
-            "가르시니아 캄보지아 추출물",
-            "가르시니아 캄보지아 껍질추출물",
-        ],
-    },
-    {
-        "name": "silymarin",
-        "inputs": ["실리마린", "silymarin"],
-        "allowed": ["밀크씨슬", "밀크시슬", "milkthistle", "silymarin"],
-        "blocked": [],
-        "safe_aliases": ["밀크씨슬추출물", "밀크씨슬 추출물", "밀크씨슬", "milk thistle"],
-    },
-    {
-        "name": "ginsenoside",
-        "inputs": ["진세노사이드", "ginsenoside"],
-        "allowed": ["홍삼", "인삼", "ginseng", "redginseng"],
-        "blocked": [],
-        "safe_aliases": ["홍삼", "인삼"],
-    },
-    {
-        "name": "lutein_zeaxanthin",
-        "inputs": ["루테인", "lutein", "지아잔틴", "zeaxanthin"],
-        "allowed": ["루테인", "지아잔틴", "마리골드", "lutein", "zeaxanthin", "marigold"],
-        "blocked": [],
-        "safe_aliases": ["루테인", "지아잔틴", "마리골드꽃추출물", "마리골드꽃추출물(지아잔틴함유)"],
-    },
-    {
-        "name": "omega3",
-        "inputs": ["epa", "dha", "오메가3", "오메가-3", "omega3", "fishoil", "fish oil"],
-        "allowed": ["epa", "dha", "오메가", "omega", "어유", "fishoil", "fishoil"],
-        "blocked": [],
-        "safe_aliases": ["EPA 및 DHA 함유 유지", "EPA 및 DHA 함유 유지(고시형 원료)", "오메가-3 지방산 함유유지"],
-    },
-    {
-        "name": "vitamin_d",
-        "inputs": ["비타민d3", "건조비타민d3", "vitamind3", "vitamind"],
-        "allowed": ["비타민d", "vitamind"],
-        "blocked": [],
-        "safe_aliases": ["비타민 D", "비타민D"],
-    },
-    {
-        "name": "zinc",
-        "inputs": ["산화아연", "글루콘산아연", "zincoxide", "zincgluconate"],
-        "allowed": ["아연", "zinc"],
-        "blocked": [],
-        "safe_aliases": ["아연", "zinc"],
-    },
-]
-
-JOINT_FAMILY_CATEGORY_SUB = {
-    "chondroitin": "콘드로이친 계열",
-    "glucosamine": "글루코사민 계열",
-    "nag": "NAG 계열",
-    "uc_ii": "UC-II 계열",
-    "msm": "MSM 계열",
-    "boswellia": "보스웰리아 계열",
-}
-
-
-def normalize_lookup_key(value: str) -> str:
-    return re.sub(r"\s+", "", str(value or "").strip().lower())
-
-
-def normalize_cache_exact_key(value: str) -> str:
-    return re.sub(r"[^0-9a-z가-힣]", "", str(value or "").strip().lower())
-
-
-def normalized_name_similarity(left: str, right: str) -> float:
-    left_key = normalize_cache_exact_key(left)
-    right_key = normalize_cache_exact_key(right)
-    if not left_key or not right_key:
-        return 0.0
-    if left_key == right_key:
-        return 1.0
-    shorter = min(len(left_key), len(right_key))
-    if shorter < 4:
-        return 0.0
-    return float(SequenceMatcher(None, left_key, right_key).ratio())
-
-
-def dedupe_strings(values: List[str]) -> List[str]:
-    seen = set()
-    deduped: List[str] = []
-    for value in values:
-        text = str(value or "").strip()
-        key = normalize_lookup_key(text)
-        if not text or not key or key in seen:
-            continue
-        seen.add(key)
-        deduped.append(text)
-    return deduped
-
-
-def contains_normalized_fragment(value: str, fragments: List[str]) -> bool:
-    normalized = normalize_cache_exact_key(value)
-    return any(normalize_cache_exact_key(fragment) in normalized for fragment in fragments if str(fragment or "").strip())
-
-
-def resolve_runtime_mapping_rule(*values: str) -> Optional[dict]:
-    normalized_values = [normalize_cache_exact_key(value) for value in values if str(value or "").strip()]
-    for rule in RUNTIME_SUSPICIOUS_MAPPING_RULES:
-        for normalized_value in normalized_values:
-            if any(normalize_cache_exact_key(trigger) in normalized_value for trigger in rule["inputs"]):
-                return rule
-    return None
-
-
-def is_like_blocked_input(*values: str) -> bool:
-    normalized_values = [normalize_cache_exact_key(value) for value in values if str(value or "").strip()]
-    for normalized in normalized_values:
-        if normalized in RUNTIME_LIKE_DISABLED_KEYS:
-            return True
-        if 0 < len(normalized) <= 4 and re.fullmatch(r"[a-z0-9]+", normalized):
-            return True
-    return False
-
-
-def contains_guarded_runtime_term(value: str, guarded_terms: set[str]) -> bool:
-    normalized_value = normalize_cache_exact_key(value)
-    if not normalized_value:
-        return False
-    for term in guarded_terms:
-        normalized_term = normalize_cache_exact_key(term)
-        if not normalized_term:
-            continue
-        if normalized_value == normalized_term or normalized_term in normalized_value:
-            return True
-    return False
-
-
-def contains_exact_guarded_runtime_term(value: str, guarded_terms: set[str]) -> bool:
-    normalized_value = normalize_cache_exact_key(value)
-    if not normalized_value:
-        return False
-    for term in guarded_terms:
-        normalized_term = normalize_cache_exact_key(term)
-        if normalized_term and normalized_value == normalized_term:
-            return True
-    return False
-
-
-def is_low_signal_upload_vector_term(*values: str) -> bool:
-    return any(contains_exact_guarded_runtime_term(value, RUNTIME_LOW_SIGNAL_UPLOAD_VECTOR_EXACT_TERMS) for value in values)
-
-
-def looks_like_runtime_measurement_or_symbol(value: str) -> bool:
-    text = str(value or "").strip()
-    normalized = normalize_cache_exact_key(text)
-    if not text or not normalized:
-        return False
-    if normalized in {"mg", "g", "%", "ml", "kg", "mcg", "μg", "ug"}:
-        return True
-    return bool(re.fullmatch(r"\d+(?:\.\d+)?(?:mg|g|ml|kg|mcg|ug|%)?", normalized))
-
-
-def resolve_joint_input_family(*values: str) -> str:
-    for value in values:
-        family = infer_joint_ingredient_family(str(value or ""))
-        if family:
-            return family
-    return ""
-
-
-def build_joint_family_category_row(functional_name: str, family: str) -> dict:
-    return {
-        "functional_ingredient_name": functional_name,
-        "category_main": "관절/연골",
-        "category_sub": JOINT_FAMILY_CATEGORY_SUB.get(str(family or ""), "관절/연골 보호 매핑"),
-        "claim_text": "",
-        "source": "protected_joint_family_fallback",
-        "confidence": 0.76,
-        "notes": "protected joint family fallback",
-        "categories": [],
-    }
-
-
-def build_upload_signature(source_type: str, payload: str) -> str:
-    normalized_payload = str(payload or "").strip()
-    if not normalized_payload:
-        return ""
-    digest = hashlib.sha1(normalized_payload.encode("utf-8")).hexdigest()
-    return f"{str(source_type or 'upload').strip().lower()}::{digest}"
-
-
-def build_image_hash(image_bytes: bytes) -> str:
-    return hashlib.sha1(bytes(image_bytes or b"")).hexdigest() if image_bytes is not None else ""
-
-
-def build_profile_signature(temp_profile: dict, temp_vector: Dict[str, float]) -> str:
-    payload = {
-        "product_main_category": str(temp_profile.get("product_main_category", "") or ""),
-        "primary_ingredients": sorted(str(item or "") for item in temp_profile.get("primary_ingredients", []) if str(item or "")),
-        "secondary_ingredients": sorted(str(item or "") for item in temp_profile.get("secondary_ingredients", []) if str(item or "")),
-        "support_ingredients": sorted(str(item or "") for item in temp_profile.get("support_ingredients", []) if str(item or "")),
-        "vector": {str(key): round(float(value), 6) for key, value in sorted(temp_vector.items()) if float(value or 0.0) > 0},
-    }
-    return hashlib.sha1(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
-
-
-def determine_upload_candidate_state(parsed: dict, estimated_profile: dict, needs_user_review: bool) -> dict:
-    normalized_count = len(parsed.get("normalized_ingredients", []) or [])
-    confidence = float(parsed.get("profile_confidence", parsed.get("confidence", 0.0)) or 0.0)
-    quality_grade = str(parsed.get("quality_grade", "") or "")
-    main_category = str(estimated_profile.get("product_main_category", "") or "")
-    primary_normalized = [
-        str(item or "").strip()
-        for item in (
-            parsed.get("primary_ingredients_normalized")
-            or parsed.get("primary_ingredients")
-            or estimated_profile.get("primary_ingredients", [])
-            or []
-        )
-        if str(item or "").strip()
-    ]
-    primary_count = len(primary_normalized)
-    critical_codes = {
-        str(item.get("code", "") or "")
-        for item in parsed.get("quality_warnings", []) or []
-        if str(item.get("severity", "") or "") == "critical"
-    }
-    has_valid_category = bool(main_category and len(main_category.strip()) >= 2 and "?" not in main_category)
-    soft_review_only = bool(
-        needs_user_review
-        and not critical_codes
-        and confidence >= 0.7
-        and primary_count >= 1
-        and has_valid_category
-    )
-    candidate_disabled_reason = ""
-    candidate_scope = "none"
-    base_candidate_enabled = bool(
-        normalized_count >= 2
-        and confidence >= 0.7
-        and (not needs_user_review or soft_review_only)
-        and not critical_codes
-        and quality_grade in {"", "A", "B"}
-        and has_valid_category
-    )
-    candidate_enabled = bool(base_candidate_enabled)
-    if candidate_enabled:
-        candidate_scope = "uploaded_auto"
-    elif normalized_count < 2:
-        candidate_disabled_reason = "normalized_ingredients_too_few"
-    elif confidence < 0.7:
-        candidate_disabled_reason = "profile_confidence_below_threshold"
-    elif needs_user_review and not soft_review_only:
-        candidate_disabled_reason = "needs_user_review"
-    elif critical_codes:
-        candidate_disabled_reason = f"critical_warnings:{','.join(sorted(critical_codes))}"
-    elif quality_grade not in {"", "A", "B"}:
-        candidate_disabled_reason = f"quality_grade_{quality_grade.lower()}"
-    elif not has_valid_category:
-        candidate_disabled_reason = "missing_or_generic_main_category"
-    else:
-        candidate_disabled_reason = "policy_gate_unspecified"
-    if (
-        not candidate_enabled
-        and normalized_count >= 1
-        and primary_count >= 1
-        and confidence >= 0.75
-        and (not needs_user_review or soft_review_only)
-        and not critical_codes
-        and has_valid_category
-    ):
-        candidate_enabled = True
-        candidate_scope = "uploaded_auto_notice_review" if soft_review_only else "uploaded_auto_single_core"
-        candidate_disabled_reason = ""
-    elif candidate_enabled and soft_review_only:
-        candidate_scope = "uploaded_auto_notice_review"
-    if not quality_grade:
-        if candidate_enabled and confidence >= 0.9:
-            quality_grade = "A"
-        elif candidate_enabled:
-            quality_grade = "B"
-        elif normalized_count >= 1:
-            quality_grade = "C"
-        else:
-            quality_grade = "D"
-    elif candidate_enabled and quality_grade not in {"A", "B"}:
-        quality_grade = "A" if confidence >= 0.9 else "B"
-    elif not candidate_enabled and quality_grade in {"A", "B"}:
-        quality_grade = "C" if normalized_count >= 1 else "D"
-    if candidate_enabled:
-        status = "verified" if normalized_count >= 2 and confidence >= 0.7 and not critical_codes and not soft_review_only else "auto_eligible"
-    elif needs_user_review and not soft_review_only:
-        status = "review_needed"
-    else:
-        status = "raw"
-    return {
-        "status": status,
-        "quality_grade": quality_grade,
-        "is_candidate_enabled": candidate_enabled,
-        "candidate_scope": candidate_scope,
-        "candidate_disabled_reason": candidate_disabled_reason,
-    }
-
-
-def contains_keyword(text: str, keywords: List[str]) -> bool:
-    normalized = normalize_lookup_key(text)
-    return any(normalize_lookup_key(keyword) in normalized for keyword in keywords)
-
-
-def is_excluded_primary(name: str) -> bool:
-    normalized = normalize_lookup_key(name)
-    if any(normalize_lookup_key(keyword) in normalized for keyword in NON_EXCLUDED_PRIMARY_KEYWORDS):
-        return False
-    return any(normalize_lookup_key(keyword) in normalized for keyword in EXCLUDED_PRIMARY_KEYWORDS)
-
-
-def has_sufficient_ocr_text(raw_text: str, ingredient_section_text: str = "") -> bool:
-    collapsed_raw = re.sub(r"\s+", "", str(raw_text or ""))
-    collapsed_section = re.sub(r"\s+", "", str(ingredient_section_text or ""))
-    if len(collapsed_raw) >= MIN_SUFFICIENT_OCR_TEXT_LENGTH:
-        return True
-    return len(collapsed_section) >= 20
-
-
-def append_warning(warnings: List[dict], code: str, message: str, severity: str = "warning", **extra) -> None:
-    item = {"code": code, "message": message, "severity": severity}
-    item.update({key: value for key, value in extra.items() if value not in (None, "", [], {})})
-    warnings.append(item)
-
-
-def dedupe_warnings(warnings: List[dict]) -> List[dict]:
-    seen = set()
-    deduped: List[dict] = []
-    for item in warnings:
-        code = str(item.get("code", "") or "")
-        message = str(item.get("message", "") or "")
-        ingredients = tuple(item.get("ingredients", []) or [])
-        key = (code, message, ingredients)
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(item)
-    return deduped
-
-
-def normalize_warning_severity(warning: dict) -> dict:
-    item = dict(warning)
-    code = str(item.get("code", "") or "")
-    severity = str(item.get("severity", "") or "")
-    message = str(item.get("message", "") or "")
-    llm_notice_terms = [
-        "알레르기",
-        "알러지",
-        "알류",
-        "달걀",
-        "계란",
-        "우유",
-        "대두",
-        "밀",
-        "땅콩",
-        "메밀",
-        "토마토",
-        "복숭아",
-        "아황산",
-        "고등어",
-        "게",
-        "새우",
-        "돼지고기",
-        "쇠고기",
-        "닭고기",
-        "오징어",
-        "조개류",
-        "홍합",
-        "잣",
-        "가금류",
-        "함유",
-        "제조시설",
-        "주의",
-        "보관",
-        "섭취",
-        "임산부",
-        "수유부",
-        "어린이",
-        "젤라틴",
-        "우피",
-        "색소",
-        "먹물색소",
-    ]
-    if code == "too_many_normalized_ingredients" and severity in {"notice", "critical"}:
-        item["severity"] = severity
-    elif code == "llm_warning" and (
-        any(term in message for term in llm_notice_terms)
-        or "cross-contamination" in message.lower()
-        or "shared manufacturing" in message.lower()
-        or "allergic reaction" in message.lower()
-        or "discontinue use" in message.lower()
-        or "consult a professional" in message.lower()
-    ):
-        item["severity"] = "notice"
-    elif code in INFO_WARNING_CODES:
-        item["severity"] = "info"
-    elif code in NOTICE_WARNING_CODES:
-        item["severity"] = "notice"
-    elif code == "excipient_in_core_role" and ("비타민" in message or "혼합제" in message):
-        item["severity"] = "warning"
-    elif code in CRITICAL_WARNING_CODES:
-        item["severity"] = "critical"
-    elif severity in {"info", "notice", "warning", "critical"}:
-        item["severity"] = severity
-    elif "알레르기" in message or "알러지" in message or "함유" in message or "제조시설" in message or "주의" in message or "보관" in message:
-        item["severity"] = "notice"
-    else:
-        item["severity"] = "critical"
-    return item
-
-
-def split_warning_groups(warnings: List[dict]) -> dict:
-    normalized = [normalize_warning_severity(item) for item in dedupe_warnings(warnings)]
-    return {
-        "quality_warnings": [item for item in normalized if item.get("severity") == "critical"],
-        "critical_warnings": [item for item in normalized if item.get("severity") == "critical"],
-        "notices": [item for item in normalized if item.get("severity") == "notice"],
-        "info_warnings": [item for item in normalized if item.get("severity") == "info"],
-    }
-
-
-def contains_any_keyword(values: List[str], keywords: List[str]) -> bool:
-    for value in values:
-        if contains_keyword(value, keywords):
-            return True
-    return False
-
-
-def count_keyword_matches(values: List[str], keywords: List[str]) -> int:
-    matched = set()
-    for value in values:
-        for keyword in keywords:
-            if contains_keyword(value, [keyword]):
-                matched.add(keyword)
-    return len(matched)
 
 
 class UploadRecommendationService:
