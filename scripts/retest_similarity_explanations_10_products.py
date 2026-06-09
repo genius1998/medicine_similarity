@@ -206,14 +206,14 @@ def compute_candidate_pool_stats(
 ) -> dict:
     candidate_stats: dict[str, dict] = {}
     base_categories = {str(base_profile.get("product_main_category", "기타"))}
-    base_categories.update([str(item) for item in base_profile.get("product_sub_categories", []) if str(item).strip()])
+    base_categories.update([str(item) for item in base_profile.get("llm_sub_function_categories", []) if str(item).strip()])
     total_product_count = len(product_vectors)
 
     def ensure_candidate(candidate_id: str) -> dict:
         if candidate_id not in candidate_stats:
             candidate_profile = profiles[candidate_id]
             candidate_categories = {str(candidate_profile.get("product_main_category", "기타"))}
-            candidate_categories.update([str(item) for item in candidate_profile.get("product_sub_categories", []) if str(item).strip()])
+            candidate_categories.update([str(item) for item in candidate_profile.get("llm_sub_function_categories", []) if str(item).strip()])
             candidate_stats[candidate_id] = {
                 "target_product_id": candidate_id,
                 "same_main_category": int(candidate_profile.get("product_main_category") == base_profile.get("product_main_category")),

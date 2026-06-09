@@ -16,12 +16,19 @@ from scripts.enhance_similarity_with_explanation import (
     build_vector_indexes,
     compute_topk_for_single_product,
     ensure_cache_table,
+    load_ingredient_category_profiles,
     load_cached_rows,
     load_product_function_profiles,
     load_vector_inputs,
+    is_semantic_excipient_name,
+    normalize_similarity_algorithm,
+    recommendation_quality_metadata,
     refresh_cache_rows,
     resolve_runtime_paths,
     safe_json_loads,
+    semantic_lipid_lecithin_single_core_broad_target,
+    semantic_oral_single_core_broad_target,
+    SIMILARITY_ALGORITHM_VERSION,
 )
 
 
@@ -98,6 +105,7 @@ class RecommendationService:
         self.report_to_product_ids: Dict[str, List[str]] = {}
         self.ingredient_postings: Dict[str, List[str]] = {}
         self.ingredient_frequency: Dict[str, int] = {}
+        self.ingredient_category_profiles: Dict[str, dict] = {}
         self.catalog_count: int = 0
         self.uploaded_catalog_count: int = 0
 
@@ -115,10 +123,13 @@ class RecommendationService:
             self.ingredient_postings,
             self.ingredient_frequency,
         ) = build_vector_indexes(vector_df)
+        self.ingredient_category_profiles = load_ingredient_category_profiles(self.runtime.get("ingredient_category_profile_path"))
 
         profile_df = pd.read_csv(self.runtime["product_profile_csv_path"], encoding="utf-8-sig", low_memory=False)
         self.profile_records = []
         for row in profile_df.to_dict(orient="records"):
+            legacy_sub_categories = safe_json_loads(row.get("product_sub_categories_json", "[]"), [])
+            llm_sub_function_categories = safe_json_loads(row.get("llm_sub_function_categories_json", "[]"), [])
             item = {
                 "report_no": str(row.get("report_no", "") or ""),
                 "product_id": str(row.get("product_id", "") or ""),
@@ -127,7 +138,9 @@ class RecommendationService:
                 "primary_ingredients": safe_json_loads(row.get("primary_ingredients_json", "[]"), []),
                 "secondary_ingredients": safe_json_loads(row.get("secondary_ingredients_json", "[]"), []),
                 "support_ingredients": safe_json_loads(row.get("support_ingredients_json", "[]"), []),
-                "product_sub_categories": safe_json_loads(row.get("product_sub_categories_json", "[]"), []),
+                "product_sub_categories": list(llm_sub_function_categories),
+                "legacy_product_sub_categories": list(legacy_sub_categories),
+                "llm_sub_function_categories": list(llm_sub_function_categories),
                 "confidence": float(row.get("confidence", 0.0) or 0.0),
                 "notes": str(row.get("notes", "") or ""),
             }
@@ -193,7 +206,13 @@ class RecommendationService:
                 f"CREATE INDEX IF NOT EXISTS idx_{CATALOG_TABLE_NAME}_product_name ON {CATALOG_TABLE_NAME}(product_name)"
             )
             conn.execute(
+                f"CREATE INDEX IF NOT EXISTS idx_{CATALOG_TABLE_NAME}_product_name_report_no ON {CATALOG_TABLE_NAME}(product_name, report_no)"
+            )
+            conn.execute(
                 f"CREATE INDEX IF NOT EXISTS idx_{CATALOG_TABLE_NAME}_company_name ON {CATALOG_TABLE_NAME}(company_name)"
+            )
+            conn.execute(
+                f"CREATE INDEX IF NOT EXISTS idx_{CATALOG_TABLE_NAME}_company_name_report_no ON {CATALOG_TABLE_NAME}(company_name, report_no)"
             )
 
             row = conn.execute(
@@ -325,6 +344,9 @@ class RecommendationService:
             conn.execute(
                 f"CREATE INDEX IF NOT EXISTS idx_{UPLOADED_PRODUCT_TABLE_NAME}_product_name ON {UPLOADED_PRODUCT_TABLE_NAME}(product_name)"
             )
+            conn.execute(
+                f"CREATE INDEX IF NOT EXISTS idx_{UPLOADED_PRODUCT_TABLE_NAME}_product_name_report_no ON {UPLOADED_PRODUCT_TABLE_NAME}(product_name, report_no)"
+            )
             columns = {
                 str(row[1] or "")
                 for row in conn.execute(f"PRAGMA table_info({UPLOADED_PRODUCT_TABLE_NAME})").fetchall()
@@ -441,6 +463,7 @@ class RecommendationService:
             "is_candidate_enabled": bool(int(row.get("is_candidate_enabled", 1) or 0)),
             "product_main_category": str(row.get("product_main_category", "") or "기타"),
             "product_sub_categories": safe_json_loads(row.get("product_sub_categories_json", "[]"), []),
+            "llm_sub_function_categories": safe_json_loads(row.get("product_sub_categories_json", "[]"), []),
             "primary_ingredients": safe_json_loads(row.get("primary_ingredients_json", "[]"), []),
             "secondary_ingredients": safe_json_loads(row.get("secondary_ingredients_json", "[]"), []),
             "support_ingredients": safe_json_loads(row.get("support_ingredients_json", "[]"), []),
@@ -467,6 +490,7 @@ class RecommendationService:
             "primary_ingredients": list(profile["primary_ingredients"]),
             "secondary_ingredients": list(profile["secondary_ingredients"]),
             "support_ingredients": list(profile["support_ingredients"]),
+            "llm_sub_function_categories": list(profile.get("llm_sub_function_categories", [])),
             "confidence": profile["confidence"],
             "notes": profile["notes"],
         }
@@ -518,7 +542,8 @@ class RecommendationService:
                 "primary_ingredients": list(profile.get("primary_ingredients", [])),
                 "secondary_ingredients": list(profile.get("secondary_ingredients", [])),
                 "support_ingredients": list(profile.get("support_ingredients", [])),
-                "product_sub_categories": list(profile.get("product_sub_categories", [])),
+                "product_sub_categories": list(profile.get("llm_sub_function_categories", [])),
+                "llm_sub_function_categories": list(profile.get("llm_sub_function_categories", [])),
                 "confidence": float(profile.get("confidence", 0.0) or 0.0),
                 "notes": str(profile.get("notes", "") or ""),
             }
@@ -548,10 +573,8 @@ class RecommendationService:
         query_text = str(query or "").strip()
         normalized = query_text.replace(" ", "")
         offset = max(0, (page - 1) * page_size)
-        rows = self._load_catalog_rows(query_text, normalized)
-        total_count = len(rows)
-        paged_rows = rows[offset : offset + page_size]
-        results = [self._merge_catalog_with_profile(row) for row in paged_rows]
+        rows, total_count = self._load_catalog_page(query_text, normalized, page_size, offset)
+        results = [self._merge_catalog_with_profile(row) for row in rows]
         return {
             "query": query,
             "page": page,
@@ -562,78 +585,158 @@ class RecommendationService:
 
     def get_catalog_product_detail(self, report_no: str) -> Optional[dict]:
         self.ensure_loaded()
-        rows = self._load_catalog_rows(str(report_no), str(report_no).replace(" ", ""))
-        target = next((row for row in rows if str(row.get("report_no", "")) == str(report_no)), None)
+        target = self._load_catalog_product_by_report_no(str(report_no))
         if not target:
             return None
         result = self._merge_catalog_with_profile(target)
         result["has_profile"] = bool(self.profile_by_report_no.get(str(report_no)))
         return result
 
-    def _load_catalog_rows(self, query_text: str, normalized: str) -> List[dict]:
+    def _catalog_search_conditions(self, query_text: str, normalized: str) -> tuple[str, str, list[str], list[str]]:
         query_text = str(query_text or "").strip()
-        normalized = str(normalized or "").strip().lower()
+        normalized = str(normalized or "").strip()
+        if not query_text:
+            return "1 = 1", "1 = 1", [], []
 
-        def matches(row: dict) -> bool:
-            if not query_text:
-                return True
-            report_no = str(row.get("report_no", "") or "")
-            product_name = str(row.get("product_name", "") or "")
-            company_name = str(row.get("company_name", "") or "")
-            collapsed_name = product_name.replace(" ", "").lower()
-            needle = query_text.lower()
-            return (
-                report_no == query_text
-                or needle in product_name.lower()
-                or needle in company_name.lower()
-                or (normalized and normalized in collapsed_name)
-            )
+        like_text = f"%{query_text}%"
+        like_normalized = f"%{normalized}%" if normalized else ""
+        base_conditions = [
+            "report_no = ?",
+            "product_name LIKE ? COLLATE NOCASE",
+            "company_name LIKE ? COLLATE NOCASE",
+        ]
+        base_params = [query_text, like_text, like_text]
+        uploaded_conditions = [
+            "report_no = ?",
+            "product_name LIKE ? COLLATE NOCASE",
+        ]
+        uploaded_params = [query_text, like_text]
+        if like_normalized:
+            base_conditions.append("REPLACE(product_name, ' ', '') LIKE ? COLLATE NOCASE")
+            base_params.append(like_normalized)
+            uploaded_conditions.append("REPLACE(product_name, ' ', '') LIKE ? COLLATE NOCASE")
+            uploaded_params.append(like_normalized)
+        return (
+            "(" + " OR ".join(base_conditions) + ")",
+            "(" + " OR ".join(uploaded_conditions) + ")",
+            base_params,
+            uploaded_params,
+        )
 
+    def _uploaded_catalog_valid_sql(self) -> tuple[str, list[str]]:
+        invalid_names = sorted(INVALID_UPLOADED_PRODUCT_NAMES)
+        placeholders = ", ".join("?" for _ in invalid_names)
+        return (
+            f"TRIM(COALESCE(product_name, '')) NOT IN ({placeholders}) "
+            "AND LENGTH(TRIM(COALESCE(product_name, ''))) > 1",
+            invalid_names,
+        )
+
+    def _catalog_union_sql(self, base_where: str, uploaded_where: str, uploaded_valid_sql: str) -> str:
+        return f"""
+            SELECT
+                report_no, product_name, company_name, license_no, report_date,
+                product_type, shelf_life, appearance, intake_method, main_functionality,
+                cautions, storage_method, form_factor, standard_spec, raw_ingredients
+            FROM {CATALOG_TABLE_NAME}
+            WHERE {base_where}
+            UNION ALL
+            SELECT
+                report_no,
+                product_name,
+                '' AS company_name,
+                '' AS license_no,
+                '' AS report_date,
+                source_type AS product_type,
+                '' AS shelf_life,
+                '' AS appearance,
+                '' AS intake_method,
+                product_main_category AS main_functionality,
+                '' AS cautions,
+                '' AS storage_method,
+                '' AS form_factor,
+                '' AS standard_spec,
+                raw_ingredients
+            FROM {UPLOADED_PRODUCT_TABLE_NAME}
+            WHERE {uploaded_valid_sql}
+              AND {uploaded_where}
+        """
+
+    def _load_catalog_page(self, query_text: str, normalized: str, limit: int, offset: int) -> tuple[List[dict], int]:
+        base_where, uploaded_where, base_params, uploaded_params = self._catalog_search_conditions(query_text, normalized)
+        uploaded_valid_sql, uploaded_valid_params = self._uploaded_catalog_valid_sql()
+        union_sql = self._catalog_union_sql(base_where, uploaded_where, uploaded_valid_sql)
+        params = [*base_params, *uploaded_valid_params, *uploaded_params]
         with sqlite_connection(self.runtime["sqlite_path"]) as conn:
             conn.row_factory = sqlite3.Row
-            base_rows = [
+            total_count = int(
+                conn.execute(
+                    f"SELECT COUNT(*) FROM ({union_sql}) AS combined",
+                    params,
+                ).fetchone()[0]
+                or 0
+            )
+            rows = [
                 dict(row)
                 for row in conn.execute(
                     f"""
-                    SELECT
-                        report_no, product_name, company_name, license_no, report_date,
-                        product_type, shelf_life, appearance, intake_method, main_functionality,
-                        cautions, storage_method, form_factor, standard_spec, raw_ingredients
-                    FROM {CATALOG_TABLE_NAME}
+                    SELECT *
+                    FROM ({union_sql}) AS combined
                     ORDER BY product_name, report_no
-                    """
+                    LIMIT ? OFFSET ?
+                    """,
+                    [*params, int(limit), max(0, int(offset))],
                 ).fetchall()
             ]
-            uploaded_rows = [
-                dict(row)
-                for row in conn.execute(
-                    f"""
-                    SELECT
-                        report_no,
-                        product_name,
-                        '' AS company_name,
-                        '' AS license_no,
-                        '' AS report_date,
-                        source_type AS product_type,
-                        '' AS shelf_life,
-                        '' AS appearance,
-                        '' AS intake_method,
-                        product_main_category AS main_functionality,
-                        '' AS cautions,
-                        '' AS storage_method,
-                        '' AS form_factor,
-                        '' AS standard_spec,
-                        raw_ingredients
-                    FROM {UPLOADED_PRODUCT_TABLE_NAME}
-                    ORDER BY product_name, report_no
-                    """
-                ).fetchall()
-            ]
-            uploaded_rows = [row for row in uploaded_rows if not is_invalid_uploaded_product_name(row.get("product_name", ""))]
+        return rows, total_count
 
-        combined = [row for row in base_rows if matches(row)] + [row for row in uploaded_rows if matches(row)]
-        combined.sort(key=lambda item: (str(item.get("product_name", "")), str(item.get("report_no", ""))))
-        return combined
+    def _load_catalog_product_by_report_no(self, report_no: str) -> Optional[dict]:
+        report_no = str(report_no or "").strip()
+        if not report_no:
+            return None
+        uploaded_valid_sql, uploaded_valid_params = self._uploaded_catalog_valid_sql()
+        with sqlite_connection(self.runtime["sqlite_path"]) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                f"""
+                SELECT
+                    report_no, product_name, company_name, license_no, report_date,
+                    product_type, shelf_life, appearance, intake_method, main_functionality,
+                    cautions, storage_method, form_factor, standard_spec, raw_ingredients
+                FROM {CATALOG_TABLE_NAME}
+                WHERE report_no = ?
+                LIMIT 1
+                """,
+                (report_no,),
+            ).fetchone()
+            if row:
+                return dict(row)
+            row = conn.execute(
+                f"""
+                SELECT
+                    report_no,
+                    product_name,
+                    '' AS company_name,
+                    '' AS license_no,
+                    '' AS report_date,
+                    source_type AS product_type,
+                    '' AS shelf_life,
+                    '' AS appearance,
+                    '' AS intake_method,
+                    product_main_category AS main_functionality,
+                    '' AS cautions,
+                    '' AS storage_method,
+                    '' AS form_factor,
+                    '' AS standard_spec,
+                    raw_ingredients
+                FROM {UPLOADED_PRODUCT_TABLE_NAME}
+                WHERE report_no = ?
+                  AND {uploaded_valid_sql}
+                LIMIT 1
+                """,
+                [report_no, *uploaded_valid_params],
+            ).fetchone()
+        return dict(row) if row else None
 
     def register_uploaded_product(
         self,
@@ -696,6 +799,9 @@ class RecommendationService:
             "is_candidate_enabled": bool(is_candidate_enabled),
             "product_main_category": str(estimated_profile.get("product_main_category", "") or "기타"),
             "product_sub_categories": list(estimated_profile.get("product_sub_categories", [])),
+            "llm_sub_function_categories": list(
+                estimated_profile.get("llm_sub_function_categories", estimated_profile.get("product_sub_categories", []))
+            ),
             "primary_ingredients": list(estimated_profile.get("primary_ingredients", [])),
             "secondary_ingredients": list(estimated_profile.get("secondary_ingredients", [])),
             "support_ingredients": list(estimated_profile.get("support_ingredients", [])),
@@ -909,6 +1015,7 @@ class RecommendationService:
             "is_candidate_enabled": bool(row["is_candidate_enabled"]),
             "product_main_category": str(row["product_main_category"] or ""),
             "product_sub_categories": safe_json_loads(row["product_sub_categories_json"], []) if row["product_sub_categories_json"] else [],
+            "llm_sub_function_categories": safe_json_loads(row["product_sub_categories_json"], []) if row["product_sub_categories_json"] else [],
             "primary_ingredients": safe_json_loads(row["primary_ingredients_json"], []) if row["primary_ingredients_json"] else [],
             "secondary_ingredients": safe_json_loads(row["secondary_ingredients_json"], []) if row["secondary_ingredients_json"] else [],
             "support_ingredients": safe_json_loads(row["support_ingredients_json"], []) if row["support_ingredients_json"] else [],
@@ -971,7 +1078,7 @@ class RecommendationService:
             raise KeyError(f"report_no not found: {report_no}")
         return matches[0]
 
-    def _convert_cache_row(self, row: dict, rank: int) -> dict:
+    def _convert_cache_row(self, row: dict, rank: int, base_profile: Optional[dict] = None) -> dict:
         target_product_id = str(row.get("target_product_id", "") or "")
         target_report_no = target_product_id.split("::", 1)[1] if "::" in target_product_id else target_product_id
         target_profile = self.profiles.get(target_product_id, {})
@@ -982,15 +1089,57 @@ class RecommendationService:
             dict.fromkeys(target_primary_ingredients + target_secondary_ingredients + target_support_ingredients)
         )
         shared_ingredients = safe_json_loads(row.get("shared_ingredients_json", "[]"), [])
-        target_other_ingredients = [item for item in target_all_ingredients if item not in shared_ingredients]
+        explanation = safe_json_loads(row.get("explanation_json", "{}"), {})
+        semantic_shared_target_ingredients = set()
+        semantic_detail = dict(explanation.get("semantic_weighted_jaccard_v2", {}) or {})
+        for detail in semantic_detail.get("shared_semantic_keys", []) or []:
+            semantic_shared_target_ingredients.update(str(name) for name in detail.get("target_ingredients", []) or [])
+        similarity_score = float(row.get("similarity_score", 0.0) or 0.0)
+        function_similarity_score = float(row.get("function_similarity_score", 0.0) or 0.0)
+        core_match_score = float(row.get("core_match_score", 0.0) or 0.0)
+        quality_metadata = recommendation_quality_metadata(
+            similarity_score,
+            semantic_detail,
+            core_match_score,
+            function_similarity_score,
+        )
+        if semantic_oral_single_core_broad_target(
+            str((base_profile or {}).get("product_main_category", "") or ""),
+            str(target_profile.get("product_main_category", "") or ""),
+            semantic_detail,
+            similarity_score,
+        ):
+            quality_metadata = {
+                "recommendation_quality": "low_confidence_match",
+                "recommendation_display_eligible": False,
+                "recommendation_review_reason": "oral_single_core_broad_target",
+            }
+        if semantic_lipid_lecithin_single_core_broad_target(
+            str((base_profile or {}).get("product_main_category", "") or ""),
+            str(target_profile.get("product_main_category", "") or ""),
+            semantic_detail,
+            similarity_score,
+        ):
+            quality_metadata = {
+                "recommendation_quality": "low_confidence_match",
+                "recommendation_display_eligible": False,
+                "recommendation_review_reason": "lipid_lecithin_single_core_broad_target",
+            }
+        target_other_ingredients = [
+            item
+            for item in target_all_ingredients
+            if item not in shared_ingredients
+            and item not in semantic_shared_target_ingredients
+            and (not semantic_detail or not is_semantic_excipient_name(item))
+        ]
         return {
             "rank": rank,
             "target_report_no": target_report_no,
             "target_product_name": str(row.get("target_product_name", "") or ""),
             "target_product_main_category": str(target_profile.get("product_main_category", "") or ""),
-            "similarity_score": float(row.get("similarity_score", 0.0) or 0.0),
-            "function_similarity_score": float(row.get("function_similarity_score", 0.0) or 0.0),
-            "core_match_score": float(row.get("core_match_score", 0.0) or 0.0),
+            "similarity_score": similarity_score,
+            "function_similarity_score": function_similarity_score,
+            "core_match_score": core_match_score,
             "substitutability": str(row.get("substitutability", "") or ""),
             "shared_ingredients": shared_ingredients,
             "target_primary_ingredients": target_primary_ingredients,
@@ -1001,17 +1150,29 @@ class RecommendationService:
             "shared_categories": safe_json_loads(row.get("shared_categories_json", "[]"), []),
             "reason": str(row.get("reason", "") or ""),
             "caution": str(row.get("caution", "") or ""),
-            "explanation": safe_json_loads(row.get("explanation_json", "{}"), {}),
+            "explanation": explanation,
+            **quality_metadata,
         }
+
+    def _display_eligible_recommendations(self, recommendations: List[dict], top_k: int) -> List[dict]:
+        rows = [
+            dict(item)
+            for item in recommendations
+            if bool(item.get("recommendation_display_eligible", True))
+        ][:top_k]
+        for index, item in enumerate(rows, start=1):
+            item["rank"] = index
+        return rows
 
     def _candidate_summary_for_llm(self, recommendation: dict) -> dict:
         target_report_no = str(recommendation.get("target_report_no", "") or "")
         target_profile = self.get_profile_by_report_no(target_report_no) or {}
+        sub_function_categories = list(target_profile.get("llm_sub_function_categories", []) or [])
         return {
             "report_no": target_report_no,
             "product_name": str(recommendation.get("target_product_name", "") or ""),
             "product_main_category": str(target_profile.get("product_main_category", "") or ""),
-            "product_sub_categories": list(target_profile.get("product_sub_categories", []) or []),
+            "sub_function_categories": sub_function_categories,
             "primary_ingredients": list(target_profile.get("primary_ingredients", []) or []),
             "secondary_ingredients": list(target_profile.get("secondary_ingredients", []) or []),
             "support_ingredients": list(target_profile.get("support_ingredients", []) or []),
@@ -1025,7 +1186,7 @@ class RecommendationService:
                 "이 작업은 추천이 아니라 재정렬이다.",
                 "제품이 더 좋아 보인다는 이유로 순위를 올리지 마라.",
                 "추가 영양성분이 더 많다는 이유로 순위를 올리지 마라.",
-                "우선순위는 primary_ingredients exact match, secondary_ingredients overlap, support_ingredients overlap, product_main_category/product_sub_categories 일치, extra ingredients penalty 순서다.",
+                "우선순위는 primary_ingredients exact match, secondary_ingredients overlap, support_ingredients overlap, product_main_category/sub_function_categories 일치, extra ingredients penalty 순서다.",
                 "반드시 주어진 후보를 모두 정확히 한 번씩 사용해 1위부터 끝까지 정렬하라.",
                 "반드시 JSON만 출력하라.",
             ],
@@ -1038,7 +1199,7 @@ class RecommendationService:
                 "report_no": str(base_profile.get("report_no", "") or ""),
                 "product_name": str(base_profile.get("product_name", "") or ""),
                 "product_main_category": str(base_profile.get("product_main_category", "") or ""),
-                "product_sub_categories": list(base_profile.get("product_sub_categories", []) or []),
+                "sub_function_categories": list(base_profile.get("llm_sub_function_categories", []) or []),
                 "primary_ingredients": list(base_profile.get("primary_ingredients", []) or []),
                 "secondary_ingredients": list(base_profile.get("secondary_ingredients", []) or []),
                 "support_ingredients": list(base_profile.get("support_ingredients", []) or []),
@@ -1093,8 +1254,10 @@ class RecommendationService:
         candidate_limit: int,
         force_refresh: bool,
         llm_rerank: bool = False,
+        similarity_algorithm: str = SIMILARITY_ALGORITHM_VERSION,
     ) -> dict:
         self.ensure_loaded()
+        similarity_algorithm = normalize_similarity_algorithm(similarity_algorithm)
         base_product_id = self.resolve_product_id_by_report_no(report_no)
         base_profile = self.profiles[base_product_id]
         start_time = time.perf_counter()
@@ -1104,10 +1267,15 @@ class RecommendationService:
         with sqlite_connection(self.runtime["sqlite_path"]) as conn:
             ensure_cache_table(conn)
             cached_rows = []
-            if not force_refresh:
-                cached_rows = load_cached_rows(conn, base_product_id, top_k)
+            cache_enabled = similarity_algorithm == SIMILARITY_ALGORITHM_VERSION
+            if cache_enabled and not force_refresh:
+                cached_rows = load_cached_rows(conn, base_product_id, top_k, similarity_algorithm)
             if len(cached_rows) >= top_k:
-                recommendations = [self._convert_cache_row(row, idx) for idx, row in enumerate(cached_rows, start=1)]
+                raw_recommendations = [
+                    self._convert_cache_row(row, idx, base_profile)
+                    for idx, row in enumerate(cached_rows, start=1)
+                ]
+                recommendations = self._display_eligible_recommendations(raw_recommendations, top_k)
                 if llm_rerank:
                     try:
                         recommendations, llm_rerank_applied, _ = self._maybe_rerank_with_llm(
@@ -1127,6 +1295,7 @@ class RecommendationService:
                     },
                     "recommendations": recommendations,
                     "cache_used": True,
+                    "similarity_algorithm": similarity_algorithm,
                     "llm_rerank_applied": llm_rerank_applied,
                     "llm_rerank_error": llm_rerank_error,
                     "execution_seconds": execution_seconds,
@@ -1142,11 +1311,18 @@ class RecommendationService:
                 self.profiles,
                 self.ingredient_postings,
                 self.ingredient_frequency,
+                similarity_algorithm,
+                self.ingredient_category_profiles,
             )
             if failed_rows:
                 pass
-            refresh_cache_rows(conn, base_product_id, rows)
-            recommendations = [self._convert_cache_row(row, idx) for idx, row in enumerate(rows, start=1)]
+            if cache_enabled:
+                refresh_cache_rows(conn, base_product_id, rows, similarity_algorithm)
+            raw_recommendations = [
+                self._convert_cache_row(row, idx, base_profile)
+                for idx, row in enumerate(rows, start=1)
+            ]
+            recommendations = self._display_eligible_recommendations(raw_recommendations, top_k)
             if llm_rerank:
                 try:
                     recommendations, llm_rerank_applied, _ = self._maybe_rerank_with_llm(
@@ -1166,6 +1342,7 @@ class RecommendationService:
                 },
                 "recommendations": recommendations,
                 "cache_used": False,
+                "similarity_algorithm": similarity_algorithm,
                 "llm_rerank_applied": llm_rerank_applied,
                 "llm_rerank_error": llm_rerank_error,
                 "execution_seconds": execution_seconds,

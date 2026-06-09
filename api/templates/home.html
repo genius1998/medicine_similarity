@@ -179,6 +179,257 @@
       background: #f8f8f8;
       color: #222;
     }
+    .button:disabled {
+      opacity: 0.7;
+      cursor: wait;
+    }
+    .ingredient-panel {
+      border: 1px solid #bfd3ca;
+      border-radius: 6px;
+      background: linear-gradient(180deg, #fbfdfc 0%, #f4f8f6 100%);
+      padding: 14px;
+    }
+    .ingredient-panel-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .ingredient-kicker {
+      margin-bottom: 4px;
+      color: #1f5b43;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0;
+    }
+    .ingredient-panel-title {
+      margin: 0;
+      color: #172d24;
+      font-size: 18px;
+      line-height: 1.35;
+      font-weight: 800;
+    }
+    .ingredient-panel-copy {
+      margin-top: 4px;
+      color: #52635b;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .ingredient-status-pill {
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: center;
+      min-height: 26px;
+      border: 1px solid #c8d8d0;
+      border-radius: 999px;
+      background: #ffffff;
+      padding: 4px 9px;
+      color: #275443;
+      font-size: 11px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+    .ingredient-search {
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) auto auto;
+      gap: 6px;
+      align-items: center;
+      border: 1px solid #b8cbc2;
+      border-radius: 6px;
+      background: #ffffff;
+      padding: 6px;
+      box-shadow: 0 1px 2px rgba(21, 52, 39, 0.08);
+    }
+    .ingredient-search input {
+      width: 100%;
+      min-width: 0;
+      border: 0;
+      border-radius: 4px;
+      padding: 10px 10px;
+      font-size: 14px;
+      background: transparent;
+      outline: none;
+    }
+    .ingredient-search input:focus {
+      box-shadow: inset 0 0 0 2px #2d7a5c;
+      background: #fbfffd;
+    }
+    .ingredient-search .button,
+    .ingredient-search .button-secondary {
+      min-height: 38px;
+      white-space: nowrap;
+    }
+    .ingredient-examples {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 10px;
+    }
+    .ingredient-example {
+      border: 1px solid #d2ded8;
+      border-radius: 999px;
+      background: #ffffff;
+      padding: 5px 9px;
+      color: #40544b;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .ingredient-example:hover {
+      border-color: #2d7a5c;
+      color: #1f5b43;
+      background: #f2f8f5;
+    }
+    .ingredient-result {
+      margin-top: 12px;
+      border: 1px solid #cfdcd6;
+      border-radius: 6px;
+      background: #ffffff;
+      padding: 12px;
+      font-size: 13px;
+      line-height: 1.6;
+      box-shadow: 0 1px 2px rgba(22, 45, 35, 0.06);
+    }
+    .ingredient-result.is-empty {
+      border-style: dashed;
+      color: var(--muted);
+      background: rgba(255, 255, 255, 0.72);
+    }
+    .ingredient-result.is-loading {
+      border-color: #b9d1c6;
+      color: #274b3d;
+      background: #f7fbf9;
+    }
+    .ingredient-result.is-miss {
+      border-color: #dfc8c0;
+      background: #fffaf8;
+      color: #704133;
+    }
+    .ingredient-placeholder,
+    .ingredient-loading {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      min-height: 34px;
+    }
+    .ingredient-loading-dot {
+      width: 12px;
+      height: 12px;
+      border: 2px solid #b9d1c6;
+      border-top-color: #1f5b43;
+      border-radius: 50%;
+      animation: ingredient-spin 0.8s linear infinite;
+      flex: 0 0 auto;
+    }
+    @keyframes ingredient-spin {
+      to { transform: rotate(360deg); }
+    }
+    .ingredient-match-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 10px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid #e3e9e6;
+      margin-bottom: 10px;
+    }
+    .ingredient-match-label {
+      color: #6d7b74;
+      font-size: 11px;
+      font-weight: 800;
+    }
+    .ingredient-match-name {
+      margin-top: 2px;
+      color: #172d24;
+      font-size: 18px;
+      line-height: 1.35;
+      font-weight: 800;
+      word-break: break-word;
+    }
+    .match-badge {
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: center;
+      min-height: 26px;
+      border-radius: 999px;
+      padding: 4px 9px;
+      font-size: 11px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+    .match-badge.high {
+      background: #e8f5ef;
+      color: #1f5b43;
+      border: 1px solid #b8d9cb;
+    }
+    .match-badge.medium {
+      background: #fff8e8;
+      color: #76570f;
+      border: 1px solid #ead8a8;
+    }
+    .match-badge.low {
+      background: #fff1ed;
+      color: #7a3c2b;
+      border: 1px solid #e5c6bb;
+    }
+    .ingredient-match-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .ingredient-match-item {
+      min-width: 0;
+      border: 1px solid #e1e8e5;
+      border-radius: 6px;
+      background: #fbfcfb;
+      padding: 8px;
+    }
+    .ingredient-match-item.wide {
+      grid-column: 1 / -1;
+    }
+    .ingredient-match-key {
+      margin-bottom: 3px;
+      color: #6d7b74;
+      font-size: 11px;
+      font-weight: 800;
+    }
+    .ingredient-match-value {
+      color: #22342d;
+      font-size: 13px;
+      word-break: break-word;
+    }
+    .ingredient-result dl {
+      display: grid;
+      grid-template-columns: 130px minmax(0, 1fr);
+      gap: 6px 10px;
+      margin: 0;
+    }
+    .ingredient-result dt {
+      color: var(--muted);
+      font-weight: 700;
+    }
+    .ingredient-result dd {
+      margin: 0;
+      word-break: break-word;
+    }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 7px;
+      border: 1px solid #c9d8cf;
+      border-radius: 12px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 11px;
+      line-height: 1.4;
+      white-space: nowrap;
+    }
+    .chip.secondary {
+      border-color: #d8dde4;
+      background: #f6f8fa;
+      color: #3f4b5a;
+    }
     ul {
       margin: 0;
       padding-left: 18px;
@@ -189,6 +440,13 @@
     @media (max-width: 920px) {
       .layout { grid-template-columns: 1fr; }
       .menu-grid { grid-template-columns: 1fr; }
+      .ingredient-panel-head { display: block; }
+      .ingredient-status-pill { margin-top: 8px; }
+      .ingredient-search { grid-template-columns: 1fr; }
+      .ingredient-match-head { display: block; }
+      .match-badge { margin-top: 8px; }
+      .ingredient-match-grid { grid-template-columns: 1fr; }
+      .ingredient-result dl { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -236,6 +494,32 @@
               <tr><th>추천 기준</th><td>기능성 원료, 제품 카테고리, 제품 프로필 기반 유사도 계산</td></tr>
             </tbody>
           </table>
+        </section>
+
+        <section class="section-box">
+          <div class="ingredient-panel">
+            <div class="ingredient-panel-head">
+              <div>
+                <div class="ingredient-kicker">INGREDIENT MATCH</div>
+                <h2 class="ingredient-panel-title">원료 정밀 매칭</h2>
+                <div class="ingredient-panel-copy">기존 DB, RAG 후보, AI 판정을 거쳐 표준 원료와 카테고리를 확인합니다.</div>
+              </div>
+              <div class="ingredient-status-pill">실시간 매칭</div>
+            </div>
+            <div class="ingredient-search">
+              <input id="ingredientSearchInput" type="search" placeholder="밀크씨슬, 홍삼농축액, 프로바이오틱스" autocomplete="off" aria-label="원료명 검색">
+              <button id="ingredientSearchButton" class="button" type="button">정밀 검색</button>
+              <a class="button-secondary" href="/ingredients">원료 DB</a>
+            </div>
+            <div class="ingredient-examples" aria-label="추천 검색어">
+              <button class="ingredient-example" type="button" data-ingredient-example="밀크씨슬">밀크씨슬</button>
+              <button class="ingredient-example" type="button" data-ingredient-example="홍삼농축액">홍삼농축액</button>
+              <button class="ingredient-example" type="button" data-ingredient-example="프로바이오틱스">프로바이오틱스</button>
+            </div>
+            <div id="ingredientSearchResult" class="ingredient-result is-empty" role="status" aria-live="polite">
+              <div class="ingredient-placeholder">원료명을 입력하면 매칭 결과가 여기에 표시됩니다.</div>
+            </div>
+          </div>
         </section>
 
         <section class="section-box">
@@ -309,5 +593,141 @@
       </div>
     </section>
   </div>
+  <script>
+    const ingredientInput = document.getElementById("ingredientSearchInput");
+    const ingredientButton = document.getElementById("ingredientSearchButton");
+    const ingredientResult = document.getElementById("ingredientSearchResult");
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function sourceLabel(source) {
+      const value = String(source || "");
+      if (value.includes("runtime_rag_llm_existing")) return "RAG+LLM 기존 원료";
+      if (value.includes("runtime_rag_llm_new")) return "RAG+LLM 신규 원료";
+      if (value.includes("cache")) return "캐시 매칭";
+      if (value.includes("direct_category")) return "DB 직접 매칭";
+      if (value.includes("alias")) return "별칭 매칭";
+      return value || "-";
+    }
+
+    function confidenceClass(confidence) {
+      if (confidence >= 0.9) return "high";
+      if (confidence >= 0.75) return "medium";
+      return "low";
+    }
+
+    function formatConfidence(confidence) {
+      const value = Number(confidence || 0);
+      if (!Number.isFinite(value) || value <= 0) return "-";
+      return `${Math.round(value * 100)}%`;
+    }
+
+    function renderIngredientEmpty(message, state = "is-empty") {
+      ingredientResult.className = `ingredient-result ${state}`;
+      ingredientResult.innerHTML = `<div class="ingredient-placeholder">${escapeHtml(message)}</div>`;
+    }
+
+    function renderIngredientLoading(query) {
+      ingredientResult.className = "ingredient-result is-loading";
+      ingredientResult.innerHTML = `
+        <div class="ingredient-loading">
+          <span class="ingredient-loading-dot" aria-hidden="true"></span>
+          <span><strong>${escapeHtml(query)}</strong> 정밀 매칭 중입니다.</span>
+        </div>
+      `;
+    }
+
+    function renderIngredientMatch(payload) {
+      const item = payload.match || {};
+      if (!payload.matched) {
+        renderIngredientEmpty(`"${payload.query || ""}" 원료는 정밀 매칭 결과 표준 원료를 찾지 못했습니다.`, "is-miss");
+        return;
+      }
+      ingredientResult.className = "ingredient-result";
+      const category = [item.category_main, item.category_sub].filter(Boolean).join(" / ") || "-";
+      const functionText = item.function_text || item.claim_text || "-";
+      const confidence = Number(item.confidence || 0);
+      const vectorText = item.vector_include ? "추천 벡터 반영" : "보조 정보";
+      const matchedName = item.functional_ingredient_name || "-";
+      const relationText = item.relation_type || "-";
+      const sourceText = sourceLabel(item.match_source);
+      ingredientResult.innerHTML = `
+        <div class="ingredient-match-head">
+          <div>
+            <div class="ingredient-match-label">매칭 표준 원료</div>
+            <div class="ingredient-match-name">${escapeHtml(matchedName)}</div>
+          </div>
+          <span class="match-badge ${confidenceClass(confidence)}">신뢰도 ${escapeHtml(formatConfidence(confidence))}</span>
+        </div>
+        <div class="ingredient-match-grid">
+          <div class="ingredient-match-item">
+            <div class="ingredient-match-key">입력 원료</div>
+            <div class="ingredient-match-value">${escapeHtml(payload.query || item.display_name || "-")}</div>
+          </div>
+          <div class="ingredient-match-item">
+            <div class="ingredient-match-key">카테고리</div>
+            <div class="ingredient-match-value"><span class="chip">${escapeHtml(category)}</span></div>
+          </div>
+          <div class="ingredient-match-item">
+            <div class="ingredient-match-key">매칭 방식</div>
+            <div class="ingredient-match-value">${escapeHtml(sourceText)} <span class="chip secondary">${escapeHtml(relationText)}</span></div>
+          </div>
+          <div class="ingredient-match-item">
+            <div class="ingredient-match-key">추천 반영</div>
+            <div class="ingredient-match-value">${escapeHtml(vectorText)}</div>
+          </div>
+          <div class="ingredient-match-item wide">
+            <div class="ingredient-match-key">기능 정보</div>
+            <div class="ingredient-match-value">${escapeHtml(functionText)}</div>
+          </div>
+        </div>
+      `;
+    }
+
+    async function searchIngredient() {
+      const query = ingredientInput.value.trim();
+      if (!query) {
+        renderIngredientEmpty("검색할 원료명을 입력하세요.");
+        ingredientInput.focus();
+        return;
+      }
+      ingredientButton.disabled = true;
+      ingredientButton.textContent = "검색 중";
+      renderIngredientLoading(query);
+      try {
+        const response = await fetch(`/api/ingredients/match?q=${encodeURIComponent(query)}`);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        renderIngredientMatch(await response.json());
+      } catch (error) {
+        renderIngredientEmpty("원료 정밀 매칭 조회 중 오류가 발생했습니다.");
+      } finally {
+        ingredientButton.disabled = false;
+        ingredientButton.textContent = "정밀 검색";
+      }
+    }
+
+    ingredientButton.addEventListener("click", searchIngredient);
+    document.querySelectorAll("[data-ingredient-example]").forEach((button) => {
+      button.addEventListener("click", () => {
+        ingredientInput.value = button.dataset.ingredientExample || "";
+        searchIngredient();
+      });
+    });
+    ingredientInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        searchIngredient();
+      }
+    });
+  </script>
 </body>
 </html>

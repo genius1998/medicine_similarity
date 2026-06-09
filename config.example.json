@@ -23,6 +23,18 @@
     "timeout_sec": 120,
     "max_retries": 2
   },
+  "ingredient_match_llm": {
+    "provider": "openai",
+    "model": "gpt-5-nano",
+    "api_key_env": "OPENAI_API_KEY",
+    "env_path": "",
+    "base_url": "https://api.openai.com/v1/responses",
+    "timeout_sec": 20,
+    "max_retries": 1,
+    "max_output_tokens": 700,
+    "reasoning_effort": "minimal",
+    "fallback_to_local": false
+  },
   "ingredient_embedding": {
     "enabled": true,
     "model_name": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",

@@ -883,95 +883,117 @@ class OperationsService:
         return items[: max(1, int(limit))]
 
     def list_ingredient_catalog(self, *, q: str = "", origin: str = "all", limit: int = 300) -> List[dict]:
-        self.sync_pending_ingredients_from_runtime()
-        query = str(q or "").strip().lower()
+        return self.list_ingredient_catalog_page(q=q, origin=origin, page=1, page_size=limit)["results"]
+
+    def list_ingredient_catalog_page(
+        self,
+        *,
+        q: str = "",
+        origin: str = "all",
+        page: int = 1,
+        page_size: int = 50,
+        sync_pending: bool = True,
+    ) -> dict:
+        if sync_pending:
+            self.sync_pending_ingredients_from_runtime()
+        query = str(q or "").strip()
         origin_filter = str(origin or "all").strip().lower()
+        if origin_filter not in {"all", "existing", "new"}:
+            origin_filter = "all"
+        safe_page = max(1, int(page or 1))
+        safe_page_size = max(1, min(1000, int(page_size or 50)))
+
+        combined_sql = f"""
+            SELECT f.functional_ingredient_name, f.category_main, f.category_sub, f.function_text, f.claim_text,
+                   f.source, f.confidence, f.notes, '' AS created_at, '' AS updated_at,
+                   'existing' AS origin_type, '기존 원료' AS origin_label, 'functional_category_map' AS source_table,
+                   1 AS origin_rank
+            FROM functional_category_map f
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM {RUNTIME_CUSTOM_FUNCTIONAL_TABLE_NAME} c
+                WHERE c.functional_ingredient_name = f.functional_ingredient_name
+            )
+            UNION ALL
+            SELECT c.functional_ingredient_name, c.category_main, c.category_sub, c.function_text, c.claim_text,
+                   c.source, c.confidence, c.notes, c.created_at, c.updated_at,
+                   'new' AS origin_type, '신규 추가' AS origin_label, '{RUNTIME_CUSTOM_FUNCTIONAL_TABLE_NAME}' AS source_table,
+                   0 AS origin_rank
+            FROM {RUNTIME_CUSTOM_FUNCTIONAL_TABLE_NAME} c
+        """
+        where_parts: List[str] = []
+        params: List[Any] = []
+        if origin_filter in {"existing", "new"}:
+            where_parts.append("origin_type = ?")
+            params.append(origin_filter)
+        if query:
+            like = f"%{query}%"
+            where_parts.append(
+                """
+                (
+                    functional_ingredient_name LIKE ?
+                    OR category_main LIKE ?
+                    OR category_sub LIKE ?
+                    OR function_text LIKE ?
+                    OR claim_text LIKE ?
+                    OR notes LIKE ?
+                    OR source LIKE ?
+                )
+                """
+            )
+            params.extend([like] * 7)
+        where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
         with sqlite_connection(self.sqlite_path) as conn:
             conn.row_factory = sqlite3.Row
-            existing_rows = conn.execute(
-                """
-                SELECT functional_ingredient_name, category_main, category_sub, function_text, claim_text,
-                       source, confidence, notes, '' AS created_at, '' AS updated_at
-                FROM functional_category_map
-                """
-            ).fetchall()
-            custom_rows = conn.execute(
-                f"""
-                SELECT functional_ingredient_name, category_main, category_sub, function_text, claim_text,
-                       source, confidence, notes, created_at, updated_at
-                FROM {RUNTIME_CUSTOM_FUNCTIONAL_TABLE_NAME}
-                """
-            ).fetchall()
-
-        items: Dict[str, dict] = {}
-        for row in existing_rows:
-            item = dict(row)
-            name = str(item.get("functional_ingredient_name", "") or "").strip()
-            if not name:
-                continue
-            items[name] = {
-                "functional_ingredient_name": name,
-                "category_main": str(item.get("category_main", "") or ""),
-                "category_sub": str(item.get("category_sub", "") or ""),
-                "function_text": str(item.get("function_text", "") or ""),
-                "claim_text": str(item.get("claim_text", "") or ""),
-                "source": str(item.get("source", "") or ""),
-                "confidence": float(item.get("confidence", 0.0) or 0.0),
-                "notes": str(item.get("notes", "") or ""),
-                "created_at": str(item.get("created_at", "") or ""),
-                "updated_at": str(item.get("updated_at", "") or ""),
-                "origin_type": "existing",
-                "origin_label": "기존 원료",
-                "source_table": "functional_category_map",
-            }
-
-        for row in custom_rows:
-            item = dict(row)
-            name = str(item.get("functional_ingredient_name", "") or "").strip()
-            if not name:
-                continue
-            items[name] = {
-                "functional_ingredient_name": name,
-                "category_main": str(item.get("category_main", "") or ""),
-                "category_sub": str(item.get("category_sub", "") or ""),
-                "function_text": str(item.get("function_text", "") or ""),
-                "claim_text": str(item.get("claim_text", "") or ""),
-                "source": str(item.get("source", "") or ""),
-                "confidence": float(item.get("confidence", 0.0) or 0.0),
-                "notes": str(item.get("notes", "") or ""),
-                "created_at": str(item.get("created_at", "") or ""),
-                "updated_at": str(item.get("updated_at", "") or ""),
-                "origin_type": "new",
-                "origin_label": "신규 추가",
-                "source_table": RUNTIME_CUSTOM_FUNCTIONAL_TABLE_NAME,
-            }
-
-        rows: List[dict] = []
-        for item in items.values():
-            if origin_filter in {"existing", "new"} and item["origin_type"] != origin_filter:
-                continue
-            haystack = " ".join(
-                [
-                    item["functional_ingredient_name"],
-                    item["category_main"],
-                    item["category_sub"],
-                    item["function_text"],
-                    item["claim_text"],
-                    item["notes"],
-                    item["source"],
-                ]
-            ).lower()
-            if query and query not in haystack:
-                continue
-            rows.append(item)
-
-        rows.sort(
-            key=lambda item: (
-                0 if item["origin_type"] == "new" else 1,
-                item["functional_ingredient_name"],
+            total_count = int(
+                conn.execute(
+                    f"WITH combined AS ({combined_sql}) SELECT COUNT(*) FROM combined {where_sql}",
+                    params,
+                ).fetchone()[0]
+                or 0
             )
-        )
-        return rows[: max(1, int(limit))]
+            total_pages = max(1, (total_count + safe_page_size - 1) // safe_page_size)
+            current_page = min(safe_page, total_pages)
+            offset = (current_page - 1) * safe_page_size
+            rows = conn.execute(
+                f"""
+                WITH combined AS ({combined_sql})
+                SELECT functional_ingredient_name, category_main, category_sub, function_text, claim_text,
+                       source, confidence, notes, created_at, updated_at, origin_type, origin_label, source_table
+                FROM combined
+                {where_sql}
+                ORDER BY origin_rank ASC, functional_ingredient_name ASC
+                LIMIT ? OFFSET ?
+                """,
+                [*params, safe_page_size, offset],
+            ).fetchall()
+        results: List[dict] = []
+        for row in rows:
+            item = dict(row)
+            item["functional_ingredient_name"] = str(item.get("functional_ingredient_name", "") or "")
+            item["category_main"] = str(item.get("category_main", "") or "")
+            item["category_sub"] = str(item.get("category_sub", "") or "")
+            item["function_text"] = str(item.get("function_text", "") or "")
+            item["claim_text"] = str(item.get("claim_text", "") or "")
+            item["source"] = str(item.get("source", "") or "")
+            item["confidence"] = float(item.get("confidence", 0.0) or 0.0)
+            item["notes"] = str(item.get("notes", "") or "")
+            item["created_at"] = str(item.get("created_at", "") or "")
+            item["updated_at"] = str(item.get("updated_at", "") or "")
+            results.append(item)
+        return {
+            "query": query,
+            "origin": origin_filter,
+            "page": current_page,
+            "page_size": safe_page_size,
+            "total_count": total_count,
+            "total_pages": total_pages,
+            "has_prev": current_page > 1,
+            "has_next": current_page < total_pages,
+            "prev_page": max(1, current_page - 1),
+            "next_page": min(total_pages, current_page + 1),
+            "results": results,
+        }
 
     def update_ingredient_catalog_item(
         self,

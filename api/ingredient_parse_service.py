@@ -11,11 +11,39 @@ from api.local_llm_client import call_local_llm, extract_json_from_llm_content
 from api.ocr_text_sectionizer import sectionize_ocr_text
 
 
-PARSE_PROMPT_VERSION = "ingredient_parse_v2_sectionized"
-PARSE_SCHEMA_VERSION = "ingredient_parse_schema_v1"
-PARSE_NORMALIZER_VERSION = "ingredient_normalizer_v6"
-PARSE_SECTIONIZER_VERSION = "ocr_text_sectionizer_v4"
+PARSE_PROMPT_VERSION = "ingredient_parse_v3_sectionized_category"
+PARSE_SCHEMA_VERSION = "ingredient_parse_schema_v2_category"
+PARSE_NORMALIZER_VERSION = "ingredient_normalizer_v7"
+PARSE_SECTIONIZER_VERSION = "ocr_text_sectionizer_v5"
 LLM_PARSE_CACHE_TABLE_NAME = "llm_parse_cache"
+
+PRODUCT_CATEGORY_LABELS = [
+    "영양보충",
+    "장 건강",
+    "뼈 건강",
+    "면역",
+    "기타",
+    "관절/연골",
+    "혈중지질",
+    "눈 건강",
+    "혈당",
+    "남성 건강",
+    "체지방",
+    "구강 건강",
+    "피부 건강",
+    "기억력",
+    "여성 건강",
+    "피로개선",
+    "운동/근력",
+    "수면/긴장완화",
+    "간 건강",
+    "항산화",
+    "혈행",
+    "인지력",
+    "혈압",
+]
+
+PRODUCT_CATEGORY_LABEL_SET = set(PRODUCT_CATEGORY_LABELS)
 
 
 EXCIPIENT_KEYWORDS = [
@@ -103,6 +131,8 @@ PROBIOTIC_CANONICAL_KEYWORDS = [
 ]
 
 PRODUCT_NAME_PATTERNS = [
+    r"제품명\s*[:：]?\s*([^\n]+)",
+    r"상품명\s*[:：]?\s*([^\n]+)",
     r"제품명\s*[:：]\s*(.+)",
     r"상품명\s*[:：]\s*(.+)",
 ]
@@ -119,6 +149,12 @@ DAILY_INTAKE_PATTERNS = [
 ]
 
 SECTION_STOP_KEYWORDS = [
+    "제품명",
+    "상품명",
+    "식품의 유형",
+    "식품유형",
+    "제품의 유형",
+    "제품유형",
     "섭취량",
     "섭취방법",
     "영양",
@@ -148,6 +184,13 @@ INGREDIENT_CONTEXT_SKIP_LINES = {
     "유통전문판매원",
     "소재지",
     "제품 상세 정보",
+    "제품명",
+    "상품명",
+    "식품의 유형",
+    "식품유형",
+    "제품의 유형",
+    "제품유형",
+    "고형차",
 }
 
 STRICT_INGREDIENT_START_KEYWORDS = [
@@ -170,6 +213,12 @@ STRICT_INGREDIENT_STOP_KEYWORDS = [
     "\uae30\ub2a5\uc815\ubcf4",
     "\uac74\uac15\uc815\ubcf4",
     "\uc81c\ud488 \uc0c1\uc138 \uc815\ubcf4",
+    "\uc81c\ud488\uba85",
+    "\uc0c1\ud488\uba85",
+    "\uc2dd\ud488\uc758 \uc720\ud615",
+    "\uc2dd\ud488\uc720\ud615",
+    "\uc81c\ud488\uc758 \uc720\ud615",
+    "\uc81c\ud488\uc720\ud615",
     "\uc18c\ube44\uc790\uc0c1\ub2f4",
     "\uc81c\uc870\uc6d0",
     "\ubc18\ud488",
@@ -202,6 +251,13 @@ NON_INGREDIENT_EXACT_TOKENS = {
     "\uc774\ub7f0 \ubd84",
     "\uc12d\ucde8\ud558\uc2ed\uc2dc\uc624",
     "\uc8fc\uc758\ud558\uc2ed\uc2dc\uc624",
+    "\uc81c\ud488\uba85",
+    "\uc0c1\ud488\uba85",
+    "\uc2dd\ud488\uc758 \uc720\ud615",
+    "\uc2dd\ud488\uc720\ud615",
+    "\uc81c\ud488\uc758 \uc720\ud615",
+    "\uc81c\ud488\uc720\ud615",
+    "\uace0\ud615\ucc28",
 }
 
 NON_INGREDIENT_SUBSTRINGS = [
@@ -214,6 +270,12 @@ NON_INGREDIENT_SUBSTRINGS = [
     "\ud45c",
     "\uac74\uac15\uc815\ubcf4",
     "\uc81c\ud488 \uc0c1\uc138 \uc815\ubcf4",
+    "\uc81c\ud488\uba85",
+    "\uc0c1\ud488\uba85",
+    "\uc2dd\ud488\uc758 \uc720\ud615",
+    "\uc2dd\ud488\uc720\ud615",
+    "\uc81c\ud488\uc758 \uc720\ud615",
+    "\uc81c\ud488\uc720\ud615",
     "\uc18c\ube44\uc790\uc0c1\ub2f4",
     "\uc12d\ucde8 \uc2dc \uc8fc\uc758\uc0ac\ud56d",
 ]
@@ -233,6 +295,12 @@ INGREDIENT_SECTION_STOP_TOKENS = [
     "어린이",
     "임산부",
     "수유부",
+    "제품명",
+    "상품명",
+    "식품의 유형",
+    "식품유형",
+    "제품의 유형",
+    "제품유형",
 ]
 
 ALLERGEN_NOTICE_PATTERNS = [
@@ -521,6 +589,27 @@ def _looks_like_functional_premix(name: str) -> bool:
     return any(token in normalized for token in functional_tokens)
 
 
+def _looks_like_extract_powder_with_carrier(name: str) -> bool:
+    value = normalize_spacing(name)
+    if "(" not in value and "{" not in value:
+        return False
+    outer = normalize_lookup_key(_strip_parentheses(value))
+    if not outer:
+        return False
+    if any(normalize_lookup_key(item) == outer for item in EXCIPIENT_KEYWORDS):
+        return False
+    extract_markers = [
+        "추출분말",
+        "추출물분말",
+        "추출물",
+        "추출액",
+        "농축분말",
+        "농축액",
+        "농축",
+    ]
+    return any(marker in outer for marker in extract_markers)
+
+
 def is_excipient(name: str) -> bool:
     normalized = normalize_lookup_key(name)
     if not normalized:
@@ -529,6 +618,8 @@ def is_excipient(name: str) -> bool:
         return False
     if _match_explicit_excipient_normalization(name):
         return True
+    if _looks_like_extract_powder_with_carrier(name):
+        return False
     if any(normalize_lookup_key(item) in normalized for item in FUNCTIONAL_EXCEPTIONS):
         return False
     return any(normalize_lookup_key(item) in normalized for item in EXCIPIENT_KEYWORDS)
@@ -595,6 +686,48 @@ def classify_warning_message(message: str, default_code: str = "llm_warning") ->
     return {"code": default_code, "message": text, "severity": "warning"}
 
 
+def normalize_product_category_label(value: Any) -> str:
+    label = normalize_spacing(str(value or ""))
+    if label in PRODUCT_CATEGORY_LABEL_SET:
+        return label
+    aliases = {
+        "기억력/인지력": "인지력",
+        "혈중 지질": "혈중지질",
+        "혈중지질 건강": "혈중지질",
+        "뼈건강": "뼈 건강",
+        "골 건강": "뼈 건강",
+        "장건강": "장 건강",
+        "눈건강": "눈 건강",
+        "남성건강": "남성 건강",
+        "여성건강": "여성 건강",
+        "피부건강": "피부 건강",
+        "구강건강": "구강 건강",
+        "간건강": "간 건강",
+        "수면": "수면/긴장완화",
+        "긴장완화": "수면/긴장완화",
+        "근력": "운동/근력",
+    }
+    return aliases.get(label, "")
+
+
+def normalize_product_category_labels(values: Any) -> List[str]:
+    if not isinstance(values, list):
+        return []
+    labels: List[str] = []
+    for value in values:
+        label = normalize_product_category_label(value)
+        if label and label not in labels:
+            labels.append(label)
+    return labels
+
+
+def coerce_confidence(value: Any) -> float:
+    try:
+        return max(0.0, min(1.0, float(value or 0.0)))
+    except Exception:
+        return 0.0
+
+
 def canonicalize_ingredient_for_matching(name: str) -> str:
     value = normalize_spacing(name)
     if not value:
@@ -642,7 +775,9 @@ def canonicalize_ingredient_for_matching(name: str) -> str:
         ("프락토올리고당", "프락토올리고당"),
         ("이눌린/치커리추출물", "이눌린/치커리추출물"),
         ("이눌린", "이눌린/치커리추출물"),
+        ("치커리뿌리", "이눌린/치커리추출물"),
         ("치커리추출물", "이눌린/치커리추출물"),
+        ("치커리", "이눌린/치커리추출물"),
         ("난소화성말토덱스트린", "난소화성말토덱스트린"),
         ("바나바잎추출물", "바나바잎 추출물"),
         ("바나바잎추출", "바나바잎 추출물"),
@@ -713,7 +848,12 @@ def canonicalize_ingredient_for_matching(name: str) -> str:
         ("쏘팔메토", "쏘팔메토열매추출물"),
         ("sawpalmetto", "쏘팔메토열매추출물"),
         ("녹용", "녹용"),
+        ("l-arginine", "L-아르기닌"),
+        ("arginine", "L-아르기닌"),
+        ("l-아르지닌", "L-아르기닌"),
+        ("아르지닌", "L-아르기닌"),
         ("l-아르기닌", "L-아르기닌"),
+        ("아르기닌", "L-아르기닌"),
         ("l-글루타민", "L-글루타민"),
         ("dha", "DHA"),
     ]
@@ -1001,6 +1141,68 @@ def _extract_explicit_ingredient_window(text: str) -> str:
     return candidate if len(useful_parts) >= 2 else ""
 
 
+def _bracket_depth(text: str) -> int:
+    depth = 0
+    for char in str(text or ""):
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth = max(0, depth - 1)
+    return depth
+
+
+def _looks_like_section_stop_heading(text: str) -> bool:
+    normalized = normalize_lookup_key(text)
+    if not normalized:
+        return False
+    stop_terms = [
+        *STRICT_INGREDIENT_STOP_KEYWORDS,
+        *INGREDIENT_SECTION_STOP_TOKENS,
+        "제품명",
+        "상품명",
+        "식품의 유형",
+        "식품유형",
+        "제품의 유형",
+        "제품유형",
+    ]
+    return any(normalize_lookup_key(term) == normalized for term in stop_terms)
+
+
+def _should_join_fragmented_ingredient_line(previous: str, current: str) -> bool:
+    if not previous or not current:
+        return False
+    if _looks_like_section_stop_heading(current):
+        return False
+    previous_tail = normalize_lookup_key(str(previous).split(",")[-1])
+    current_head = normalize_lookup_key(str(current).split(",")[0])
+    if not previous_tail or not current_head:
+        return False
+
+    if _bracket_depth(previous) > 0:
+        return True
+
+    completion_pairs = [
+        ("추", "출"),
+        ("추출", "분말"),
+        ("추출분", "말"),
+        ("분", "말"),
+        ("농축", "액"),
+        ("브로", "콜리"),
+        ("이산", "화규소"),
+    ]
+    return any(previous_tail.endswith(left) and current_head.startswith(right) for left, right in completion_pairs)
+
+
+def _join_fragment_separator(previous: str, current: str) -> str:
+    previous = str(previous or "")
+    current = str(current or "")
+    if not previous or not current:
+        return ""
+    if re.search(r"[A-Za-z가-힣)]$", previous) and re.match(r"^\d", current):
+        return " "
+    return ""
+
+
 def _join_fragmented_ingredient_lines(lines: List[str]) -> List[str]:
     joined: List[str] = []
     pending_prefix = ""
@@ -1013,6 +1215,9 @@ def _join_fragmented_ingredient_lines(lines: List[str]) -> List[str]:
             pending_prefix = ""
         if re.fullmatch(r"[A-Za-z가-힣0-9]{1,2}", line):
             pending_prefix = line
+            continue
+        if joined and _should_join_fragmented_ingredient_line(joined[-1], line):
+            joined[-1] = normalize_spacing(joined[-1] + _join_fragment_separator(joined[-1], line) + line)
             continue
         joined.append(line)
     if pending_prefix:
@@ -1277,10 +1482,14 @@ def _validate_and_repair_parsed_result(parsed: Dict[str, Any]) -> Dict[str, Any]
             confidence = float(rebuilt.get("confidence", parsed.get("confidence", 0.0)) or 0.0)
             role = normalize_spacing(rebuilt.get("role", "")) or classify_ingredient_role(raw or display_name)
             original_role = role
+            calculated_role = classify_ingredient_role(raw or display_name)
+            if role == "excipient" and calculated_role != "excipient":
+                role = calculated_role
+                corrected_fields.append("ingredient_objects.role")
             dedupe_key = normalize_lookup_key(normalized or standard_name or display_name or raw)
 
             if role not in {"primary", "secondary", "support", "excipient"}:
-                role = classify_ingredient_role(raw or display_name)
+                role = calculated_role
                 if role != original_role:
                     corrected_fields.append("ingredient_objects.role")
 
@@ -1371,6 +1580,22 @@ def _validate_and_repair_parsed_result(parsed: Dict[str, Any]) -> Dict[str, Any]
                 ]
             )
         )
+        current_excipient_names = {
+            normalize_spacing(item.get("display_name", "") or item.get("raw", ""))
+            for item in parsed["excluded_ingredient_objects"]
+            if normalize_spacing(item.get("display_name", "") or item.get("raw", ""))
+        }
+        filtered_quality_warnings: List[dict] = []
+        for warning in quality_warnings:
+            if str((warning or {}).get("code", "") or "") != "excipient_in_core_role":
+                filtered_quality_warnings.append(warning)
+                continue
+            message = str((warning or {}).get("message", "") or "")
+            if any(name and name in message for name in current_excipient_names):
+                filtered_quality_warnings.append(warning)
+            else:
+                corrected_fields.append("quality_warnings.removed_stale_excipient_warning")
+        quality_warnings = filtered_quality_warnings
         parsed["normalized_ingredients"] = list(
             dict.fromkeys(
                 [
@@ -1389,6 +1614,10 @@ def _validate_and_repair_parsed_result(parsed: Dict[str, Any]) -> Dict[str, Any]
                 ]
             )
         )
+        parsed["product_main_category"] = normalize_product_category_label(parsed.get("product_main_category", ""))
+        parsed["product_sub_categories"] = normalize_product_category_labels(parsed.get("product_sub_categories", []))
+        parsed["product_category_confidence"] = coerce_confidence(parsed.get("product_category_confidence", 0.0))
+        parsed["product_category_reason"] = normalize_spacing(parsed.get("product_category_reason", ""))
 
         found_primary = bool(parsed.get("primary_ingredients_normalized"))
         if not found_primary and parsed.get("normalized_ingredients"):
@@ -1625,6 +1854,8 @@ def compute_parsed_signature(parsed: Dict[str, Any]) -> str:
         )
     payload = {
         "product_name_candidate": normalize_spacing(parsed.get("product_name_candidate", "")),
+        "product_main_category": normalize_product_category_label(parsed.get("product_main_category", "")),
+        "product_sub_categories": sorted(normalize_product_category_labels(parsed.get("product_sub_categories", []))),
         "normalized_ingredients": sorted(
             normalize_spacing(item)
             for item in parsed.get("normalized_ingredients", []) or []
@@ -1795,6 +2026,10 @@ def rule_based_extract_ingredient_section(raw_text: str, section_context: Dict[s
     primary_fields = _collect_primary_fields(ingredient_objects)
     return {
         "product_name_candidate": product_name_candidate,
+        "product_main_category": "",
+        "product_sub_categories": [],
+        "product_category_confidence": 0.0,
+        "product_category_reason": "",
         "ingredient_section_text": ingredient_section_text,
         "functional_ingredient_candidates": list(dict.fromkeys(functional_candidates)),
         "raw_ingredients": raw_ingredients,
@@ -1840,11 +2075,18 @@ def normalize_ingredients_with_llm(raw_text: str, ocr_lines: List[str], section_
         "warning_area, company_area, unknown_area 성격의 문구는 원료로 추출하지 마라.\n"
         "긴 원료명은 display_name과 normalized_for_matching을 분리하라.\n"
         "예: DW2009 프로바이오틱스 복합물 -> normalized_for_matching=프로바이오틱스.\n"
+        "제품명과 원료 구성을 함께 보고 product_main_category를 하나 선택하라.\n"
+        "product_main_category는 반드시 allowed_product_categories 중 하나여야 한다.\n"
+        "trace 수준의 보조 원료 하나가 제품명과 핵심 영양소 조합을 뒤집지 않게 하라.\n"
+        "예: 칼슘+마그네슘+비타민D 중심 제품은 상어연골분말이 일부 있어도 보통 뼈 건강으로 본다.\n"
         "반드시 JSON만 출력하라."
     )
     user_prompt = (
         "아래 OCR 텍스트에서 건강기능식품 추천에 사용할 원료 정보를 추출하라.\n"
         "우선 SECTIONED_OCR_TEXT를 기준으로 판단하고, 필요할 때만 RAW_OCR_TEXT를 참고하라.\n\n"
+        "allowed_product_categories:\n"
+        + json.dumps(PRODUCT_CATEGORY_LABELS, ensure_ascii=False)
+        + "\n\n"
         f"SECTIONED_OCR_TEXT:\n{sectioned_payload}\n\n"
         f"RAW_OCR_TEXT:\n{llm_text}\n\n"
         "OCR_LINES:\n"
@@ -1853,6 +2095,10 @@ def normalize_ingredients_with_llm(raw_text: str, ocr_lines: List[str], section_
         "출력 JSON 스키마:\n"
         "{\n"
         '  "product_name_candidate": "",\n'
+        '  "product_main_category": "",\n'
+        '  "product_sub_categories": [],\n'
+        '  "product_category_confidence": 0.0,\n'
+        '  "product_category_reason": "",\n'
         '  "ingredient_section_text": "",\n'
         '  "functional_ingredient_candidates": [],\n'
         '  "raw_ingredients": [],\n'
@@ -1925,6 +2171,14 @@ def parse_ingredients_from_ocr_text(raw_text: str, sqlite_path: Path | None = No
     ingredient_source = llm_result if _ingredient_payload_score(llm_result) >= _ingredient_payload_score(fallback) else fallback
     merged = {
         "product_name_candidate": str(llm_result.get("product_name_candidate") or fallback.get("product_name_candidate") or ""),
+        "product_main_category": normalize_product_category_label(llm_result.get("product_main_category") or fallback.get("product_main_category") or ""),
+        "product_sub_categories": normalize_product_category_labels(
+            llm_result.get("product_sub_categories") or fallback.get("product_sub_categories") or []
+        ),
+        "product_category_confidence": coerce_confidence(
+            llm_result.get("product_category_confidence") or fallback.get("product_category_confidence") or 0.0
+        ),
+        "product_category_reason": str(llm_result.get("product_category_reason") or fallback.get("product_category_reason") or ""),
         "raw_text": str(raw_text or ""),
         "source_text": str(raw_text or ""),
         "ingredient_section_text": str(ingredient_source.get("ingredient_section_text") or fallback.get("ingredient_section_text") or ""),

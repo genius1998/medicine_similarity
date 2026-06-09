@@ -365,7 +365,7 @@
           <strong>${index + 1}. ${escapeHtml(item.display_name || item.raw || "-")}</strong>
           <div class="mini-meta">raw: ${escapeHtml(item.raw || "-")}</div>
           <div class="mini-meta">normalized: ${escapeHtml(item.normalized_for_matching || "-")}</div>
-          <div class="mini-meta">role: ${escapeHtml(item.role || "-")} / category_hint: ${escapeHtml(item.category_hint || "-")}</div>
+          <div class="mini-meta">legacy role(reference): ${escapeHtml(item.role || "-")} / category_hint: ${escapeHtml(item.category_hint || "-")}</div>
         </div>
       `).join("");
       return `
@@ -379,10 +379,6 @@
           <div>
             <div class="hint-text" style="margin-bottom:6px;">정규화 원료</div>
             ${renderChips(safeArray(parsed.normalized_ingredients))}
-          </div>
-          <div>
-            <div class="hint-text" style="margin-bottom:6px;">주요 원료</div>
-            ${renderChips(safeArray(parsed.primary_ingredients_normalized))}
           </div>
           <div>
             <div class="hint-text" style="margin-bottom:6px;">제외 원료</div>
@@ -417,15 +413,24 @@
       if (!items.length) {
         return `<div class="empty">원료별 DB 매칭 상태가 없습니다.</div>`;
       }
+      const renderList = (value) => safeArray(value).length ? safeArray(value).map((item) => escapeHtml(item)).join(", ") : "-";
+      const renderWeight = (value) => {
+        const num = Number(value);
+        return Number.isFinite(num) ? num.toFixed(2) : "-";
+      };
       return `
         <table class="summary-table">
           <thead>
             <tr>
               <th>원료</th>
-              <th>정규화</th>
-              <th>역할</th>
-              <th>기능성원료 여부</th>
-              <th>매칭 원료</th>
+              <th>functional match</th>
+              <th>matched ingredient</th>
+              <th>ingredient_type</th>
+              <th>vector_include</th>
+              <th>ingredient_main_category</th>
+              <th>sub_function_categories</th>
+              <th>semantic_weight</th>
+              <th>semantic_weight_reason</th>
               <th>relation</th>
             </tr>
           </thead>
@@ -433,10 +438,14 @@
             ${items.map((item) => `
               <tr>
                 <td>${escapeHtml(item.display_name || item.raw_ingredient || "-")}</td>
-                <td>${escapeHtml(item.normalized_for_matching || "-")}</td>
-                <td>${escapeHtml(item.input_role || "-")}</td>
-                <td>${item.is_functional_match ? "매칭됨" : "비매칭"}</td>
+                <td>${item.is_functional_match ? "matched" : "unmatched"}</td>
                 <td>${escapeHtml(item.functional_ingredient_name || "-")}</td>
+                <td>${escapeHtml(item.ingredient_type || "-")}</td>
+                <td>${item.vector_include ? "true" : "false"}</td>
+                <td>${escapeHtml(item.ingredient_main_category || item.category_main || "-")}</td>
+                <td>${renderList(item.sub_function_categories)}</td>
+                <td>${renderWeight(item.semantic_weight)}</td>
+                <td>${escapeHtml(item.semantic_weight_reason || "-")}</td>
                 <td>${escapeHtml(item.relation_type || "-")}</td>
               </tr>
             `).join("")}

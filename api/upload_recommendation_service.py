@@ -7,7 +7,9 @@ import os
 import re
 import sqlite3
 import time
+from difflib import SequenceMatcher
 from pathlib import Path
+from threading import Lock
 from typing import Dict, List, Optional
 
 import pandas as pd
@@ -21,6 +23,67 @@ from api.ingredient_family import (
     infer_joint_ingredient_family,
     joint_family_aliases,
 )
+from api.ingredient_match_constants import (
+    CATEGORY_HINT_RULES,
+    CRITICAL_WARNING_CODES,
+    ENABLE_RUNTIME_RAG_FALLBACK,
+    EXCLUDED_PRIMARY_KEYWORDS,
+    INFO_WARNING_CODES,
+    JOINT_FAMILY_CATEGORY_SUB,
+    LOW_OCR_CONFIDENCE_THRESHOLD,
+    LOW_PARSE_CONFIDENCE_THRESHOLD,
+    LOW_TOP_SIMILARITY_THRESHOLD,
+    MIN_SUFFICIENT_OCR_TEXT_LENGTH,
+    NON_EXCLUDED_PRIMARY_KEYWORDS,
+    NON_FUNCTIONAL_CACHE_RELATION_TYPES,
+    NOTICE_WARNING_CODES,
+    NUTRITION_SUPPLEMENT_INGREDIENT_KEYWORDS,
+    NUTRITION_SUPPLEMENT_PRODUCT_KEYWORDS,
+    ROLE_WEIGHT,
+    RUNTIME_CACHE_LIKE_VECTOR_EXCLUDED_TERMS,
+    RUNTIME_CUSTOM_FUNCTIONAL_TABLE_NAME,
+    RUNTIME_EXCIPIENT_VECTOR_EXCLUDED_TERMS,
+    RUNTIME_LIKE_DISABLED_KEYS,
+    RUNTIME_LOW_SIGNAL_UPLOAD_VECTOR_EXACT_TERMS,
+    RUNTIME_RAG_FALLBACK_SKIP_TERMS,
+    RUNTIME_RAG_NAME_SIMILARITY_MIN,
+    RUNTIME_RAG_TOP_K,
+    RUNTIME_SUSPICIOUS_MAPPING_RULES,
+    RUNTIME_VECTOR_EXCLUSION_REASON_MESSAGES,
+    STRONG_JOINT_INGREDIENT_KEYWORDS,
+    STRONG_JOINT_PRODUCT_KEYWORDS,
+    TOO_MANY_INGREDIENTS_THRESHOLD,
+    VECTOR_ALLOWED_RELATION_TYPES,
+)
+from api.ingredient_match_guards import (
+    append_warning,
+    build_image_hash,
+    build_joint_family_category_row,
+    build_profile_signature,
+    build_upload_signature,
+    contains_any_keyword,
+    contains_exact_guarded_runtime_term,
+    contains_guarded_runtime_term,
+    contains_keyword,
+    contains_normalized_fragment,
+    count_keyword_matches,
+    dedupe_strings,
+    dedupe_warnings,
+    determine_upload_candidate_state,
+    has_sufficient_ocr_text,
+    is_excluded_primary,
+    is_like_blocked_input,
+    is_low_signal_upload_vector_term,
+    looks_like_runtime_measurement_or_symbol,
+    normalize_cache_exact_key,
+    normalize_lookup_key,
+    normalize_warning_severity,
+    normalized_name_similarity,
+    resolve_joint_input_family,
+    resolve_runtime_mapping_rule,
+    split_warning_groups,
+)
+from api.ingredient_match_llm_client import call_ingredient_match_llm
 from api.ingredient_parse_service import (
     _looks_like_functional_premix,
     canonicalize_ingredient_for_matching,
@@ -28,724 +91,36 @@ from api.ingredient_parse_service import (
     compute_ocr_text_hash,
     compute_parsed_signature,
     is_excipient,
+    normalize_product_category_label,
     parse_ingredients_from_ocr_text,
     split_ingredients,
 )
-from api.local_llm_client import call_local_llm, extract_json_from_llm_content
+from api.local_llm_client import extract_json_from_llm_content
 from api.ocr_service import extract_text_from_image, save_temp_upload
 from api.recommendation_service import RecommendationService
+from api.request_progress import (  # re-exported for backward compatibility
+    PROGRESS_TTL_SECONDS,
+    get_request_progress,
+    update_request_progress,
+)
 from scripts.enhance_similarity_with_explanation import (
-    build_candidate_pool,
+    build_candidate_pool_v2,
     build_explanation_json,
+    build_semantic_weight_vector,
     calculate_core_match_score,
     calculate_function_similarity,
-    calculate_weighted_jaccard_with_idf,
+    calculate_semantic_weighted_jaccard_v2,
     classify_substitutability,
     compare_product_profiles,
     generate_caution,
     generate_recommendation_reason,
+    is_semantic_excipient_name,
+    recommendation_quality_metadata,
     safe_json_loads,
+    SIMILARITY_ALGORITHM_VERSION,
 )
 
-
-CATEGORY_HINT_RULES = {
-    "면역": {
-        "product_keywords": ["홍삼", "고려홍삼", "6년근", "홍삼정", "진세노사이드", "홍삼스틱", "정관장"],
-        "ingredient_keywords": ["홍삼", "홍삼농축액", "진세노사이드", "홍삼근", "홍삼분말"],
-    },
-    "눈 건강": {
-        "product_keywords": ["루테인", "지아잔틴", "눈", "아이", "마리골드", "빌베리", "아스타잔틴", "베타카로틴"],
-        "ingredient_keywords": ["루테인", "지아잔틴", "마리골드꽃추출물", "베타카로틴", "비타민 A", "빌베리추출물", "블루베리", "헤마토코쿠스추출물"],
-    },
-    "관절/연골": {
-        "product_keywords": ["관절", "연골", "콘드로이친", "뮤코다당", "뮤코다당단백", "철갑상어", "철갑상어연골", "MSM", "보스웰리아", "NEM", "난각막", "강황"],
-        "ingredient_keywords": ["콘드로이친", "뮤코다당단백", "철갑상어연골", "MSM", "엠에스엠", "보스웰리아", "난각막", "난각막분말", "난각막가수분해물", "강황추출물", "초록입홍합"],
-    },
-    "장 건강": {
-        "product_keywords": ["유산균", "프로바이오틱스", "락토핏", "장", "대장", "프리바이오틱스", "올리고당"],
-        "ingredient_keywords": ["프로바이오틱스", "유산균", "갈락토올리고당", "프락토올리고당", "난소화성말토덱스트린", "이눌린"],
-    },
-    "혈당": {
-        "product_keywords": ["혈당", "당당자유", "당케어", "고투플러스"],
-        "ingredient_keywords": ["바나바", "바나바잎", "바나바잎추출물", "코로솔산", "난소화성말토덱스트린", "구아바잎추출물", "달맞이꽃종자추출물", "구아검", "이눌린", "식이섬유"],
-    },
-    "체지방": {
-        "product_keywords": ["체지방", "다이어트", "슬림", "컷", "컷팅"],
-        "ingredient_keywords": ["키토산", "키토올리고당", "가르시니아", "hca", "공액리놀레산", "cla", "녹차추출물", "카테킨", "콜레우스포스콜리", "잔티젠"],
-    },
-    "피부 건강": {
-        "product_keywords": ["콜라겐", "피부", "레티놀", "히알루론", "세라마이드", "비오틴"],
-        "ingredient_keywords": ["콜라겐", "저분자콜라겐펩타이드", "콜라겐펩타이드", "비오틴", "비타민 A", "히알루론산", "세라마이드"],
-    },
-    "기억력/인지력": {
-        "product_keywords": ["인지", "기억", "포스파티딜세린", "브레인", "두뇌"],
-        "ingredient_keywords": ["포스파티딜세린", "은행잎", "테아닌", "DHA"],
-    },
-    "뼈 건강": {
-        "product_keywords": ["뼈", "칼슘", "칼마디", "비타민D", "K2"],
-        "ingredient_keywords": ["칼슘", "비타민 D", "비타민 K", "마그네슘"],
-    },
-    "남성 건강": {
-        "product_keywords": ["전립선", "남성", "쏘팔메토", "옥타코사놀", "활력"],
-        "ingredient_keywords": ["쏘팔메토", "쏘팔메토열매추출물", "로르산", "옥타코사놀", "아연", "녹용", "마카", "아르기닌"],
-    },
-    "간 건강": {
-        "product_keywords": ["밀크씨슬", "밀크시슬", "실리마린", "간", "liver", "milk thistle"],
-        "ingredient_keywords": ["밀크씨슬", "밀크시슬", "밀크씨슬추출물", "실리마린", "silymarin", "milk thistle"],
-    },
-}
-
-EXCLUDED_PRIMARY_KEYWORDS = [
-    "히드록시프로필메틸셀룰로오스",
-    "hpmc",
-    "결정셀룰로오스",
-    "미결정셀룰로오스",
-    "스테아린산마그네슘",
-    "이산화규소",
-    "카복시메틸셀룰로오스",
-    "글리세린지방산에스테르",
-    "캡슐기제",
-    "젤라틴",
-    "글리세린",
-    "착색료",
-    "이산화티타늄",
-    "말토덱스트린",
-    "덱스트린",
-]
-
-NON_EXCLUDED_PRIMARY_KEYWORDS = [
-    "난소화성말토덱스트린",
-    "난각막",
-    "난각막분말",
-    "난각막가수분해물",
-    "nem",
-    "demr",
-    "난각칼슘",
-    "난각분말",
-    "계란껍질분말",
-    "프로바이오틱스",
-    "프리바이오틱스",
-    "갈락토올리고당",
-    "프락토올리고당",
-    "이눌린",
-]
-
-ROLE_WEIGHT = {
-    "primary": 1.0,
-    "secondary": 0.72,
-    "support": 0.45,
-}
-
-LOW_OCR_CONFIDENCE_THRESHOLD = 0.6
-LOW_PARSE_CONFIDENCE_THRESHOLD = 0.65
-LOW_TOP_SIMILARITY_THRESHOLD = 0.25
-MIN_SUFFICIENT_OCR_TEXT_LENGTH = 80
-TOO_MANY_INGREDIENTS_THRESHOLD = 20
-
-STRONG_JOINT_PRODUCT_KEYWORDS = [
-    "관절",
-    "연골",
-    "콘드로이친",
-    "뮤코다당",
-    "뮤코다당단백",
-    "철갑상어",
-    "철갑상어연골",
-    "MSM",
-    "보스웰리아",
-    "NEM",
-    "난각막",
-]
-
-STRONG_JOINT_INGREDIENT_KEYWORDS = [
-    "콘드로이친",
-    "뮤코다당단백",
-    "철갑상어연골",
-    "MSM",
-    "엠에스엠",
-    "글루코사민",
-    "NAG",
-    "보스웰리아",
-    "난각막",
-    "난각막분말",
-    "난각막가수분해물",
-    "초록입홍합",
-    "UC-II",
-    "비변성콜라겐",
-]
-
-NUTRITION_SUPPLEMENT_PRODUCT_KEYWORDS = [
-    "멀티",
-    "멀티밸런스",
-    "멀티비타민",
-    "비타민",
-    "미네랄",
-    "요오드",
-]
-
-NUTRITION_SUPPLEMENT_INGREDIENT_KEYWORDS = [
-    "비타민 A",
-    "비타민 B1",
-    "비타민 B2",
-    "비타민 B6",
-    "비타민 B12",
-    "비타민 C",
-    "비타민 D",
-    "비타민 E",
-    "비타민 K",
-    "엽산",
-    "나이아신",
-    "비오틴",
-    "판토텐산",
-    "셀레늄",
-    "아연",
-    "칼슘",
-    "마그네슘",
-    "철분",
-    "요오드",
-    "망간",
-    "크롬",
-    "구리",
-    "몰리브덴",
-    "dl-a-토코페롤",
-]
-
-CRITICAL_WARNING_CODES = {
-    "critical_warning",
-    "ingredient_section_unclear",
-    "ocr_error",
-    "category_conflict_product_name_vs_ingredients",
-    "generic_category_with_named_product",
-    "low_parse_confidence",
-    "low_ocr_confidence",
-    "low_ocr_text_quality",
-    "excipient_in_primary",
-    "mixed_primary_categories",
-    "low_top_similarity_score",
-    "missing_recommendations",
-    "top_reason_category_mismatch",
-    "too_many_normalized_ingredients",
-}
-
-NOTICE_WARNING_CODES = {
-    "notice_warning",
-    "allergen_notice",
-}
-
-INFO_WARNING_CODES = {
-    "info_warning",
-    "ocr_confidence_unavailable",
-}
-
 logger = logging.getLogger(__name__)
-
-ENABLE_RUNTIME_RAG_FALLBACK = True
-RUNTIME_CUSTOM_FUNCTIONAL_TABLE_NAME = "runtime_custom_functional_ingredient_map"
-RUNTIME_RAG_TOP_K = 5
-
-RUNTIME_LIKE_DISABLED_KEYS = {
-    "hca",
-    "gaba",
-    "cla",
-    "msm",
-    "epa",
-    "dha",
-    "cpp",
-    "bcaa",
-    "coq10",
-    "mk7",
-    "rg1",
-    "rb1",
-    "rg3",
-    "l테아닌",
-    "테아닌",
-}
-
-VECTOR_ALLOWED_RELATION_TYPES = {
-    "same_ingredient",
-    "marker_compound",
-    "ingredient_group",
-    "nutrient_form",
-}
-
-RUNTIME_CACHE_LIKE_VECTOR_EXCLUDED_TERMS = {
-    "\uc2dd\ubb3c\ud63c\ud569\ub18d\ucd95\uc561",
-    "\uc2dd\ubb3c\ud63c\ud569\ucd94\ucd9c\ubb3c",
-    "\ud63c\ud569\ub18d\ucd95\uc561",
-    "\uc885\uc790\ucd94\ucd9c\ubb3c",
-    "\uad6c\uc5f0\uc0b0",
-    "\uad6c\uc5f0\uc0b0\uc0bc\ub098\ud2b8\ub968",
-    "\uad6c\uc5f0\uc0b0\ub098\ud2b8\ub968",
-    "\uc804\ubd84",
-    "\uc625\uc218\uc218",
-    "\ub9d0\ud1a0\ub371\uc2a4\ud2b8\ub9b0",
-    "\ub371\uc2a4\ud2b8\ub9b0",
-    "\uc815\uc81c\uc218",
-    "\uc8fc\uc815",
-    "\uc5d0\ud0c4\uc62c",
-    "\ud5a5\ub8cc",
-    "\uac10\ubbf8\ub8cc",
-    "\ud63c\ud569\uc81c\uc81c",
-    "200mg",
-    "500mg",
-    "mg",
-    "g",
-    "%",
-    "hpmc",
-    "\ud788\ub4dc\ub85d\uc2dc\ud504\ub85c\ud544\uba54\ud2f8\uc140\ub8f0\ub85c\uc2a4",
-    "\uce74\ubcf5\uc2dc\uba54\ud2f8\uc140\ub8f0\ub85c\uc2a4",
-    "\uc2a4\ud14c\uc544\ub9b0\uc0b0\ub9c8\uadf8\ub124\uc298",
-    "\uc774\uc0b0\ud654\uaddc\uc18c",
-    "\uacb0\uc815\uc140\ub8f0\ub85c\uc2a4",
-    "\uae00\ub9ac\uc138\ub9b0",
-    "d\uc18c\ube44\ud1a8\uc561",
-    "\uc18c\ube44\ud1a8\uc561",
-}
-
-RUNTIME_EXCIPIENT_VECTOR_EXCLUDED_TERMS = {
-    "\ud788\ub4dc\ub85d\uc2dc\ud504\ub85c\ud544\uba54\ud2f8\uc140\ub8f0\ub85c\uc624\uc2a4",
-    "\ud788\ub4dc\ub85d\uc2dc\ud504\ub85c\ud544\uba54\ud2f8\uc140\ub8f0\ub85c\uc2a4",
-    "hpmc",
-    "\uacb0\uc815\uc140\ub8f0\ub85c\uc2a4",
-    "\ubbf8\uacb0\uc815\uc140\ub8f0\ub85c\uc2a4",
-    "\uc774\uc0b0\ud654\uaddc\uc18c",
-    "\uc2a4\ud14c\uc544\ub9b0\uc0b0\ub9c8\uadf8\ub124\uc298",
-    "\uc2a4\ud14c\uc544\ub9b0\uc0b0\uce7c\uc298",
-    "\uce74\ubcf5\uc2dc\uba54\ud2f8\uc140\ub8f0\ub85c\uc2a4",
-    "\uce74\ubcf5\uc2dc\uba54\ud2f8\uc140\ub8f0\ub85c\uc2a4\uce7c\uc298",
-    "\uae00\ub9ac\uc138\ub9b0",
-    "d\uc18c\ube44\ud1a8\uc561",
-    "\uc18c\ube44\ud1a8\uc561",
-    "\ub371\uc2a4\ud2b8\ub9b0",
-    "\ub9d0\ud1a0\ub371\uc2a4\ud2b8\ub9b0",
-    "\uc815\uc81c\uc218",
-    "\uc544\ub77c\ube44\uc544\uac80",
-    "\uc124\ud0d5",
-    "\uc774\uc18c\ub9d0\ud2b8",
-    "\uc5d0\ub9ac\uc2a4\ub9ac\ud1a8",
-    "\uc790\uc77c\ub9ac\ud1a8",
-    "\ud5a5\ub8cc",
-    "\ucc29\ud5a5\ub8cc",
-    "\uac10\ubbf8\ub8cc",
-}
-
-RUNTIME_VECTOR_EXCLUSION_REASON_MESSAGES = {
-    "excluded_from_vector_by_cache_like_guard": "cache_like guard excluded this match from the upload vector",
-    "excluded_from_vector_by_excipient_guard": "excipient guard excluded this match from the upload vector",
-    "excluded_from_vector_by_relation_guard": "relation type guard excluded this match from the upload vector",
-}
-
-RUNTIME_SUSPICIOUS_MAPPING_RULES = [
-    {
-        "name": "hca",
-        "inputs": ["hca", "hydroxycitricacid", "hydroxycitric"],
-        "allowed": ["가르시니아", "garcinia", "hca"],
-        "blocked": ["녹차", "카테킨", "egcg", "greentea", "greentea"],
-        "safe_aliases": [
-            "가르시니아 캄보지아 껍질추출물 60HCA",
-            "가르시니아 캄보지아 추출물",
-            "가르시니아 캄보지아 껍질추출물",
-        ],
-    },
-    {
-        "name": "silymarin",
-        "inputs": ["실리마린", "silymarin"],
-        "allowed": ["밀크씨슬", "밀크시슬", "milkthistle", "silymarin"],
-        "blocked": [],
-        "safe_aliases": ["밀크씨슬추출물", "밀크씨슬 추출물", "밀크씨슬", "milk thistle"],
-    },
-    {
-        "name": "ginsenoside",
-        "inputs": ["진세노사이드", "ginsenoside"],
-        "allowed": ["홍삼", "인삼", "ginseng", "redginseng"],
-        "blocked": [],
-        "safe_aliases": ["홍삼", "인삼"],
-    },
-    {
-        "name": "lutein_zeaxanthin",
-        "inputs": ["루테인", "lutein", "지아잔틴", "zeaxanthin"],
-        "allowed": ["루테인", "지아잔틴", "마리골드", "lutein", "zeaxanthin", "marigold"],
-        "blocked": [],
-        "safe_aliases": ["루테인", "지아잔틴", "마리골드꽃추출물", "마리골드꽃추출물(지아잔틴함유)"],
-    },
-    {
-        "name": "omega3",
-        "inputs": ["epa", "dha", "오메가3", "오메가-3", "omega3", "fishoil", "fish oil"],
-        "allowed": ["epa", "dha", "오메가", "omega", "어유", "fishoil", "fishoil"],
-        "blocked": [],
-        "safe_aliases": ["EPA 및 DHA 함유 유지", "EPA 및 DHA 함유 유지(고시형 원료)", "오메가-3 지방산 함유유지"],
-    },
-    {
-        "name": "vitamin_d",
-        "inputs": ["비타민d3", "건조비타민d3", "vitamind3", "vitamind"],
-        "allowed": ["비타민d", "vitamind"],
-        "blocked": [],
-        "safe_aliases": ["비타민 D", "비타민D"],
-    },
-    {
-        "name": "zinc",
-        "inputs": ["산화아연", "글루콘산아연", "zincoxide", "zincgluconate"],
-        "allowed": ["아연", "zinc"],
-        "blocked": [],
-        "safe_aliases": ["아연", "zinc"],
-    },
-]
-
-JOINT_FAMILY_CATEGORY_SUB = {
-    "chondroitin": "콘드로이친 계열",
-    "glucosamine": "글루코사민 계열",
-    "nag": "NAG 계열",
-    "uc_ii": "UC-II 계열",
-    "msm": "MSM 계열",
-    "boswellia": "보스웰리아 계열",
-}
-
-
-def normalize_lookup_key(value: str) -> str:
-    return re.sub(r"\s+", "", str(value or "").strip().lower())
-
-
-def normalize_cache_exact_key(value: str) -> str:
-    return re.sub(r"[^0-9a-z가-힣]", "", str(value or "").strip().lower())
-
-
-def dedupe_strings(values: List[str]) -> List[str]:
-    seen = set()
-    deduped: List[str] = []
-    for value in values:
-        text = str(value or "").strip()
-        key = normalize_lookup_key(text)
-        if not text or not key or key in seen:
-            continue
-        seen.add(key)
-        deduped.append(text)
-    return deduped
-
-
-def contains_normalized_fragment(value: str, fragments: List[str]) -> bool:
-    normalized = normalize_cache_exact_key(value)
-    return any(normalize_cache_exact_key(fragment) in normalized for fragment in fragments if str(fragment or "").strip())
-
-
-def resolve_runtime_mapping_rule(*values: str) -> Optional[dict]:
-    normalized_values = [normalize_cache_exact_key(value) for value in values if str(value or "").strip()]
-    for rule in RUNTIME_SUSPICIOUS_MAPPING_RULES:
-        for normalized_value in normalized_values:
-            if any(normalize_cache_exact_key(trigger) in normalized_value for trigger in rule["inputs"]):
-                return rule
-    return None
-
-
-def is_like_blocked_input(*values: str) -> bool:
-    normalized_values = [normalize_cache_exact_key(value) for value in values if str(value or "").strip()]
-    for normalized in normalized_values:
-        if normalized in RUNTIME_LIKE_DISABLED_KEYS:
-            return True
-        if 0 < len(normalized) <= 4 and re.fullmatch(r"[a-z0-9]+", normalized):
-            return True
-    return False
-
-
-def contains_guarded_runtime_term(value: str, guarded_terms: set[str]) -> bool:
-    normalized_value = normalize_cache_exact_key(value)
-    if not normalized_value:
-        return False
-    for term in guarded_terms:
-        normalized_term = normalize_cache_exact_key(term)
-        if not normalized_term:
-            continue
-        if normalized_value == normalized_term or normalized_term in normalized_value:
-            return True
-    return False
-
-
-def looks_like_runtime_measurement_or_symbol(value: str) -> bool:
-    text = str(value or "").strip()
-    normalized = normalize_cache_exact_key(text)
-    if not text or not normalized:
-        return False
-    if normalized in {"mg", "g", "%", "ml", "kg", "mcg", "μg", "ug"}:
-        return True
-    return bool(re.fullmatch(r"\d+(?:\.\d+)?(?:mg|g|ml|kg|mcg|ug|%)?", normalized))
-
-
-def resolve_joint_input_family(*values: str) -> str:
-    for value in values:
-        family = infer_joint_ingredient_family(str(value or ""))
-        if family:
-            return family
-    return ""
-
-
-def build_joint_family_category_row(functional_name: str, family: str) -> dict:
-    return {
-        "functional_ingredient_name": functional_name,
-        "category_main": "관절/연골",
-        "category_sub": JOINT_FAMILY_CATEGORY_SUB.get(str(family or ""), "관절/연골 보호 매핑"),
-        "claim_text": "",
-        "source": "protected_joint_family_fallback",
-        "confidence": 0.76,
-        "notes": "protected joint family fallback",
-        "categories": [],
-    }
-
-
-def build_upload_signature(source_type: str, payload: str) -> str:
-    normalized_payload = str(payload or "").strip()
-    if not normalized_payload:
-        return ""
-    digest = hashlib.sha1(normalized_payload.encode("utf-8")).hexdigest()
-    return f"{str(source_type or 'upload').strip().lower()}::{digest}"
-
-
-def build_image_hash(image_bytes: bytes) -> str:
-    return hashlib.sha1(bytes(image_bytes or b"")).hexdigest() if image_bytes is not None else ""
-
-
-def build_profile_signature(temp_profile: dict, temp_vector: Dict[str, float]) -> str:
-    payload = {
-        "product_main_category": str(temp_profile.get("product_main_category", "") or ""),
-        "primary_ingredients": sorted(str(item or "") for item in temp_profile.get("primary_ingredients", []) if str(item or "")),
-        "secondary_ingredients": sorted(str(item or "") for item in temp_profile.get("secondary_ingredients", []) if str(item or "")),
-        "support_ingredients": sorted(str(item or "") for item in temp_profile.get("support_ingredients", []) if str(item or "")),
-        "vector": {str(key): round(float(value), 6) for key, value in sorted(temp_vector.items()) if float(value or 0.0) > 0},
-    }
-    return hashlib.sha1(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
-
-
-def determine_upload_candidate_state(parsed: dict, estimated_profile: dict, needs_user_review: bool) -> dict:
-    normalized_count = len(parsed.get("normalized_ingredients", []) or [])
-    confidence = float(parsed.get("profile_confidence", parsed.get("confidence", 0.0)) or 0.0)
-    quality_grade = str(parsed.get("quality_grade", "") or "")
-    main_category = str(estimated_profile.get("product_main_category", "") or "")
-    primary_normalized = [
-        str(item or "").strip()
-        for item in (
-            parsed.get("primary_ingredients_normalized")
-            or parsed.get("primary_ingredients")
-            or estimated_profile.get("primary_ingredients", [])
-            or []
-        )
-        if str(item or "").strip()
-    ]
-    primary_count = len(primary_normalized)
-    critical_codes = {
-        str(item.get("code", "") or "")
-        for item in parsed.get("quality_warnings", []) or []
-        if str(item.get("severity", "") or "") == "critical"
-    }
-    has_valid_category = bool(main_category and len(main_category.strip()) >= 2 and "?" not in main_category)
-    soft_review_only = bool(
-        needs_user_review
-        and not critical_codes
-        and confidence >= 0.7
-        and primary_count >= 1
-        and has_valid_category
-    )
-    candidate_disabled_reason = ""
-    candidate_scope = "none"
-    base_candidate_enabled = bool(
-        normalized_count >= 2
-        and confidence >= 0.7
-        and (not needs_user_review or soft_review_only)
-        and not critical_codes
-        and quality_grade in {"", "A", "B"}
-        and has_valid_category
-    )
-    candidate_enabled = bool(base_candidate_enabled)
-    if candidate_enabled:
-        candidate_scope = "uploaded_auto"
-    elif normalized_count < 2:
-        candidate_disabled_reason = "normalized_ingredients_too_few"
-    elif confidence < 0.7:
-        candidate_disabled_reason = "profile_confidence_below_threshold"
-    elif needs_user_review and not soft_review_only:
-        candidate_disabled_reason = "needs_user_review"
-    elif critical_codes:
-        candidate_disabled_reason = f"critical_warnings:{','.join(sorted(critical_codes))}"
-    elif quality_grade not in {"", "A", "B"}:
-        candidate_disabled_reason = f"quality_grade_{quality_grade.lower()}"
-    elif not has_valid_category:
-        candidate_disabled_reason = "missing_or_generic_main_category"
-    else:
-        candidate_disabled_reason = "policy_gate_unspecified"
-    if (
-        not candidate_enabled
-        and normalized_count >= 1
-        and primary_count >= 1
-        and confidence >= 0.75
-        and (not needs_user_review or soft_review_only)
-        and not critical_codes
-        and has_valid_category
-    ):
-        candidate_enabled = True
-        candidate_scope = "uploaded_auto_notice_review" if soft_review_only else "uploaded_auto_single_core"
-        candidate_disabled_reason = ""
-    elif candidate_enabled and soft_review_only:
-        candidate_scope = "uploaded_auto_notice_review"
-    if not quality_grade:
-        if candidate_enabled and confidence >= 0.9:
-            quality_grade = "A"
-        elif candidate_enabled:
-            quality_grade = "B"
-        elif normalized_count >= 1:
-            quality_grade = "C"
-        else:
-            quality_grade = "D"
-    elif candidate_enabled and quality_grade not in {"A", "B"}:
-        quality_grade = "A" if confidence >= 0.9 else "B"
-    elif not candidate_enabled and quality_grade in {"A", "B"}:
-        quality_grade = "C" if normalized_count >= 1 else "D"
-    if candidate_enabled:
-        status = "verified" if normalized_count >= 2 and confidence >= 0.7 and not critical_codes and not soft_review_only else "auto_eligible"
-    elif needs_user_review and not soft_review_only:
-        status = "review_needed"
-    else:
-        status = "raw"
-    return {
-        "status": status,
-        "quality_grade": quality_grade,
-        "is_candidate_enabled": candidate_enabled,
-        "candidate_scope": candidate_scope,
-        "candidate_disabled_reason": candidate_disabled_reason,
-    }
-
-
-def contains_keyword(text: str, keywords: List[str]) -> bool:
-    normalized = normalize_lookup_key(text)
-    return any(normalize_lookup_key(keyword) in normalized for keyword in keywords)
-
-
-def is_excluded_primary(name: str) -> bool:
-    normalized = normalize_lookup_key(name)
-    if any(normalize_lookup_key(keyword) in normalized for keyword in NON_EXCLUDED_PRIMARY_KEYWORDS):
-        return False
-    return any(normalize_lookup_key(keyword) in normalized for keyword in EXCLUDED_PRIMARY_KEYWORDS)
-
-
-def has_sufficient_ocr_text(raw_text: str, ingredient_section_text: str = "") -> bool:
-    collapsed_raw = re.sub(r"\s+", "", str(raw_text or ""))
-    collapsed_section = re.sub(r"\s+", "", str(ingredient_section_text or ""))
-    if len(collapsed_raw) >= MIN_SUFFICIENT_OCR_TEXT_LENGTH:
-        return True
-    return len(collapsed_section) >= 20
-
-
-def append_warning(warnings: List[dict], code: str, message: str, severity: str = "warning", **extra) -> None:
-    item = {"code": code, "message": message, "severity": severity}
-    item.update({key: value for key, value in extra.items() if value not in (None, "", [], {})})
-    warnings.append(item)
-
-
-def dedupe_warnings(warnings: List[dict]) -> List[dict]:
-    seen = set()
-    deduped: List[dict] = []
-    for item in warnings:
-        code = str(item.get("code", "") or "")
-        message = str(item.get("message", "") or "")
-        ingredients = tuple(item.get("ingredients", []) or [])
-        key = (code, message, ingredients)
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(item)
-    return deduped
-
-
-def normalize_warning_severity(warning: dict) -> dict:
-    item = dict(warning)
-    code = str(item.get("code", "") or "")
-    severity = str(item.get("severity", "") or "")
-    message = str(item.get("message", "") or "")
-    llm_notice_terms = [
-        "알레르기",
-        "알러지",
-        "알류",
-        "달걀",
-        "계란",
-        "우유",
-        "대두",
-        "밀",
-        "땅콩",
-        "메밀",
-        "토마토",
-        "복숭아",
-        "아황산",
-        "고등어",
-        "게",
-        "새우",
-        "돼지고기",
-        "쇠고기",
-        "닭고기",
-        "오징어",
-        "조개류",
-        "홍합",
-        "잣",
-        "가금류",
-        "함유",
-        "제조시설",
-        "주의",
-        "보관",
-        "섭취",
-        "임산부",
-        "수유부",
-        "어린이",
-        "젤라틴",
-        "우피",
-        "색소",
-        "먹물색소",
-    ]
-    if code == "too_many_normalized_ingredients" and severity in {"notice", "critical"}:
-        item["severity"] = severity
-    elif code == "llm_warning" and (
-        any(term in message for term in llm_notice_terms)
-        or "cross-contamination" in message.lower()
-        or "shared manufacturing" in message.lower()
-        or "allergic reaction" in message.lower()
-        or "discontinue use" in message.lower()
-        or "consult a professional" in message.lower()
-    ):
-        item["severity"] = "notice"
-    elif code in INFO_WARNING_CODES:
-        item["severity"] = "info"
-    elif code in NOTICE_WARNING_CODES:
-        item["severity"] = "notice"
-    elif code == "excipient_in_core_role" and ("비타민" in message or "혼합제" in message):
-        item["severity"] = "warning"
-    elif code in CRITICAL_WARNING_CODES:
-        item["severity"] = "critical"
-    elif severity in {"info", "notice", "warning", "critical"}:
-        item["severity"] = severity
-    elif "알레르기" in message or "알러지" in message or "함유" in message or "제조시설" in message or "주의" in message or "보관" in message:
-        item["severity"] = "notice"
-    else:
-        item["severity"] = "critical"
-    return item
-
-
-def split_warning_groups(warnings: List[dict]) -> dict:
-    normalized = [normalize_warning_severity(item) for item in dedupe_warnings(warnings)]
-    return {
-        "quality_warnings": [item for item in normalized if item.get("severity") == "critical"],
-        "critical_warnings": [item for item in normalized if item.get("severity") == "critical"],
-        "notices": [item for item in normalized if item.get("severity") == "notice"],
-        "info_warnings": [item for item in normalized if item.get("severity") == "info"],
-    }
-
-
-def contains_any_keyword(values: List[str], keywords: List[str]) -> bool:
-    for value in values:
-        if contains_keyword(value, keywords):
-            return True
-    return False
-
-
-def count_keyword_matches(values: List[str], keywords: List[str]) -> int:
-    matched = set()
-    for value in values:
-        for keyword in keywords:
-            if contains_keyword(value, [keyword]):
-                matched.add(keyword)
-    return len(matched)
 
 
 class UploadRecommendationService:
@@ -992,6 +367,21 @@ class UploadRecommendationService:
             protected_family=input_family,
         )
 
+    def _runtime_candidate_name_variants(self, candidate_row: dict) -> List[str]:
+        variants = [str(candidate_row.get("standard_name", "") or "").strip()]
+        synonyms_joined = str(candidate_row.get("synonyms_joined", "") or "")
+        if synonyms_joined:
+            variants.extend([part.strip() for part in synonyms_joined.split(",") if part.strip()])
+        return dedupe_strings(variants)
+
+    def _runtime_name_similarity(self, query: str, candidate_row: dict) -> float:
+        query_terms = self._expand_runtime_lookup_terms(query)
+        scores: List[float] = []
+        for query_term in query_terms:
+            for variant in self._runtime_candidate_name_variants(candidate_row):
+                scores.append(normalized_name_similarity(query_term, variant))
+        return round(max(scores or [0.0]), 6)
+
     def _has_runtime_lexical_overlap(self, query_terms: List[str], candidate_row: dict) -> bool:
         normalized_query_terms = [normalize_cache_exact_key(term) for term in query_terms if normalize_cache_exact_key(term)]
         if not normalized_query_terms:
@@ -1009,6 +399,10 @@ class UploadRecommendationService:
         for term in normalized_query_terms:
             if len(term) >= 2 and term in normalized_candidate:
                 return True
+            if len(term) >= 4:
+                for variant in self._runtime_candidate_name_variants(candidate_row):
+                    if normalized_name_similarity(term, variant) >= RUNTIME_RAG_NAME_SIMILARITY_MIN:
+                        return True
         query_tokens = {term for term in normalized_query_terms if len(term) >= 2}
         candidate_tokens = {
             normalize_cache_exact_key(token)
@@ -1118,6 +512,10 @@ class UploadRecommendationService:
                     float(existing.get("embedding_score", 0.0) or 0.0),
                     float(item.get("embedding_score", 0.0) or 0.0),
                 )
+                existing["name_similarity_score"] = max(
+                    float(existing.get("name_similarity_score", 0.0) or 0.0),
+                    float(item.get("name_similarity_score", 0.0) or 0.0),
+                )
                 sources = {
                     str(existing.get("retrieval_source", "") or "").strip(),
                     str(item.get("retrieval_source", "") or "").strip(),
@@ -1129,11 +527,22 @@ class UploadRecommendationService:
             key=lambda row: (
                 -float(row.get("retrieval_score", 0.0) or 0.0),
                 -float(row.get("embedding_score", 0.0) or 0.0),
+                -float(row.get("name_similarity_score", 0.0) or 0.0),
                 float(row.get("specific_penalty", 0.0) or 0.0),
                 str(row.get("standard_name", "") or ""),
             )
         )
         return merged_rows[:top_k]
+
+    def _has_strong_runtime_rag_signal(self, candidates: List[dict]) -> bool:
+        for item in candidates:
+            if float(item.get("retrieval_score", 0.0) or 0.0) >= 2.0:
+                return True
+            if float(item.get("embedding_score", 0.0) or 0.0) >= 0.45:
+                return True
+            if float(item.get("name_similarity_score", 0.0) or 0.0) >= RUNTIME_RAG_NAME_SIMILARITY_MIN:
+                return True
+        return False
 
     def _log_trace(
         self,
@@ -1211,6 +620,7 @@ class UploadRecommendationService:
         normalized_standard = normalize_cache_exact_key(standard_name)
         normalized_search = normalize_cache_exact_key(search_text)
         normalized_synonyms = normalize_cache_exact_key(synonyms_joined)
+        name_similarity_score = self._runtime_name_similarity(query_text, row)
         score = 0.0
         if normalized_standard == normalized_query:
             score += 12.0
@@ -1228,6 +638,8 @@ class UploadRecommendationService:
         score += float(len(shared_tokens)) * 1.7
         if len(normalized_query) >= 4 and normalized_standard and normalized_query[:4] == normalized_standard[:4]:
             score += 0.8
+        if name_similarity_score >= RUNTIME_RAG_NAME_SIMILARITY_MIN:
+            score += 4.8 * name_similarity_score
         score -= float(row.get("specific_penalty", 0.0) or 0.0) * 0.35
         return round(score, 6)
 
@@ -1237,7 +649,7 @@ class UploadRecommendationService:
             score = self._score_runtime_rag_candidate(query, row)
             if score <= 0:
                 continue
-            rows.append({**row, "retrieval_score": score})
+            rows.append({**row, "retrieval_score": score, "name_similarity_score": self._runtime_name_similarity(query, row)})
         rows.sort(
             key=lambda item: (
                 -float(item.get("retrieval_score", 0.0) or 0.0),
@@ -1296,7 +708,7 @@ class UploadRecommendationService:
                 for item in candidates
             ],
         }
-        content = call_local_llm(json.dumps(payload, ensure_ascii=False, indent=2))
+        content = call_ingredient_match_llm(json.dumps(payload, ensure_ascii=False, indent=2))
         parsed = extract_json_from_llm_content(content)
         if not parsed:
             raise RuntimeError("runtime RAG LLM returned non-JSON content")
@@ -1344,7 +756,7 @@ class UploadRecommendationService:
                 for item in candidates[:5]
             ],
         }
-        content = call_local_llm(json.dumps(payload, ensure_ascii=False, indent=2))
+        content = call_ingredient_match_llm(json.dumps(payload, ensure_ascii=False, indent=2))
         parsed = extract_json_from_llm_content(content)
         if not parsed:
             raise RuntimeError("new standard metadata LLM returned non-JSON content")
@@ -1401,7 +813,7 @@ class UploadRecommendationService:
                 for item in candidates
             ],
         }
-        content = call_local_llm(json.dumps(payload, ensure_ascii=False, indent=2))
+        content = call_ingredient_match_llm(json.dumps(payload, ensure_ascii=False, indent=2))
         parsed = extract_json_from_llm_content(content)
         if not parsed:
             raise RuntimeError("runtime RAG LLM returned non-JSON content")
@@ -1565,11 +977,33 @@ class UploadRecommendationService:
         confidence = float(item.get("confidence", 0.0) or 0.0)
         functional_premix_input = _looks_like_functional_premix(raw_input) or _looks_like_functional_premix(display_name)
 
+        if is_low_signal_upload_vector_term(raw_input, display_name, normalized_input):
+            return "excluded_from_vector_by_low_signal_upload_guard"
+
         if self._is_excipient_vector_excluded(raw_input, display_name, normalized_input, functional_name) and not functional_premix_input:
             return "excluded_from_vector_by_excipient_guard"
 
-        if relation_type in {"unrelated", "unknown", "error", "excipient"}:
+        if relation_type in NON_FUNCTIONAL_CACHE_RELATION_TYPES:
             return "excluded_from_vector_by_relation_guard"
+
+        high_confidence_exact_match = (
+            confidence >= 0.90
+            and relation_type in VECTOR_ALLOWED_RELATION_TYPES
+            and match_source in {
+                "direct_category",
+                "safe_alias_exact",
+                "cache_normalized_exact",
+                "cache_raw_exact",
+                "cache_matched_standard_exact",
+                "rag_synonym_exact",
+                "runtime_rag_llm_existing",
+                "runtime_rag_llm_new",
+            }
+            and not looks_like_runtime_measurement_or_symbol(normalized_input)
+            and not looks_like_runtime_measurement_or_symbol(functional_name)
+        )
+        if high_confidence_exact_match:
+            return ""
 
         if self._is_cache_like_vector_excluded(raw_input, display_name, normalized_input) and not functional_premix_input:
             return "excluded_from_vector_by_cache_like_guard"
@@ -1637,6 +1071,36 @@ class UploadRecommendationService:
             """,
             (cleaned,),
         ).fetchall()
+
+    def _nonfunctional_cache_relation_types(self, rows: List[sqlite3.Row]) -> set[str]:
+        return {
+            str(row["relation_type"] or "").strip()
+            for row in rows
+            if str(row["relation_type"] or "").strip() in NON_FUNCTIONAL_CACHE_RELATION_TYPES
+        }
+
+    def _should_stop_after_nonfunctional_cache_hit(
+        self,
+        *,
+        relation_types: set[str],
+        normalized_input: str,
+        raw_input: str,
+        display_input: str,
+    ) -> bool:
+        if not relation_types:
+            return False
+        values = [raw_input, display_input, normalized_input]
+        if any(looks_like_runtime_measurement_or_symbol(value) for value in values):
+            return True
+        if any(contains_guarded_runtime_term(value, RUNTIME_CACHE_LIKE_VECTOR_EXCLUDED_TERMS) for value in values):
+            return True
+        if "excipient" in relation_types:
+            if any(
+                is_excipient(value) or contains_guarded_runtime_term(value, RUNTIME_EXCIPIENT_VECTOR_EXCLUDED_TERMS)
+                for value in values
+            ):
+                return True
+        return False
 
     def _build_match_payload(
         self,
@@ -1760,6 +1224,8 @@ class UploadRecommendationService:
         matched_raw = str(row["raw_ingredient"] or "").strip()
         relation_type = str(row["relation_type"] or "cache_match")
         confidence = float(row["confidence"] or 0.0)
+        if relation_type in NON_FUNCTIONAL_CACHE_RELATION_TYPES:
+            return None
 
         candidate_names = []
         if matched_standard:
@@ -1843,6 +1309,8 @@ class UploadRecommendationService:
         display_name: str,
         input_family: str,
         mapping_rule: Optional[dict],
+        allow_new_standard: bool = True,
+        request_id: str = "",
     ) -> Optional[dict]:
         if not ENABLE_RUNTIME_RAG_FALLBACK:
             return None
@@ -1854,9 +1322,16 @@ class UploadRecommendationService:
             return None
         if contains_guarded_runtime_term(query, RUNTIME_CACHE_LIKE_VECTOR_EXCLUDED_TERMS):
             return None
-        if contains_guarded_runtime_term(query, RUNTIME_EXCIPIENT_VECTOR_EXCLUDED_TERMS):
+        if contains_guarded_runtime_term(query, RUNTIME_RAG_FALLBACK_SKIP_TERMS):
             return None
 
+        update_request_progress(
+            request_id,
+            phase="ingredient_rag_retrieval",
+            message="RAG 후보를 검색하는 중입니다.",
+            detail=f"원료: {display_name or raw_ingredient or ingredient_name}",
+            current_ingredient=display_name or raw_ingredient or ingredient_name,
+        )
         embedding_results = self._search_runtime_embedding_candidates(
             ingredient_name=ingredient_name,
             raw_ingredient=raw_ingredient,
@@ -1872,13 +1347,28 @@ class UploadRecommendationService:
             lexical_results = []
 
         results = self._merge_runtime_candidate_lists(embedding_results, lexical_results, top_k=max(RUNTIME_RAG_TOP_K, 8))
-        if results:
-            top1 = dict(results[0])
-            top_retrieval_score = float(top1.get("retrieval_score", 0.0) or 0.0)
-            top_embedding_score = float(top1.get("embedding_score", 0.0) or 0.0)
-            if top_retrieval_score < 2.0 and top_embedding_score < 0.45:
-                results = []
+        if results and not self._has_strong_runtime_rag_signal(results):
+            results = []
+        if not results:
+            update_request_progress(
+                request_id,
+                phase="ingredient_rag_no_candidate",
+                message="RAG 후보가 없어 LLM 판정을 생략했습니다.",
+                detail=f"원료: {display_name or raw_ingredient or ingredient_name}",
+                current_ingredient=display_name or raw_ingredient or ingredient_name,
+                extra={"rag_candidates": []},
+            )
+            return None
 
+        candidate_names = [str(item.get("standard_name", "") or "") for item in results[:5]]
+        update_request_progress(
+            request_id,
+            phase="ingredient_rag_llm",
+            message="RAG 후보를 LLM으로 판정하는 중입니다.",
+            detail=f"원료: {display_name or raw_ingredient or ingredient_name} / 후보: {', '.join(candidate_names) if candidate_names else '없음'}",
+            current_ingredient=display_name or raw_ingredient or ingredient_name,
+            extra={"rag_candidates": candidate_names},
+        )
         try:
             llm_result = self._classify_runtime_rag_candidates_with_llm(
                 ingredient_name=ingredient_name,
@@ -1892,6 +1382,13 @@ class UploadRecommendationService:
 
         decision = str(llm_result.get("decision", "") or "").strip().lower()
         if decision == "no_match" or not decision:
+            update_request_progress(
+                request_id,
+                phase="ingredient_rag_no_match",
+                message="RAG 판정 결과 매칭 원료가 없습니다.",
+                detail=f"원료: {display_name or raw_ingredient or ingredient_name}",
+                current_ingredient=display_name or raw_ingredient or ingredient_name,
+            )
             return None
 
         if decision == "existing_match":
@@ -1914,6 +1411,14 @@ class UploadRecommendationService:
             if confidence < 0.6:
                 confidence = 0.84
             reason = str(llm_result.get("reason", "") or "runtime RAG+LLM existing ingredient match").strip()
+            update_request_progress(
+                request_id,
+                phase="ingredient_rag_match",
+                message="RAG 판정으로 기능성 원료 매칭을 확정했습니다.",
+                detail=f"{display_name or raw_ingredient or ingredient_name} -> {resolved_name}",
+                current_ingredient=display_name or raw_ingredient or ingredient_name,
+                extra={"matched_standard_name": resolved_name, "relation_type": relation_type, "confidence": confidence},
+            )
             self._save_runtime_cache_match(
                 raw_ingredient=query,
                 normalized_raw=normalized_query,
@@ -1937,7 +1442,7 @@ class UploadRecommendationService:
                 protected_family=input_family,
             )
 
-        if decision != "new_standard":
+        if decision != "new_standard" or not allow_new_standard:
             return None
 
         proposed_standard_name = str(
@@ -2012,8 +1517,51 @@ class UploadRecommendationService:
         name = str(product_name or "").strip()
         for category, rule in CATEGORY_HINT_RULES.items():
             if contains_keyword(name, rule["product_keywords"]):
-                return {"category_main": category, "confidence": 0.95, "matched_keywords": rule["product_keywords"]}
+                normalized_category = normalize_product_category_label(category) or category
+                return {"category_main": normalized_category, "confidence": 0.95, "matched_keywords": rule["product_keywords"]}
         return {"category_main": "", "confidence": 0.0, "matched_keywords": []}
+
+    def _infer_upload_category_hint(self, parsed_result: dict, fallback_product_name: str = "") -> dict:
+        product_name = str(parsed_result.get("product_name_candidate") or fallback_product_name or "")
+        product_name_hint = self.infer_category_from_product_name(product_name)
+        name_category = normalize_product_category_label(product_name_hint.get("category_main", ""))
+        if name_category:
+            product_name_hint["category_main"] = name_category
+
+        llm_category = normalize_product_category_label(parsed_result.get("product_main_category", ""))
+        try:
+            llm_confidence = max(0.0, min(1.0, float(parsed_result.get("product_category_confidence", 0.0) or 0.0)))
+        except Exception:
+            llm_confidence = 0.0
+
+        if llm_category and llm_confidence >= 0.65 and (not name_category or name_category == llm_category):
+            return {
+                "category_main": llm_category,
+                "confidence": max(float(product_name_hint.get("confidence", 0.0) or 0.0), llm_confidence),
+                "matched_keywords": list(product_name_hint.get("matched_keywords", []) or []),
+                "source": "llm_parse_category",
+            }
+        return product_name_hint
+
+    def _has_non_joint_category_protection(self, parsed_result: dict, normalized_ingredients: List[str]) -> bool:
+        llm_category = normalize_product_category_label(parsed_result.get("product_main_category", ""))
+        try:
+            llm_confidence = max(0.0, min(1.0, float(parsed_result.get("product_category_confidence", 0.0) or 0.0)))
+        except Exception:
+            llm_confidence = 0.0
+        product_name = str(parsed_result.get("product_name_candidate", "") or "")
+        name_category = normalize_product_category_label(self.infer_category_from_product_name(product_name).get("category_main", ""))
+        nutrient_count = count_keyword_matches(normalized_ingredients, NUTRITION_SUPPLEMENT_INGREDIENT_KEYWORDS)
+        protected_category = llm_category or name_category
+        if not protected_category or protected_category == "관절/연골":
+            if name_category == "뼈 건강" and nutrient_count >= 2:
+                return True
+            return False
+        if llm_category and name_category and llm_category == name_category and llm_confidence >= 0.65:
+            return True
+        if protected_category == "뼈 건강" and nutrient_count >= 2 and name_category == "뼈 건강":
+            return True
+        return False
 
     def _collect_category_diversity(self, estimated_profile: dict) -> int:
         categories = {
@@ -2103,9 +1651,82 @@ class UploadRecommendationService:
         estimated_profile["product_main_category"] = forced_category
         return estimated_profile
 
+    def _apply_sparse_specific_category_override(self, estimated_profile: dict) -> dict:
+        current_category = str(estimated_profile.get("product_main_category", "") or "").strip()
+        if current_category not in {"", "기타", "영양보충"}:
+            return estimated_profile
+
+        ingredient_scores = [
+            dict(item or {})
+            for item in estimated_profile.get("ingredient_scores", []) or []
+            if str((item or {}).get("ingredient", "") or "").strip()
+        ]
+        if not ingredient_scores:
+            return estimated_profile
+
+        vector_categories = [
+            str(item.get("category_main", "") or "").strip()
+            for item in ingredient_scores
+            if str(item.get("category_main", "") or "").strip() not in {"", "기타"}
+        ]
+        generic_ingredient_count = sum(1 for category in vector_categories if category == "영양보충")
+        if generic_ingredient_count >= 2 or len(vector_categories) > 2:
+            return estimated_profile
+
+        specific_items: List[dict] = []
+        for item in ingredient_scores:
+            category = str(item.get("category_main", "") or "").strip()
+            display_name = str(item.get("display_name") or item.get("ingredient") or "")
+            if category in {"", "기타", "영양보충"}:
+                continue
+            if is_excluded_primary(display_name) or is_excipient(display_name):
+                continue
+            try:
+                weight = float(item.get("weight", 0.0) or 0.0)
+            except Exception:
+                weight = 0.0
+            if weight < 0.35:
+                continue
+            item["weight"] = weight
+            specific_items.append(item)
+
+        specific_categories = {str(item.get("category_main", "") or "") for item in specific_items}
+        if len(specific_categories) != 1:
+            return estimated_profile
+
+        forced_category = next(iter(specific_categories))
+        preferred = [
+            str(item.get("ingredient", "") or "")
+            for item in sorted(specific_items, key=lambda row: (-float(row.get("weight", 0.0) or 0.0), str(row.get("ingredient", "") or "")))
+            if str(item.get("ingredient", "") or "")
+        ]
+        if not preferred:
+            return estimated_profile
+
+        existing_primary = [str(item or "") for item in estimated_profile.get("primary_ingredients", []) if str(item or "")]
+        existing_secondary = [str(item or "") for item in estimated_profile.get("secondary_ingredients", []) if str(item or "")]
+        estimated_profile["product_main_category"] = forced_category
+        estimated_profile["primary_ingredients"] = list(dict.fromkeys([*preferred, *existing_primary]))[:3]
+        estimated_profile["secondary_ingredients"] = [
+            item for item in list(dict.fromkeys([*existing_secondary, *existing_primary])) if item not in estimated_profile["primary_ingredients"]
+        ][:8]
+
+        sub_categories = [
+            str(item or "")
+            for item in estimated_profile.get("product_sub_categories", []) or []
+            if str(item or "") and str(item or "") != forced_category
+        ]
+        if current_category and current_category != "기타" and current_category != forced_category:
+            sub_categories.insert(0, current_category)
+        estimated_profile["product_sub_categories"] = list(dict.fromkeys(sub_categories))[:3]
+        estimated_profile["llm_sub_function_categories"] = list(estimated_profile["product_sub_categories"])
+        estimated_profile["category_override_reason"] = "sparse_specific_ingredient_category"
+        return estimated_profile
+
     def _apply_domain_category_overrides(self, parsed_result: dict, estimated_profile: dict) -> dict:
         product_name_candidate = str(parsed_result.get("product_name_candidate", "") or "")
         normalized_ingredients = list(parsed_result.get("normalized_ingredients", []))
+        protect_non_joint_category = self._has_non_joint_category_protection(parsed_result, normalized_ingredients)
 
         if self._is_liver_health_candidate(product_name_candidate, normalized_ingredients):
             estimated_profile = self._reprioritize_primary_ingredients(
@@ -2121,7 +1742,7 @@ class UploadRecommendationService:
                 "눈 건강",
             )
 
-        if self._is_joint_candidate(product_name_candidate, normalized_ingredients):
+        if self._is_joint_candidate(product_name_candidate, normalized_ingredients) and not protect_non_joint_category:
             estimated_profile = self._reprioritize_primary_ingredients(
                 estimated_profile,
                 CATEGORY_HINT_RULES["관절/연골"]["ingredient_keywords"],
@@ -2154,6 +1775,7 @@ class UploadRecommendationService:
                 "영양보충",
             )
 
+        estimated_profile = self._apply_sparse_specific_category_override(estimated_profile)
         return estimated_profile
 
     def _override_recommendation_reason(self, temp_profile: dict, row: dict) -> str:
@@ -2181,7 +1803,200 @@ class UploadRecommendationService:
         ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
         return ranked[0][0] if ranked else ""
 
-    def _find_match_in_cache(self, ingredient_name: str, raw_ingredient: str = "", display_name: str = "") -> Optional[dict]:
+    def _find_existing_db_match(self, ingredient_name: str, raw_ingredient: str = "", display_name: str = "") -> Optional[dict]:
+        self._ensure_loaded()
+        runtime = self.recommendation_service.runtime
+        normalized_input = str(ingredient_name or "").strip()
+        raw_input = str(raw_ingredient or normalized_input).strip()
+        display_input = str(display_name or raw_input or normalized_input).strip()
+        input_family = resolve_joint_input_family(display_input, raw_input, normalized_input)
+        mapping_rule = resolve_runtime_mapping_rule(display_input, raw_input, normalized_input)
+        direct_terms = self._resolve_match_terms(normalized_input, raw_input, display_input, input_family)
+        safe_alias_terms = self._resolve_safe_alias_terms(normalized_input, raw_input, display_input, mapping_rule)
+        normalized_raw_exact = normalize_cache_exact_key(normalized_input or raw_input or display_input)
+        raw_normalized_exact = normalize_cache_exact_key(raw_input or display_input or normalized_input)
+
+        def iter_unique_rows(rows: List[sqlite3.Row]) -> List[sqlite3.Row]:
+            seen = set()
+            unique_rows: List[sqlite3.Row] = []
+            for row in rows:
+                key = (
+                    str(row["raw_ingredient"] or ""),
+                    str(row["matched_standard_name"] or ""),
+                    str(row["relation_type"] or ""),
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
+                unique_rows.append(row)
+            return unique_rows
+
+        with sqlite_connection(runtime["sqlite_path"]) as conn:
+            conn.row_factory = sqlite3.Row
+            for row in iter_unique_rows(self._fetch_cache_rows_by_normalized_raw(conn, normalized_raw_exact)):
+                match = self._resolve_cache_row_match(
+                    ingredient_name=normalized_input,
+                    raw_ingredient=raw_input,
+                    display_name=display_input,
+                    row=row,
+                    input_family=input_family,
+                    allow_like=False,
+                    mapping_rule=mapping_rule,
+                    source_override="cache_normalized_exact",
+                )
+                if match:
+                    return match
+
+            if raw_normalized_exact and raw_normalized_exact != normalized_raw_exact:
+                for row in iter_unique_rows(self._fetch_cache_rows_by_normalized_raw(conn, raw_normalized_exact)):
+                    match = self._resolve_cache_row_match(
+                        ingredient_name=normalized_input,
+                        raw_ingredient=raw_input,
+                        display_name=display_input,
+                        row=row,
+                        input_family=input_family,
+                        allow_like=False,
+                        mapping_rule=mapping_rule,
+                        source_override="cache_raw_normalized_exact",
+                    )
+                    if match:
+                        return match
+
+            for row in iter_unique_rows(self._fetch_cache_rows_by_raw(conn, raw_input)):
+                match = self._resolve_cache_row_match(
+                    ingredient_name=normalized_input,
+                    raw_ingredient=raw_input,
+                    display_name=display_input,
+                    row=row,
+                    input_family=input_family,
+                    allow_like=False,
+                    mapping_rule=mapping_rule,
+                    source_override="cache_raw_exact",
+                )
+                if match:
+                    return match
+
+            for direct_name in direct_terms:
+                direct = self._lookup_category_row(direct_name)
+                if not direct:
+                    continue
+                resolved_name = str(direct["functional_ingredient_name"] or "").strip()
+                if not resolved_name or not self._is_allowed_by_mapping_rule(mapping_rule, resolved_name):
+                    continue
+                resolved_family = infer_joint_ingredient_family(resolved_name)
+                if input_family and resolved_family and resolved_family != input_family:
+                    continue
+                return self._build_match_payload(
+                    ingredient_name=normalized_input,
+                    raw_ingredient=raw_input,
+                    display_name=display_input,
+                    functional_ingredient_name=resolved_name,
+                    relation_type="same_ingredient",
+                    confidence=0.99 if input_family else 0.98,
+                    category_row=direct,
+                    match_source="direct_category",
+                    protected_family=input_family,
+                )
+
+            for alias_term in safe_alias_terms:
+                direct = self._lookup_category_row(alias_term)
+                if not direct:
+                    continue
+                resolved_name = str(direct["functional_ingredient_name"] or "").strip()
+                if not resolved_name or not self._is_allowed_by_mapping_rule(mapping_rule, resolved_name):
+                    continue
+                resolved_family = infer_joint_ingredient_family(resolved_name)
+                if input_family and resolved_family and resolved_family != input_family:
+                    continue
+                return self._build_match_payload(
+                    ingredient_name=normalized_input,
+                    raw_ingredient=raw_input,
+                    display_name=display_input,
+                    functional_ingredient_name=resolved_name,
+                    relation_type="same_ingredient",
+                    confidence=0.97 if mapping_rule else 0.96,
+                    category_row=direct,
+                    match_source="safe_alias_exact",
+                    protected_family=input_family,
+                )
+
+            matched_standard_terms = dedupe_strings([*safe_alias_terms, *direct_terms])
+            for term in matched_standard_terms:
+                for row in iter_unique_rows(self._fetch_cache_rows_by_matched_standard(conn, term)):
+                    match = self._resolve_cache_row_match(
+                        ingredient_name=normalized_input,
+                        raw_ingredient=raw_input,
+                        display_name=display_input,
+                        row=row,
+                        input_family=input_family,
+                        allow_like=False,
+                        mapping_rule=mapping_rule,
+                        source_override="cache_matched_standard_exact",
+                    )
+                    if match:
+                        return match
+
+            if not is_like_blocked_input(raw_input, display_input, normalized_input):
+                like_rows: List[sqlite3.Row] = []
+                seen_like = set()
+                for term in direct_terms:
+                    normalized_term = normalize_cache_exact_key(term)
+                    if not normalized_term or is_like_blocked_input(term):
+                        continue
+                    if len(normalized_term) < 5:
+                        continue
+                    for row in self._fetch_cache_rows(conn, term, like=True):
+                        key = (
+                            str(row["raw_ingredient"] or ""),
+                            str(row["matched_standard_name"] or ""),
+                            str(row["relation_type"] or ""),
+                        )
+                        if key in seen_like:
+                            continue
+                        seen_like.add(key)
+                        like_rows.append(row)
+                for row in like_rows:
+                    match = self._resolve_cache_row_match(
+                        ingredient_name=normalized_input,
+                        raw_ingredient=raw_input,
+                        display_name=display_input,
+                        row=row,
+                        input_family=input_family,
+                        allow_like=True,
+                        mapping_rule=mapping_rule,
+                    )
+                    if match:
+                        return match
+
+        return None
+
+    def lookup_existing_ingredient_db_match(self, ingredient_text: str) -> dict:
+        raw_input = str(ingredient_text or "").strip()
+        normalized_input = canonicalize_ingredient_for_matching(raw_input) if raw_input else ""
+        normalized_input = normalized_input or raw_input
+        ingredient_object = {
+            "raw": raw_input,
+            "display_name": raw_input,
+            "normalized_for_matching": normalized_input,
+            "role": "primary",
+        }
+        match = (
+            self._find_match_in_cache(normalized_input, raw_ingredient=raw_input, display_name=raw_input)
+            if raw_input
+            else None
+        )
+        matches = [match] if match else []
+        if matches:
+            self._annotate_runtime_vector_usage(matches)
+        status = self.build_ingredient_db_match_statuses([ingredient_object], matched_ingredients=matches)[0]
+        return {
+            "query": raw_input,
+            "normalized_query": normalized_input,
+            "matched": bool(match),
+            "match": status,
+        }
+
+    def _find_match_in_cache(self, ingredient_name: str, raw_ingredient: str = "", display_name: str = "", request_id: str = "") -> Optional[dict]:
         # Match order:
         # 1) ingredient_match_cache.normalized_raw exact
         # 2) ingredient_match_cache.raw_ingredient exact
@@ -2204,7 +2019,15 @@ class UploadRecommendationService:
         mapping_rule = resolve_runtime_mapping_rule(display_input, raw_input, normalized_input)
         direct_terms = self._resolve_match_terms(normalized_input, raw_input, display_input, input_family)
         safe_alias_terms = self._resolve_safe_alias_terms(normalized_input, raw_input, display_input, mapping_rule)
-        normalized_raw_exact = normalize_cache_exact_key(raw_input or display_input or normalized_input)
+        normalized_raw_exact = normalize_cache_exact_key(normalized_input or raw_input or display_input)
+        raw_normalized_exact = normalize_cache_exact_key(raw_input or display_input or normalized_input)
+        canonical_overrides_raw_cache = bool(
+            normalized_raw_exact
+            and raw_normalized_exact
+            and normalized_raw_exact != raw_normalized_exact
+            and self._lookup_category_row(normalized_input)
+        )
+        nonfunctional_cache_hit = False
 
         def iter_unique_rows(rows: List[sqlite3.Row]) -> List[sqlite3.Row]:
             seen = set()
@@ -2237,14 +2060,76 @@ class UploadRecommendationService:
                 )
                 if match:
                     return match
-            if any(str(row["relation_type"] or "").strip() in {"excipient", "unrelated", "unknown", "error"} for row in normalized_exact_rows):
+            normalized_negative_types = self._nonfunctional_cache_relation_types(normalized_exact_rows)
+            if normalized_negative_types:
+                nonfunctional_cache_hit = True
+                if self._should_stop_after_nonfunctional_cache_hit(
+                    relation_types=normalized_negative_types,
+                    normalized_input=normalized_input,
+                    raw_input=raw_input,
+                    display_input=display_input,
+                ):
+                    logger.info(
+                        "Stopping after normalized exact non-functional cache hit: input=%r raw=%r rows=%s",
+                        normalized_input,
+                        raw_input,
+                        [str(row["relation_type"] or "").strip() for row in normalized_exact_rows],
+                    )
+                    return None
                 logger.info(
-                    "Stopping after normalized exact non-functional cache hit: input=%r raw=%r rows=%s",
+                    "Revalidating stale normalized non-functional cache hit: input=%r raw=%r rows=%s",
                     normalized_input,
                     raw_input,
                     [str(row["relation_type"] or "").strip() for row in normalized_exact_rows],
                 )
-                return None
+
+            if raw_normalized_exact and raw_normalized_exact != normalized_raw_exact:
+                raw_normalized_exact_rows = iter_unique_rows(
+                    self._fetch_cache_rows_by_normalized_raw(conn, raw_normalized_exact)
+                )
+                for row in raw_normalized_exact_rows:
+                    match = self._resolve_cache_row_match(
+                        ingredient_name=normalized_input,
+                        raw_ingredient=raw_input,
+                        display_name=display_input,
+                        row=row,
+                        input_family=input_family,
+                        allow_like=False,
+                        mapping_rule=mapping_rule,
+                        source_override="cache_raw_normalized_exact",
+                    )
+                    if match:
+                        return match
+                raw_normalized_negative_types = self._nonfunctional_cache_relation_types(raw_normalized_exact_rows)
+                if raw_normalized_negative_types:
+                    nonfunctional_cache_hit = True
+                    if canonical_overrides_raw_cache:
+                        logger.info(
+                            "Ignoring stale raw normalized non-functional cache because canonical input resolves directly: input=%r raw=%r rows=%s",
+                            normalized_input,
+                            raw_input,
+                            [str(row["relation_type"] or "").strip() for row in raw_normalized_exact_rows],
+                        )
+                    elif self._should_stop_after_nonfunctional_cache_hit(
+                        relation_types=raw_normalized_negative_types,
+                        normalized_input=normalized_input,
+                        raw_input=raw_input,
+                        display_input=display_input,
+                    ):
+                        logger.info(
+                            "Stopping after raw normalized non-functional cache hit: input=%r raw=%r rows=%s",
+                            normalized_input,
+                            raw_input,
+                            [str(row["relation_type"] or "").strip() for row in raw_normalized_exact_rows],
+                        )
+                        return None
+                    else:
+                        logger.info(
+                            "Revalidating stale raw normalized non-functional cache hit: input=%r raw=%r rows=%s",
+                            normalized_input,
+                            raw_input,
+                            [str(row["relation_type"] or "").strip() for row in raw_normalized_exact_rows],
+                        )
 
             raw_exact_rows = iter_unique_rows(self._fetch_cache_rows_by_raw(conn, raw_input))
             for row in raw_exact_rows:
@@ -2260,14 +2145,36 @@ class UploadRecommendationService:
                 )
                 if match:
                     return match
-            if any(str(row["relation_type"] or "").strip() in {"excipient", "unrelated", "unknown", "error"} for row in raw_exact_rows):
-                logger.info(
-                    "Stopping after raw exact non-functional cache hit: input=%r raw=%r rows=%s",
-                    normalized_input,
-                    raw_input,
-                    [str(row["relation_type"] or "").strip() for row in raw_exact_rows],
-                )
-                return None
+            raw_negative_types = self._nonfunctional_cache_relation_types(raw_exact_rows)
+            if raw_negative_types:
+                nonfunctional_cache_hit = True
+                if canonical_overrides_raw_cache:
+                    logger.info(
+                        "Ignoring stale raw exact non-functional cache because canonical input resolves directly: input=%r raw=%r rows=%s",
+                        normalized_input,
+                        raw_input,
+                        [str(row["relation_type"] or "").strip() for row in raw_exact_rows],
+                    )
+                elif self._should_stop_after_nonfunctional_cache_hit(
+                    relation_types=raw_negative_types,
+                    normalized_input=normalized_input,
+                    raw_input=raw_input,
+                    display_input=display_input,
+                ):
+                    logger.info(
+                        "Stopping after raw exact non-functional cache hit: input=%r raw=%r rows=%s",
+                        normalized_input,
+                        raw_input,
+                        [str(row["relation_type"] or "").strip() for row in raw_exact_rows],
+                    )
+                    return None
+                else:
+                    logger.info(
+                        "Revalidating stale raw exact non-functional cache hit: input=%r raw=%r rows=%s",
+                        normalized_input,
+                        raw_input,
+                        [str(row["relation_type"] or "").strip() for row in raw_exact_rows],
+                    )
 
             for direct_name in direct_terms:
                 direct = self._lookup_category_row(direct_name)
@@ -2358,7 +2265,7 @@ class UploadRecommendationService:
                     if match:
                         return match
 
-            if not is_like_blocked_input(raw_input, display_input, normalized_input):
+            if not nonfunctional_cache_hit and not is_like_blocked_input(raw_input, display_input, normalized_input):
                 like_rows: List[sqlite3.Row] = []
                 seen_like = set()
                 for term in direct_terms:
@@ -2396,6 +2303,8 @@ class UploadRecommendationService:
             display_name=display_input,
             input_family=input_family,
             mapping_rule=mapping_rule,
+            allow_new_standard=not nonfunctional_cache_hit,
+            request_id=request_id,
         )
         if runtime_rag_match:
             return runtime_rag_match
@@ -2413,18 +2322,19 @@ class UploadRecommendationService:
 
     def debug_ingredient_match(self, ingredient_text: str) -> dict:
         self._ensure_loaded()
-        normalized_input = str(ingredient_text or "").strip()
-        raw_input = normalized_input
-        display_input = normalized_input
+        raw_input = str(ingredient_text or "").strip()
+        normalized_input = canonicalize_ingredient_for_matching(raw_input)
+        display_input = raw_input
         input_family = resolve_joint_input_family(display_input, raw_input, normalized_input)
         mapping_rule = resolve_runtime_mapping_rule(display_input, raw_input, normalized_input)
         direct_terms = self._resolve_match_terms(normalized_input, raw_input, display_input, input_family)
         safe_alias_terms = self._resolve_safe_alias_terms(normalized_input, raw_input, display_input, mapping_rule)
-        normalized_raw_exact = normalize_cache_exact_key(raw_input or display_input or normalized_input)
+        normalized_raw_exact = normalize_cache_exact_key(normalized_input or raw_input or display_input)
 
         debug = {
             "input": {
                 "ingredient_text": normalized_input,
+                "raw_input": raw_input,
                 "normalized_input": normalized_input,
                 "normalized_exact_key": normalized_raw_exact,
                 "input_family": input_family,
@@ -2469,6 +2379,7 @@ class UploadRecommendationService:
                 "standard_name": str(item.get("standard_name", "") or ""),
                 "retrieval_score": float(item.get("retrieval_score", 0.0) or 0.0),
                 "embedding_score": float(item.get("embedding_score", 0.0) or 0.0),
+                "name_similarity_score": float(item.get("name_similarity_score", 0.0) or 0.0),
                 "retrieval_source": str(item.get("retrieval_source", "") or ""),
                 "sources_joined": str(item.get("sources_joined", "") or ""),
                 "synonyms_joined": str(item.get("synonyms_joined", "") or ""),
@@ -2719,19 +2630,44 @@ class UploadRecommendationService:
 
         return debug
 
-    def match_raw_ingredients_to_functional_ingredients(self, ingredient_objects: List[dict]) -> List[dict]:
+    def match_raw_ingredients_to_functional_ingredients(self, ingredient_objects: List[dict], request_id: str = "") -> List[dict]:
         results = []
         seen = set()
+        matchable_items = [item for item in ingredient_objects if item.get("role") != "excipient" and str(item.get("normalized_for_matching", "") or "").strip()]
+        total = len(matchable_items)
+        processed = 0
         for item in ingredient_objects:
             if item.get("role") == "excipient":
                 continue
             normalized = str(item.get("normalized_for_matching", "") or "").strip()
             if not normalized:
                 continue
+            processed += 1
             raw_ingredient = str(item.get("raw", normalized) or normalized)
             display_name = str(item.get("display_name", raw_ingredient) or raw_ingredient)
-            match = self._find_match_in_cache(normalized, raw_ingredient=raw_ingredient, display_name=display_name)
+            percent = 50 + (18 * (processed - 1) / max(total, 1))
+            update_request_progress(
+                request_id,
+                phase="ingredient_matching",
+                message="원료를 기능성 원료 DB와 매칭하는 중입니다.",
+                percent=percent,
+                detail=f"{processed}/{total}: {display_name}",
+                current_ingredient=display_name,
+                current=processed,
+                total=total,
+            )
+            match = self._find_match_in_cache(normalized, raw_ingredient=raw_ingredient, display_name=display_name, request_id=request_id)
             if not match:
+                update_request_progress(
+                    request_id,
+                    phase="ingredient_matching",
+                    message="원료 매칭을 계속 진행 중입니다.",
+                    percent=50 + (18 * processed / max(total, 1)),
+                    detail=f"{display_name}: 매칭 없음",
+                    current_ingredient=display_name,
+                    current=processed,
+                    total=total,
+                )
                 continue
             key = (str(match.get("raw_input", raw_ingredient)), match["functional_ingredient_name"])
             if key in seen:
@@ -2742,14 +2678,62 @@ class UploadRecommendationService:
             match["input_role"] = str(item.get("role", "") or "")
             match["raw_input"] = raw_ingredient
             results.append(match)
+            update_request_progress(
+                request_id,
+                phase="ingredient_matching",
+                message="원료 매칭을 계속 진행 중입니다.",
+                percent=50 + (18 * processed / max(total, 1)),
+                detail=f"{display_name} -> {match.get('functional_ingredient_name', '')} ({match.get('match_source', '')})",
+                current_ingredient=display_name,
+                current=processed,
+                total=total,
+                extra={"last_match_source": str(match.get("match_source", "") or "")},
+            )
         return results
+
+    def _semantic_detail_by_ingredient(self, estimated_profile: Optional[dict]) -> Dict[str, dict]:
+        if not estimated_profile:
+            return {}
+        try:
+            _, details = build_semantic_weight_vector(
+                estimated_profile,
+                self.recommendation_service.ingredient_category_profiles,
+                include_details=True,
+            )
+        except Exception:  # noqa: BLE001
+            return {}
+        by_ingredient: Dict[str, dict] = {}
+        for detail in details.values():
+            if str(detail.get("semantic_key", "") or "").startswith("__"):
+                continue
+            sub_categories = detail.get("ingredient_sub_function_categories", []) or []
+            if isinstance(sub_categories, str):
+                sub_categories = [sub_categories] if sub_categories.strip() else []
+            semantic_payload = {
+                "semantic_key": str(detail.get("semantic_key", "") or ""),
+                "ingredient_type": str(detail.get("ingredient_type", "") or ""),
+                "profile_vector_include": bool(detail.get("vector_include", True)),
+                "vector_include": bool(detail.get("vector_include", True)) and float(detail.get("weight", 0.0) or 0.0) > 0,
+                "is_excipient": bool(detail.get("is_excipient", False)),
+                "ingredient_main_category": str(detail.get("ingredient_main_category", "") or ""),
+                "sub_function_categories": [str(item).strip() for item in sub_categories if str(item).strip()],
+                "semantic_weight": float(detail.get("weight", 0.0) or 0.0),
+                "semantic_weight_reason": str(detail.get("reason", "") or ""),
+            }
+            for ingredient in detail.get("ingredients", []) or []:
+                ingredient_name = str(ingredient or "").strip()
+                if ingredient_name:
+                    by_ingredient[ingredient_name] = semantic_payload
+        return by_ingredient
 
     def build_ingredient_db_match_statuses(
         self,
         ingredient_objects: List[dict],
         matched_ingredients: Optional[List[dict]] = None,
+        estimated_profile: Optional[dict] = None,
     ) -> List[dict]:
         matches = matched_ingredients if matched_ingredients is not None else self.match_raw_ingredients_to_functional_ingredients(ingredient_objects)
+        semantic_by_ingredient = self._semantic_detail_by_ingredient(estimated_profile)
         best_match_by_key: Dict[str, dict] = {}
         for match in matches:
             candidate_keys = {
@@ -2778,6 +2762,39 @@ class UploadRecommendationService:
             ]
             match = next((best_match_by_key[key] for key in keys if key and key in best_match_by_key), None)
             category_row = dict(match.get("category_row", {}) or {}) if match else {}
+            functional_name = str(match.get("functional_ingredient_name", "") or "") if match else ""
+            profile_name = str(match.get("profile_ingredient_name", "") or functional_name) if match else ""
+            semantic_detail = (
+                semantic_by_ingredient.get(profile_name)
+                or semantic_by_ingredient.get(functional_name)
+                or semantic_by_ingredient.get(display_value)
+                or semantic_by_ingredient.get(normalized_value)
+                or {}
+            )
+            if semantic_detail:
+                ingredient_type = str(semantic_detail.get("ingredient_type", "") or "")
+                vector_include = bool(semantic_detail.get("vector_include", True))
+                is_excipient_value = bool(semantic_detail.get("is_excipient", False))
+                ingredient_main_category = str(semantic_detail.get("ingredient_main_category", "") or "")
+                sub_function_categories = list(semantic_detail.get("sub_function_categories", []) or [])
+                semantic_weight = float(semantic_detail.get("semantic_weight", 0.0) or 0.0)
+                semantic_weight_reason = str(semantic_detail.get("semantic_weight_reason", "") or "")
+                semantic_key = str(semantic_detail.get("semantic_key", "") or "")
+            else:
+                vector_exclusion_reason = str(match.get("vector_exclusion_reason", "") or "") if match else ""
+                is_excipient_value = input_role == "excipient" or is_excipient(display_value) or is_excipient(normalized_value)
+                if vector_exclusion_reason == "excluded_from_vector_by_low_signal_upload_guard":
+                    ingredient_type = "low_signal_food_base"
+                else:
+                    ingredient_type = "excipient" if is_excipient_value else ("functional" if match else "unmatched")
+                vector_include = False
+                ingredient_main_category = str(category_row.get("category_main", "") or "")
+                sub_function_categories = []
+                semantic_weight = 0.0
+                semantic_weight_reason = "unmatched_ingredient" if not match else (vector_exclusion_reason or "semantic_detail_unavailable")
+                if is_excipient_value:
+                    semantic_weight_reason = vector_exclusion_reason or "excluded_non_functional"
+                semantic_key = profile_name or functional_name or normalized_value or display_value
             statuses.append(
                 {
                     "display_name": display_value or raw_value or normalized_value,
@@ -2786,11 +2803,20 @@ class UploadRecommendationService:
                     "input_role": input_role,
                     "category_hint": category_hint,
                     "is_functional_match": bool(match),
-                    "functional_ingredient_name": str(match.get("functional_ingredient_name", "") or "") if match else "",
+                    "functional_match": bool(match),
+                    "functional_ingredient_name": functional_name,
                     "relation_type": str(match.get("relation_type", "") or "") if match else "",
                     "confidence": float(match.get("confidence", 0.0) or 0.0) if match else 0.0,
                     "category_main": str(category_row.get("category_main", "") or ""),
                     "category_sub": str(category_row.get("category_sub", "") or ""),
+                    "ingredient_type": ingredient_type,
+                    "vector_include": vector_include,
+                    "is_excipient": is_excipient_value,
+                    "ingredient_main_category": ingredient_main_category,
+                    "sub_function_categories": sub_function_categories,
+                    "semantic_key": semantic_key,
+                    "semantic_weight": semantic_weight,
+                    "semantic_weight_reason": semantic_weight_reason,
                     "function_text": str(category_row.get("function_text", "") or ""),
                     "claim_text": str(category_row.get("claim_text", "") or ""),
                     "match_source": str(match.get("match_source", "") or "") if match else "",
@@ -2847,9 +2873,14 @@ class UploadRecommendationService:
                     "display_name": display_name,
                     "normalized_for_matching": str(item.get("normalized_for_matching", functional_name)),
                     "weight": round(weight, 4),
+                    "match_confidence": round(confidence, 4),
                     "role": role,
                     "category_main": category_main,
                     "category_sub": category_sub,
+                    "relation_type": str(item.get("relation_type", "") or ""),
+                    "v2_decision": "family_signal" if str(item.get("relation_type", "") or "") == "family_fallback" else "existing_match",
+                    "source_raw_ingredients": str(item.get("raw_input", "") or item.get("raw_ingredient", "") or display_name),
+                    "source_match_methods": str(item.get("match_source", "") or ""),
                 }
             )
 
@@ -2895,6 +2926,7 @@ class UploadRecommendationService:
             "product_name": product_name,
             "product_main_category": main_category,
             "product_sub_categories": sub_categories,
+            "llm_sub_function_categories": sub_categories,
             "primary_ingredients": primary[:3],
             "secondary_ingredients": secondary[:8],
             "support_ingredients": support[:10],
@@ -2943,7 +2975,7 @@ class UploadRecommendationService:
         quality_warnings = list(base_warnings)
         excluded_ingredients = list(dict.fromkeys(parsed_result.get("excluded_ingredients", []) + estimated_profile.get("excipient_ingredients", [])))
         product_name_candidate = str(parsed_result.get("product_name_candidate", "") or "")
-        product_name_hint = self.infer_category_from_product_name(product_name_candidate)
+        product_name_hint = self._infer_upload_category_hint(parsed_result, product_name_candidate)
         product_name_category = str(product_name_hint.get("category_main", "") or "")
 
         estimated_main_category = str(estimated_profile.get("product_main_category", "") or "")
@@ -3111,13 +3143,162 @@ class UploadRecommendationService:
             "category_diversity_count": category_diversity_count,
         }
 
-    def calculate_similar_products_for_temp_vector(self, temp_vector: Dict[str, float], temp_profile: dict, top_k: int, candidate_limit: int) -> List[dict]:
+    def _sparse_category_fallback_applicable(self, temp_profile: dict) -> bool:
+        main_category = str(temp_profile.get("product_main_category", "") or "").strip()
+        if main_category in {"", "기타", "영양보충"}:
+            return False
+        ingredient_scores = [
+            dict(item or {})
+            for item in temp_profile.get("ingredient_scores", []) or []
+            if str((item or {}).get("ingredient", "") or "").strip()
+            and str((item or {}).get("category_main", "") or "").strip() not in {"", "기타", "영양보충"}
+        ]
+        if not ingredient_scores or len(ingredient_scores) > 2:
+            return False
+        categories = {str(item.get("category_main", "") or "").strip() for item in ingredient_scores}
+        return len(categories) == 1 and main_category in categories
+
+    def _build_sparse_category_fallback_rows(
+        self,
+        temp_profile: dict,
+        candidate_pool: List[dict],
+        excluded_report_nos: set[str],
+        top_k: int,
+    ) -> List[dict]:
+        if not self._sparse_category_fallback_applicable(temp_profile):
+            return []
+
+        service = self.recommendation_service
+        main_category = str(temp_profile.get("product_main_category", "") or "").strip()
+        category_rule = CATEGORY_HINT_RULES.get(main_category, {})
+        category_keywords = list(category_rule.get("ingredient_keywords", []) or [])
+        if not category_keywords:
+            return []
+
+        fallback_candidates: List[dict] = []
+        seen_report_nos = set(excluded_report_nos)
+        for candidate in candidate_pool:
+            target_product_id = str(candidate.get("target_product_id", "") or "")
+            if not target_product_id or target_product_id not in service.profiles:
+                continue
+            target_profile = service.profiles[target_product_id]
+            if str(target_profile.get("product_main_category", "") or "").strip() != main_category:
+                continue
+            report_no = str(target_profile.get("report_no", "") or "")
+            if not report_no or report_no.startswith("UPLOADED-") or report_no in seen_report_nos:
+                continue
+            if not bool(target_profile.get("is_candidate_enabled", True)):
+                continue
+
+            target_primary_ingredients = list(target_profile.get("primary_ingredients", []))
+            target_secondary_ingredients = list(target_profile.get("secondary_ingredients", []))
+            target_support_ingredients = list(target_profile.get("support_ingredients", []))
+            target_all_ingredients = list(
+                dict.fromkeys(target_primary_ingredients + target_secondary_ingredients + target_support_ingredients)
+            )
+            keyword_hits = count_keyword_matches(target_all_ingredients, category_keywords)
+            if keyword_hits <= 0:
+                continue
+
+            target_vector = service.product_vectors.get(target_product_id, {}) or {}
+            vector_size = len(target_vector) if isinstance(target_vector, dict) else 0
+            fallback_score = round(min(0.29, 0.16 + min(0.08, keyword_hits * 0.02) + min(0.05, vector_size * 0.005)), 6)
+            function_similarity_score = calculate_function_similarity(temp_profile, target_profile)
+            core_match_score = 0.05
+            comparison = {
+                "shared_ingredients": [],
+                "shared_ingredients_raw": [],
+                "base_only_ingredients": list(temp_profile.get("primary_ingredients", []))[:3],
+                "target_only_ingredients": target_all_ingredients[:10],
+                "shared_categories": [main_category],
+                "different_categories": [],
+            }
+            reason = (
+                f"직접 공유 원료는 확인되지 않았지만, OCR에서 확인된 핵심 원료가 {main_category}로 분류되어 "
+                f"같은 기능군의 공식 제품을 참고 후보로 표시합니다."
+            )
+            explanation = build_explanation_json(reason, comparison, "낮음")
+            explanation["similarity_algorithm"] = SIMILARITY_ALGORITHM_VERSION
+            explanation["semantic_weighted_jaccard_v2"] = {
+                "algorithm": SIMILARITY_ALGORITHM_VERSION,
+                "fallback_type": "sparse_upload_category_fallback",
+                "base_semantic_ingredient_count": len(temp_profile.get("ingredient_scores", []) or []),
+                "target_semantic_ingredient_count": vector_size,
+                "shared_semantic_keys": [],
+                "score_adjustments": [
+                    {
+                        "type": "sparse_upload_category_fallback",
+                        "main_category": main_category,
+                        "keyword_hits": keyword_hits,
+                    }
+                ],
+            }
+            seen_report_nos.add(report_no)
+            fallback_candidates.append(
+                {
+                    "rank": 0,
+                    "report_no": report_no,
+                    "target_report_no": report_no,
+                    "product_name": str(target_profile.get("product_name", "") or ""),
+                    "target_product_name": str(target_profile.get("product_name", "") or ""),
+                    "target_product_main_category": main_category,
+                    "similarity_score": fallback_score,
+                    "function_similarity_score": float(function_similarity_score),
+                    "core_match_score": core_match_score,
+                    "substitutability": "낮음",
+                    "recommendation_quality": "category_fallback",
+                    "recommendation_display_eligible": True,
+                    "recommendation_review_reason": "sparse_upload_category_fallback",
+                    "shared_ingredients": [],
+                    "target_primary_ingredients": target_primary_ingredients,
+                    "target_secondary_ingredients": target_secondary_ingredients,
+                    "target_support_ingredients": target_support_ingredients,
+                    "target_all_ingredients": target_all_ingredients,
+                    "target_other_ingredients": target_all_ingredients,
+                    "shared_categories": [main_category],
+                    "reason": reason,
+                    "caution": "직접 공유 원료가 없어 참고용 추천입니다. OCR 원료명과 제품 유형을 확인해주세요.",
+                    "explanation": explanation,
+                    "exact_same_upload": False,
+                    "profile_signature": str(target_profile.get("profile_signature", "") or ""),
+                    "uploaded_match_types": [],
+                    "uploaded_match_labels": [],
+                    "uploaded_status": str(target_profile.get("status", "") or ""),
+                    "uploaded_quality_grade": str(target_profile.get("quality_grade", "") or ""),
+                }
+            )
+
+        fallback_candidates = sorted(
+            fallback_candidates,
+            key=lambda item: (
+                -float(item.get("similarity_score", 0.0) or 0.0),
+                -float(item.get("function_similarity_score", 0.0) or 0.0),
+                str(item.get("target_report_no", "") or ""),
+            ),
+        )
+        return fallback_candidates[:top_k]
+
+    def calculate_similar_products_for_temp_vector(
+        self,
+        temp_vector: Dict[str, float],
+        temp_profile: dict,
+        top_k: int,
+        candidate_limit: int,
+        request_id: str = "",
+    ) -> List[dict]:
         service = self.recommendation_service
         temp_product_id = str(temp_profile["product_id"])
         temp_upload_signature = str(temp_profile.get("upload_signature", "") or "")
         temp_profile_signature = str(temp_profile.get("profile_signature", "") or "")
         temp_ocr_text_hash = str(temp_profile.get("ocr_text_hash", "") or "")
-        candidate_pool = build_candidate_pool(
+        update_request_progress(
+            request_id,
+            phase="candidate_pool",
+            message="후보 제품군을 추출하는 중입니다.",
+            percent=74,
+            detail=f"candidate_limit={candidate_limit}",
+        )
+        candidate_pool = build_candidate_pool_v2(
             temp_product_id,
             temp_profile,
             service.product_vectors,
@@ -3126,6 +3307,16 @@ class UploadRecommendationService:
             service.ingredient_frequency,
             candidate_limit,
             get_settings().default_max_df_for_seed,
+            service.ingredient_category_profiles,
+        )
+        update_request_progress(
+            request_id,
+            phase="candidate_scoring",
+            message="후보 제품별 semantic weighted Jaccard v2 유사도를 계산하는 중입니다.",
+            percent=80,
+            detail=f"후보 {len(candidate_pool)}개를 계산합니다.",
+            current=0,
+            total=len(candidate_pool),
         )
         candidate_target_ids = [str(candidate.get("target_product_id", "") or "") for candidate in candidate_pool]
         if temp_upload_signature:
@@ -3141,8 +3332,19 @@ class UploadRecommendationService:
                     candidate_target_ids.insert(0, exact_target_id)
 
         rows: List[dict] = []
-        total_product_count = len(service.product_vectors)
-        for candidate in candidate_pool:
+        total_candidates = len(candidate_pool)
+        progress_interval = max(1, total_candidates // 20) if total_candidates else 1
+        for index, candidate in enumerate(candidate_pool, start=1):
+            if index == 1 or index == total_candidates or index % progress_interval == 0:
+                update_request_progress(
+                    request_id,
+                    phase="candidate_scoring",
+                    message="후보 제품별 semantic weighted Jaccard v2 유사도를 계산하는 중입니다.",
+                    percent=80 + (12 * index / max(total_candidates, 1)),
+                    detail=f"{index}/{total_candidates} 후보 처리 중",
+                    current=index,
+                    total=total_candidates,
+                )
             target_product_id = candidate["target_product_id"]
             target_profile = service.profiles[target_product_id]
             target_vector = service.product_vectors[target_product_id]
@@ -3154,6 +3356,7 @@ class UploadRecommendationService:
             candidate_enabled = bool(target_profile.get("is_candidate_enabled", True))
             if not exact_same_upload and not candidate_enabled:
                 continue
+            semantic_explanation = {}
 
             uploaded_match_types: List[str] = []
             uploaded_match_labels: List[str] = []
@@ -3190,30 +3393,66 @@ class UploadRecommendationService:
                 function_similarity_score = 1.0
                 core_match_score = 1.0
                 substitutability = "높음"
+                quality_metadata = recommendation_quality_metadata(similarity_score, {}, exact_match=True)
                 reason = "이전에 업로드된 동일 이미지와 일치해 동일 제품으로 판정했습니다."
             else:
-                similarity_score, _ = calculate_weighted_jaccard_with_idf(
-                    temp_vector,
-                    target_vector,
-                    service.ingredient_frequency,
-                    total_product_count,
+                similarity_score, shared_semantic_ingredients, semantic_explanation = calculate_semantic_weighted_jaccard_v2(
                     temp_profile,
                     target_profile,
+                    service.ingredient_category_profiles,
                 )
                 if similarity_score <= 0:
                     continue
+                if shared_semantic_ingredients:
+                    comparison["shared_ingredients"] = shared_semantic_ingredients
+                    comparison["shared_ingredients_raw"] = shared_semantic_ingredients
+                    base_semantic_shared = set()
+                    target_semantic_shared = set()
+                    for detail in semantic_explanation.get("shared_semantic_keys", []) or []:
+                        base_semantic_shared.update(str(name) for name in detail.get("base_ingredients", []) or [])
+                        target_semantic_shared.update(str(name) for name in detail.get("target_ingredients", []) or [])
+                    comparison["base_only_ingredients"] = [
+                        name for name in comparison["base_only_ingredients"] if name not in base_semantic_shared
+                    ]
+                    comparison["target_only_ingredients"] = [
+                        name for name in comparison["target_only_ingredients"] if name not in target_semantic_shared
+                    ]
+                    comparison["base_only_ingredients"] = [
+                        name for name in comparison["base_only_ingredients"] if not is_semantic_excipient_name(name)
+                    ]
+                    comparison["target_only_ingredients"] = [
+                        name for name in comparison["target_only_ingredients"] if not is_semantic_excipient_name(name)
+                    ]
                 function_similarity_score = calculate_function_similarity(temp_profile, target_profile)
-                core_match_score = calculate_core_match_score(temp_profile, target_profile)
-                substitutability = classify_substitutability(similarity_score, temp_profile, target_profile)
-                reason = generate_recommendation_reason(temp_profile, target_profile, comparison, service.ingredient_frequency)
+                core_match_score = calculate_core_match_score(temp_profile, target_profile, semantic_explanation)
+                substitutability = classify_substitutability(similarity_score, temp_profile, target_profile, semantic_explanation)
+                quality_metadata = recommendation_quality_metadata(
+                    similarity_score,
+                    semantic_explanation,
+                    core_match_score,
+                    function_similarity_score,
+                )
+                reason = generate_recommendation_reason(temp_profile, target_profile, comparison, service.ingredient_frequency, semantic_explanation)
             explanation = build_explanation_json(reason, comparison, substitutability)
+            explanation["similarity_algorithm"] = SIMILARITY_ALGORITHM_VERSION
+            if semantic_explanation:
+                explanation["semantic_weighted_jaccard_v2"] = semantic_explanation
             target_primary_ingredients = list(target_profile.get("primary_ingredients", []))
             target_secondary_ingredients = list(target_profile.get("secondary_ingredients", []))
             target_support_ingredients = list(target_profile.get("support_ingredients", []))
             target_all_ingredients = list(
                 dict.fromkeys(target_primary_ingredients + target_secondary_ingredients + target_support_ingredients)
             )
-            target_other_ingredients = [item for item in target_all_ingredients if item not in comparison["shared_ingredients"]]
+            semantic_shared_target_ingredients = set()
+            for detail in semantic_explanation.get("shared_semantic_keys", []) or []:
+                semantic_shared_target_ingredients.update(str(name) for name in detail.get("target_ingredients", []) or [])
+            target_other_ingredients = [
+                item
+                for item in target_all_ingredients
+                if item not in comparison["shared_ingredients"]
+                and item not in semantic_shared_target_ingredients
+                and (not semantic_explanation or not is_semantic_excipient_name(item))
+            ]
             rows.append(
                 {
                     "rank": 0,
@@ -3226,6 +3465,7 @@ class UploadRecommendationService:
                     "function_similarity_score": float(function_similarity_score),
                     "core_match_score": float(core_match_score),
                     "substitutability": substitutability,
+                    **quality_metadata,
                     "shared_ingredients": comparison["shared_ingredients"],
                     "target_primary_ingredients": target_primary_ingredients,
                     "target_secondary_ingredients": target_secondary_ingredients,
@@ -3280,7 +3520,16 @@ class UploadRecommendationService:
                 seen_uploaded_report_nos.add(report_no)
                 uploaded_rows.append(item)
             else:
-                official_rows.append(item)
+                if bool(item.get("recommendation_display_eligible", True)):
+                    official_rows.append(item)
+
+        if not official_rows:
+            official_rows = self._build_sparse_category_fallback_rows(
+                temp_profile,
+                candidate_pool,
+                {str(item.get("report_no", "") or "") for item in exact_rows + uploaded_rows},
+                top_k,
+            )
 
         uploaded_debug_rows: List[dict] = []
         seen_uploaded_debug_keys = set()
@@ -3299,6 +3548,13 @@ class UploadRecommendationService:
             item["rank"] = index
             item["reason"] = self._override_recommendation_reason(temp_profile, item)
             item["explanation"]["reason"] = item["reason"]
+        update_request_progress(
+            request_id,
+            phase="recommendation_formatting",
+            message="추천 결과를 정렬하고 화면 응답을 구성하는 중입니다.",
+            percent=94,
+            detail=f"공식 추천 {len(rows)}개, 업로드 참고 {len(uploaded_rows)}개",
+        )
         return rows
 
     def _prepend_stored_exact_match_if_available(self, recommendations: List[dict], temp_profile: dict) -> List[dict]:
@@ -3322,6 +3578,7 @@ class UploadRecommendationService:
             "function_similarity_score": 1.0,
             "core_match_score": 1.0,
             "substitutability": "?믪쓬",
+            **recommendation_quality_metadata(1.0, {}, exact_match=True),
             "shared_ingredients": sorted(
                 set(str(item or "") for item in temp_profile.get("primary_ingredients", []))
                 | set(str(item or "") for item in temp_profile.get("secondary_ingredients", []))
@@ -3500,6 +3757,7 @@ class UploadRecommendationService:
             "ingredient_db_match_statuses": self.build_ingredient_db_match_statuses(
                 corrected["parsed_result"].get("ingredient_objects", []),
                 matched_ingredients,
+                corrected["estimated_profile"],
             ),
             "estimated_profile": {
                 "product_main_category": corrected["estimated_profile"].get("product_main_category", ""),
@@ -3544,9 +3802,24 @@ class UploadRecommendationService:
         candidate_limit: int = 1000,
         product_name_candidate: str = "",
         llm_rerank: bool = False,
+        request_id: str = "",
     ) -> dict:
-        self._ensure_loaded()
         started = time.perf_counter()
+        update_request_progress(
+            request_id,
+            phase="service_loading",
+            message="추천 DB와 원료 프로필을 로딩하는 중입니다.",
+            percent=3,
+            detail="초기 요청에서는 이 단계가 오래 걸릴 수 있습니다.",
+        )
+        self._ensure_loaded()
+        update_request_progress(
+            request_id,
+            phase="ingredient_input",
+            message="수정한 원료 목록을 검증하는 중입니다.",
+            percent=10,
+            detail=f"입력 원료 {len(ingredients)}개",
+        )
         ingredient_objects = []
         for item in ingredients:
             canonical = canonicalize_ingredient_for_matching(item)
@@ -3578,17 +3851,24 @@ class UploadRecommendationService:
             "confidence": 0.95,
             "needs_user_review": False,
         }
-        matched = self.match_raw_ingredients_to_functional_ingredients(ingredient_objects)
+        matched = self.match_raw_ingredients_to_functional_ingredients(ingredient_objects, request_id=request_id)
+        update_request_progress(
+            request_id,
+            phase="profile_building",
+            message="임시 제품 프로필과 semantic vector를 구성하는 중입니다.",
+            percent=70,
+            detail=f"매칭 원료 {len(matched)}개",
+        )
         temp_vector = self.build_temp_product_vector_from_ingredients(ingredient_objects, matched)
         upload_signature = ""
         temp_hash = hashlib.sha1("|".join(sorted(parsed["normalized_ingredients"])).encode("utf-8")).hexdigest()[:16]
-        name_hint = self.infer_category_from_product_name(product_name_candidate)
+        name_hint = self._infer_upload_category_hint(parsed, product_name_candidate)
         temp_profile = self._build_temp_profile(f"uploaded::{temp_hash}", product_name_candidate or "업로드 입력 제품", matched, name_hint)
         temp_profile["upload_signature"] = upload_signature
         temp_profile["profile_signature"] = build_profile_signature(temp_profile, temp_vector)
         temp_profile = self._apply_domain_category_overrides(parsed, temp_profile)
         temp_profile["profile_signature"] = build_profile_signature(temp_profile, temp_vector)
-        recommendations = self.calculate_similar_products_for_temp_vector(temp_vector, temp_profile, top_k, candidate_limit) if temp_vector else []
+        recommendations = self.calculate_similar_products_for_temp_vector(temp_vector, temp_profile, top_k, candidate_limit, request_id=request_id) if temp_vector else []
         recommendations = self._prepend_stored_exact_match_if_available(recommendations, temp_profile)
         candidate_state = determine_upload_candidate_state(parsed, temp_profile, False)
         temp_profile["status"] = candidate_state["status"]
@@ -3607,7 +3887,7 @@ class UploadRecommendationService:
             execution_seconds=execution_seconds,
             candidate_count=len(recommendations),
         )
-        return self._build_response(
+        response = self._build_response(
             "ingredients",
             None,
             parsed,
@@ -3620,24 +3900,55 @@ class UploadRecommendationService:
             profile_signature=str(temp_profile.get("profile_signature", "") or ""),
             llm_rerank=llm_rerank,
         )
+        update_request_progress(
+            request_id,
+            phase="complete",
+            message="원료 기준 재추천이 완료되었습니다.",
+            percent=100,
+            detail=f"추천 {len(response.get('recommendations', []))}개",
+            status="complete",
+        )
+        return response
 
-    def recommend_from_ocr_text(self, raw_text: str, top_k: int = 10, candidate_limit: int = 1000, llm_rerank: bool = False) -> dict:
-        self._ensure_loaded()
+    def recommend_from_ocr_text(
+        self,
+        raw_text: str,
+        top_k: int = 10,
+        candidate_limit: int = 1000,
+        llm_rerank: bool = False,
+        request_id: str = "",
+    ) -> dict:
         started = time.perf_counter()
+        update_request_progress(
+            request_id,
+            phase="service_loading",
+            message="추천 DB와 원료 프로필을 로딩하는 중입니다.",
+            percent=3,
+            detail="초기 요청에서는 이 단계가 오래 걸릴 수 있습니다.",
+        )
+        self._ensure_loaded()
+        update_request_progress(request_id, phase="ocr_parse", message="OCR 텍스트에서 원료 후보를 파싱하는 중입니다.", percent=35)
         parsed = parse_ingredients_from_ocr_text(raw_text, self.recommendation_service.runtime["sqlite_path"])
-        matched = self.match_raw_ingredients_to_functional_ingredients(parsed.get("ingredient_objects", []))
+        matched = self.match_raw_ingredients_to_functional_ingredients(parsed.get("ingredient_objects", []), request_id=request_id)
+        update_request_progress(
+            request_id,
+            phase="profile_building",
+            message="임시 제품 프로필과 semantic vector를 구성하는 중입니다.",
+            percent=70,
+            detail=f"매칭 원료 {len(matched)}개",
+        )
         temp_vector = self.build_temp_product_vector_from_ingredients(parsed.get("ingredient_objects", []), matched)
         upload_signature = build_upload_signature("ocr_text", raw_text or "")
         ocr_text_hash = compute_ocr_text_hash(raw_text or "")
         parsed_signature = str((parsed.get("parse_metadata") or {}).get("parsed_signature", "") or compute_parsed_signature(parsed))
         temp_hash = hashlib.sha1(upload_signature.encode("utf-8")).hexdigest()[:16]
-        name_hint = self.infer_category_from_product_name(parsed.get("product_name_candidate", ""))
+        name_hint = self._infer_upload_category_hint(parsed)
         temp_profile = self._build_temp_profile(f"uploaded::{temp_hash}", parsed.get("product_name_candidate") or "OCR 입력 제품", matched, name_hint)
         temp_profile["upload_signature"] = upload_signature
         temp_profile["profile_signature"] = build_profile_signature(temp_profile, temp_vector)
         temp_profile = self._apply_domain_category_overrides(parsed, temp_profile)
         temp_profile["profile_signature"] = build_profile_signature(temp_profile, temp_vector)
-        recommendations = self.calculate_similar_products_for_temp_vector(temp_vector, temp_profile, top_k, candidate_limit) if temp_vector else []
+        recommendations = self.calculate_similar_products_for_temp_vector(temp_vector, temp_profile, top_k, candidate_limit, request_id=request_id) if temp_vector else []
         recommendations = self._prepend_stored_exact_match_if_available(recommendations, temp_profile)
         ocr_payload = {
             "raw_text": raw_text,
@@ -3710,6 +4021,14 @@ class UploadRecommendationService:
             needs_user_review=bool(response.get("needs_user_review")),
             quality_warnings=response.get("quality_warnings", []),
         )
+        update_request_progress(
+            request_id,
+            phase="complete",
+            message="OCR 텍스트 추천이 완료되었습니다.",
+            percent=100,
+            detail=f"추천 {len(response.get('recommendations', []))}개",
+            status="complete",
+        )
         return response
 
     def recommend_from_uploaded_image(
@@ -3719,13 +4038,29 @@ class UploadRecommendationService:
         top_k: int = 10,
         candidate_limit: int = 1000,
         llm_rerank: bool = False,
+        request_id: str = "",
     ) -> dict:
-        self._ensure_loaded()
         started = time.perf_counter()
+        update_request_progress(
+            request_id,
+            phase="service_loading",
+            message="추천 DB와 원료 프로필을 로딩하는 중입니다.",
+            percent=3,
+            detail="초기 요청에서는 이 단계가 오래 걸릴 수 있습니다.",
+        )
+        self._ensure_loaded()
+        update_request_progress(
+            request_id,
+            phase="image_prepare",
+            message="업로드 이미지를 확인하고 OCR 분석을 준비하는 중입니다.",
+            percent=5,
+            detail=str(filename or "upload.jpg"),
+        )
         image_hash = build_image_hash(image_bytes)
         upload_signature = build_upload_signature("ocr_image", image_hash)
         cached_ocr_payload = self.recommendation_service.find_cached_ocr_payload_by_upload_signature(upload_signature)
         if cached_ocr_payload:
+            update_request_progress(request_id, phase="ocr_cache", message="캐시된 OCR 결과를 불러오는 중입니다.", percent=20)
             ocr_result = {
                 "raw_text": str(cached_ocr_payload.get("raw_text", "") or ""),
                 "confidence": cached_ocr_payload.get("confidence"),
@@ -3738,6 +4073,7 @@ class UploadRecommendationService:
             ocr_result = None
         suffix = Path(filename or "upload.jpg").suffix.lower() or ".jpg"
         if ocr_result is None:
+            update_request_progress(request_id, phase="ocr_extract", message="이미지에서 OCR 텍스트를 추출하는 중입니다.", percent=20)
             temp_path = save_temp_upload(image_bytes, suffix)
             try:
                 ocr_result = extract_text_from_image(str(temp_path))
@@ -3748,6 +4084,14 @@ class UploadRecommendationService:
                     pass
 
         if ocr_result.get("error"):
+            update_request_progress(
+                request_id,
+                phase="error",
+                message="OCR 인식 중 오류가 발생했습니다.",
+                percent=100,
+                detail=str(ocr_result.get("error")),
+                status="error",
+            )
             return {
                 "input_type": "image",
                 "ocr": ocr_result,
@@ -3803,21 +4147,35 @@ class UploadRecommendationService:
             }
 
         raw_text = str(ocr_result.get("raw_text", "") or "")
+        update_request_progress(
+            request_id,
+            phase="ocr_parse",
+            message="OCR 텍스트에서 제품명과 원료 후보를 파싱하는 중입니다.",
+            percent=38,
+            detail=f"OCR 텍스트 {len(raw_text)}자",
+        )
         parsed = parse_ingredients_from_ocr_text(raw_text, self.recommendation_service.runtime["sqlite_path"])
         parsed["ocr_confidence"] = ocr_result.get("confidence")
         parsed["ocr_confidence_source"] = ocr_result.get("confidence_source", "unavailable")
-        matched = self.match_raw_ingredients_to_functional_ingredients(parsed.get("ingredient_objects", []))
+        matched = self.match_raw_ingredients_to_functional_ingredients(parsed.get("ingredient_objects", []), request_id=request_id)
+        update_request_progress(
+            request_id,
+            phase="profile_building",
+            message="임시 제품 프로필과 semantic vector를 구성하는 중입니다.",
+            percent=70,
+            detail=f"매칭 원료 {len(matched)}개",
+        )
         temp_vector = self.build_temp_product_vector_from_ingredients(parsed.get("ingredient_objects", []), matched)
         ocr_text_hash = compute_ocr_text_hash(raw_text)
         parsed_signature = str((parsed.get("parse_metadata") or {}).get("parsed_signature", "") or compute_parsed_signature(parsed))
         temp_hash = hashlib.sha1(upload_signature.encode("utf-8")).hexdigest()[:16]
-        name_hint = self.infer_category_from_product_name(parsed.get("product_name_candidate", filename))
+        name_hint = self._infer_upload_category_hint(parsed, filename)
         temp_profile = self._build_temp_profile(f"uploaded::{temp_hash}", parsed.get("product_name_candidate") or filename, matched, name_hint)
         temp_profile["upload_signature"] = upload_signature
         temp_profile["profile_signature"] = build_profile_signature(temp_profile, temp_vector)
         temp_profile = self._apply_domain_category_overrides(parsed, temp_profile)
         temp_profile["profile_signature"] = build_profile_signature(temp_profile, temp_vector)
-        recommendations = self.calculate_similar_products_for_temp_vector(temp_vector, temp_profile, top_k, candidate_limit) if temp_vector else []
+        recommendations = self.calculate_similar_products_for_temp_vector(temp_vector, temp_profile, top_k, candidate_limit, request_id=request_id) if temp_vector else []
         recommendations = self._prepend_stored_exact_match_if_available(recommendations, temp_profile)
         candidate_state = determine_upload_candidate_state(parsed, temp_profile, False)
         temp_profile["status"] = candidate_state["status"]
@@ -3887,6 +4245,14 @@ class UploadRecommendationService:
             notes=f"created from uploaded image: {filename}",
             needs_user_review=bool(response.get("needs_user_review")),
             quality_warnings=response.get("quality_warnings", []),
+        )
+        update_request_progress(
+            request_id,
+            phase="complete",
+            message="이미지 분석과 추천 생성이 완료되었습니다.",
+            percent=100,
+            detail=f"추천 {len(response.get('recommendations', []))}개",
+            status="complete",
         )
         return response
 

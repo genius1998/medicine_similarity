@@ -101,6 +101,39 @@ JOINT_INGREDIENT_FAMILY_RULES = {
             "보스웰리아",
         ),
     },
+    "shark_cartilage": {
+        "tokens": (
+            "\uc0c1\uc5b4\uc5f0\uace8",
+            "\ubb34\ucf54\ub2e4\ub2f9",
+            "\ubba4\ucf54\ub2e4\ub2f9",
+            "mucopolysaccharide",
+            "sharkcartilage",
+        ),
+        "canonical_name": "\ubba4\ucf54\ub2e4\ub2f9.\ub2e8\ubc31",
+        "aliases": (
+            "\ubba4\ucf54\ub2e4\ub2f9.\ub2e8\ubc31",
+            "\uc0c1\uc5b4\uc5f0\uace8",
+            "\uc0c1\uc5b4\uc5f0\uace8\ubd84\ub9d0",
+            "\uc0c1\uc5b4\uc5f0\uace8\ucd94\ucd9c\ubb3c\ubd84\ub9d0",
+        ),
+    },
+    "achyranthes": {
+        "tokens": (
+            "\uc1e0\ubb34\ub98e",
+            "\uc1e0\ubb34\ub985",
+            "\uc6b0\uc2ac",
+            "hl-joint100",
+            "hljoint100",
+            "achyranthes",
+        ),
+        "canonical_name": "\uc6b0\uc2ac \ub4f1 \ubcf5\ud569\ubb3c(HL-Joint100)",
+        "aliases": (
+            "\uc6b0\uc2ac \ub4f1 \ubcf5\ud569\ubb3c(HL-Joint100)",
+            "\uc1e0\ubb34\ub98e\ubd84\ub9d0",
+            "\uc1e0\ubb34\ub985\ubd84\ub9d0",
+            "\uc6b0\uc2ac",
+        ),
+    },
 }
 
 PROTECTED_JOINT_FAMILIES = frozenset(JOINT_INGREDIENT_FAMILY_RULES)

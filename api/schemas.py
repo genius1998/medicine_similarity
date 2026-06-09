@@ -32,6 +32,7 @@ class ProductProfileResponse(BaseModel):
     product_name: str
     product_main_category: str
     product_sub_categories: List[str]
+    llm_sub_function_categories: List[str] = Field(default_factory=list)
     primary_ingredients: List[str]
     secondary_ingredients: List[str]
     support_ingredients: List[str]
@@ -51,6 +52,9 @@ class RecommendationItem(BaseModel):
     function_similarity_score: float
     core_match_score: float
     substitutability: str
+    recommendation_quality: str = ""
+    recommendation_display_eligible: bool = True
+    recommendation_review_reason: str = ""
     shared_ingredients: List[str]
     target_primary_ingredients: List[str] = Field(default_factory=list)
     target_secondary_ingredients: List[str] = Field(default_factory=list)
@@ -79,6 +83,7 @@ class RecommendationResponse(BaseModel):
     base_product: RecommendationBaseProduct
     recommendations: List[RecommendationItem]
     cache_used: bool
+    similarity_algorithm: str = ""
     llm_rerank_applied: bool = False
     llm_rerank_error: str = ""
     execution_seconds: float
@@ -93,6 +98,7 @@ class IngredientRecommendationRequest(BaseModel):
     top_k: int = 10
     candidate_limit: int = 1000
     llm_rerank: bool = False
+    request_id: str = ""
 
 
 class OCRTextRecommendationRequest(BaseModel):
@@ -100,10 +106,15 @@ class OCRTextRecommendationRequest(BaseModel):
     top_k: int = 10
     candidate_limit: int = 1000
     llm_rerank: bool = False
+    request_id: str = ""
 
 
 class ParsedOCRPayload(BaseModel):
     product_name_candidate: str = ""
+    product_main_category: str = ""
+    product_sub_categories: List[str] = Field(default_factory=list)
+    product_category_confidence: float = 0.0
+    product_category_reason: str = ""
     ingredient_section_text: str = ""
     functional_ingredient_candidates: List[str] = Field(default_factory=list)
     raw_ingredients: List[str] = Field(default_factory=list)

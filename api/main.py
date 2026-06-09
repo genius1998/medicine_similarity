@@ -8,6 +8,7 @@ from typing import Optional
 from urllib.parse import quote_plus
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
@@ -26,7 +27,7 @@ from api.schemas import (
     RecommendationResponse,
     UploadRecommendationResponse,
 )
-from api.upload_recommendation_service import UploadRecommendationService, coerce_ingredient_request_payload
+from api.upload_recommendation_service import UploadRecommendationService, coerce_ingredient_request_payload, get_request_progress
 
 
 settings = get_settings()
@@ -191,6 +192,36 @@ def root_page(request: Request) -> HTMLResponse:
 @app.get("/home", response_class=HTMLResponse)
 def home_page(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request, "home.html", template_context(request))
+
+
+@app.get("/ingredients", response_class=HTMLResponse)
+def ingredient_catalog_page(
+    request: Request,
+    q: str = Query(""),
+    origin: str = Query("all"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=10, le=200),
+) -> HTMLResponse:
+    catalog_page = ops_service.list_ingredient_catalog_page(
+        q=q,
+        origin=origin,
+        page=page,
+        page_size=page_size,
+        sync_pending=False,
+    )
+    total_pages = int(catalog_page.get("total_pages", 1) or 1)
+    current_page = int(catalog_page.get("page", 1) or 1)
+    page_numbers = list(range(max(1, current_page - 2), min(total_pages, current_page + 2) + 1))
+    context = template_context(
+        request,
+        ingredient_catalog_page=catalog_page,
+        ingredient_query=str(q or ""),
+        ingredient_query_encoded=quote_plus(str(q or "")),
+        ingredient_origin=str(catalog_page.get("origin", origin) or "all"),
+        ingredient_page_size=int(catalog_page.get("page_size", page_size) or page_size),
+        ingredient_page_numbers=page_numbers,
+    )
+    return templates.TemplateResponse(request, "ingredients.html", context)
 
 
 @app.get("/login", response_class=HTMLResponse)
@@ -524,6 +555,27 @@ def get_catalog_product_detail(request: Request, report_no: str) -> dict:
     return detail
 
 
+@app.get("/api/ingredients/match")
+def match_ingredient_from_db(q: str = Query(..., min_length=1, max_length=200)) -> dict:
+    return upload_service.lookup_existing_ingredient_db_match(q)
+
+
+@app.get("/api/ingredients")
+def list_ingredients(
+    q: str = Query("", min_length=0),
+    origin: str = Query("all"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+) -> dict:
+    return ops_service.list_ingredient_catalog_page(
+        q=q,
+        origin=origin,
+        page=page,
+        page_size=page_size,
+        sync_pending=False,
+    )
+
+
 @app.get("/api/products/search", response_model=ProductSearchResponse)
 def search_products(request: Request, q: str = Query(..., min_length=1), limit: int = Query(20, ge=1, le=100)) -> ProductSearchResponse:
     require_api_user(request)
@@ -574,12 +626,17 @@ def get_product_profile(request: Request, report_no: str) -> ProductProfileRespo
                     "category_hint": str(profile.get("product_main_category", "") or ""),
                 }
             )
-    ingredient_db_match_statuses = upload_service.build_ingredient_db_match_statuses(ingredient_objects)
+    ingredient_db_match_statuses = upload_service.build_ingredient_db_match_statuses(
+        ingredient_objects,
+        estimated_profile=profile,
+    )
+    sub_function_categories = list(profile.get("llm_sub_function_categories", []))
     return ProductProfileResponse(
         report_no=str(profile.get("report_no", "")),
         product_name=str(profile.get("product_name", "")),
         product_main_category=str(profile.get("product_main_category", "")),
-        product_sub_categories=list(profile.get("product_sub_categories", [])),
+        product_sub_categories=sub_function_categories,
+        llm_sub_function_categories=sub_function_categories,
         primary_ingredients=list(profile.get("primary_ingredients", [])),
         secondary_ingredients=list(profile.get("secondary_ingredients", [])),
         support_ingredients=list(profile.get("support_ingredients", [])),
@@ -597,12 +654,15 @@ def get_similar_products(
     candidate_limit: int = Query(settings.default_candidate_limit, ge=10, le=5000),
     force_refresh: bool = Query(False),
     llm_rerank: bool = Query(False),
+    similarity_algorithm: str = Query("v2"),
 ) -> RecommendationResponse:
     user = require_api_user(request)
     try:
-        payload = service.get_similar_products(report_no, top_k, candidate_limit, force_refresh, llm_rerank)
+        payload = service.get_similar_products(report_no, top_k, candidate_limit, force_refresh, llm_rerank, similarity_algorithm)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     ops_service.log_event(
         event_type="product_similarity_lookup",
         level="info",
@@ -614,6 +674,7 @@ def get_similar_products(
         payload={
             "report_no": str(report_no or ""),
             "base_product_name": str(payload.get("base_product", {}).get("product_name", "") or ""),
+            "similarity_algorithm": str(payload.get("similarity_algorithm", "") or ""),
             "llm_rerank_applied": bool(payload.get("llm_rerank_applied", False)),
             "top_results": _summarize_top_results(payload.get("recommendations", []), limit=3),
         },
@@ -622,6 +683,7 @@ def get_similar_products(
         base_product=RecommendationBaseProduct(**payload["base_product"]),
         recommendations=[RecommendationItem(**item) for item in payload["recommendations"]],
         cache_used=bool(payload["cache_used"]),
+        similarity_algorithm=str(payload.get("similarity_algorithm", "") or ""),
         llm_rerank_applied=bool(payload.get("llm_rerank_applied", False)),
         llm_rerank_error=str(payload.get("llm_rerank_error", "") or ""),
         execution_seconds=float(payload["execution_seconds"]),
@@ -638,6 +700,7 @@ def recommend_by_ingredients(request: Request, payload_in: IngredientRecommendat
         payload_in.candidate_limit,
         product_name_candidate=payload_in.product_name_candidate,
         llm_rerank=payload_in.llm_rerank,
+        request_id=payload_in.request_id,
     )
     ops_service.save_ocr_review(
         user_id=user.user_id,
@@ -662,7 +725,13 @@ def recommend_by_ingredients(request: Request, payload_in: IngredientRecommendat
 @app.post("/api/recommend/by-ocr-text", response_model=UploadRecommendationResponse)
 def recommend_by_ocr_text(request: Request, payload_in: OCRTextRecommendationRequest) -> UploadRecommendationResponse:
     user = require_api_user(request)
-    payload = upload_service.recommend_from_ocr_text(payload_in.ocr_text, payload_in.top_k, payload_in.candidate_limit, llm_rerank=payload_in.llm_rerank)
+    payload = upload_service.recommend_from_ocr_text(
+        payload_in.ocr_text,
+        payload_in.top_k,
+        payload_in.candidate_limit,
+        llm_rerank=payload_in.llm_rerank,
+        request_id=payload_in.request_id,
+    )
     ops_service.save_ocr_review(user_id=user.user_id, source_type="ocr_text", response_payload=payload)
     ops_service.log_event(
         event_type="ocr_recommend",
@@ -683,6 +752,7 @@ async def recommend_by_image(
     top_k: int = Form(settings.default_top_k),
     candidate_limit: int = Form(settings.default_candidate_limit),
     llm_rerank: bool = Form(False),
+    request_id: str = Form(""),
 ) -> UploadRecommendationResponse:
     user = require_api_user(request)
     filename = str(file.filename or "upload.jpg")
@@ -695,18 +765,35 @@ async def recommend_by_image(
     if len(image_bytes) > max_size:
         raise HTTPException(status_code=400, detail=f"file too large: max {settings.upload_max_file_size_mb}MB")
 
-    payload = upload_service.recommend_from_uploaded_image(image_bytes, filename, top_k, candidate_limit, llm_rerank=llm_rerank)
-    ops_service.save_ocr_review(user_id=user.user_id, source_type="image", response_payload=payload)
-    ops_service.log_event(
-        event_type="ocr_recommend",
-        level="info",
-        user_id=user.user_id,
-        request_path="/api/recommend/by-image",
-        request_method="POST",
-        message=f"image recommend:{filename}",
-        payload={"trace_id": payload.get("trace_id", ""), "filename": filename},
-    )
+    def _run_image_recommendation() -> dict:
+        payload = upload_service.recommend_from_uploaded_image(
+            image_bytes,
+            filename,
+            top_k,
+            candidate_limit,
+            llm_rerank=llm_rerank,
+            request_id=request_id,
+        )
+        ops_service.save_ocr_review(user_id=user.user_id, source_type="image", response_payload=payload)
+        ops_service.log_event(
+            event_type="ocr_recommend",
+            level="info",
+            user_id=user.user_id,
+            request_path="/api/recommend/by-image",
+            request_method="POST",
+            message=f"image recommend:{filename}",
+            payload={"trace_id": payload.get("trace_id", ""), "filename": filename},
+        )
+        return payload
+
+    payload = await run_in_threadpool(_run_image_recommendation)
     return UploadRecommendationResponse(**payload)
+
+
+@app.get("/api/recommend/progress/{request_id}")
+def recommend_progress(request: Request, request_id: str) -> dict:
+    require_api_user(request)
+    return get_request_progress(request_id)
 
 
 @app.get("/api/tools/ingredient-rag")

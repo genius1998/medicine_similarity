@@ -1,33 +1,66 @@
-node_modules/
+## Python
 __pycache__/
-.vscode/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+## Virtual environment
 .venv/
+venv/
+env/
+
+## IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+node_modules/
+
+## Secrets / credentials
 .env
 .env.*
 config.json
 deploy_ec2/config.json
-.DS_Store
 google_ocr_key
 google_ocr_key/
 *google*key*
 *.credentials.json
+
+## Databases & large binaries
+*.db
+*.sqlite
+ingredients.db
+tmp_admin_catalog_test.sqlite
+
+## Build / deploy artefacts
+deploy_ec2_c003_pipeline.zip
+
+## Temp / scratch
 tmp/
 tmp/uploads/
 
-deploy_ec2_c003_pipeline.zip
-*.pyc
-*.pyo
-
+## Data files (processed outputs)
 output/*.csv
 output/*.json
 output/*.jsonl
 output/*.sqlite
 output/*.db
 output/failed_*.csv
+output/**
+outputs/**
+
+## Logs
 logs/
 logs/*.log
 
+## Source data
 건강기능식품_*.csv
 건강기능식품_*.xlsx
 
+## ML indexes
 functional_ingredient_rag_index/

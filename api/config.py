@@ -23,6 +23,16 @@ class ApiSettings:
     local_llm_base_url: str
     local_llm_timeout_sec: int
     local_llm_max_retries: int
+    ingredient_match_llm_provider: str
+    ingredient_match_llm_model: str
+    ingredient_match_llm_api_key_env: str
+    ingredient_match_llm_env_path: Path
+    ingredient_match_llm_base_url: str
+    ingredient_match_llm_timeout_sec: int
+    ingredient_match_llm_max_retries: int
+    ingredient_match_llm_max_output_tokens: int
+    ingredient_match_llm_reasoning_effort: str
+    ingredient_match_llm_fallback_to_local: bool
     upload_temp_dir: Path
     upload_max_file_size_mb: int
     upload_allowed_extensions: Tuple[str, ...]
@@ -65,6 +75,44 @@ def get_settings() -> ApiSettings:
     local_llm_base_url = str(_nested_value(config, "local_llm", "base_url", "http://169.213.5.157:3000/api/chat"))
     local_llm_timeout_sec = int(_nested_value(config, "local_llm", "timeout_sec", 120))
     local_llm_max_retries = int(_nested_value(config, "local_llm", "max_retries", 2))
+    ingredient_match_llm_provider = str(
+        os.getenv("INGREDIENT_MATCH_LLM_PROVIDER", _nested_value(config, "ingredient_match_llm", "provider", "openai"))
+    ).strip()
+    ingredient_match_llm_model = str(
+        os.getenv("INGREDIENT_MATCH_LLM_MODEL", _nested_value(config, "ingredient_match_llm", "model", "gpt-5-nano"))
+    ).strip()
+    ingredient_match_llm_api_key_env = str(
+        os.getenv("INGREDIENT_MATCH_LLM_API_KEY_ENV", _nested_value(config, "ingredient_match_llm", "api_key_env", "OPENAI_API_KEY"))
+    ).strip()
+    ingredient_match_llm_env_path = Path(
+        str(os.getenv("INGREDIENT_MATCH_LLM_ENV_PATH", _nested_value(config, "ingredient_match_llm", "env_path", "")))
+    )
+    ingredient_match_llm_base_url = str(
+        os.getenv(
+            "INGREDIENT_MATCH_LLM_BASE_URL",
+            _nested_value(config, "ingredient_match_llm", "base_url", "https://api.openai.com/v1/responses"),
+        )
+    ).strip()
+    ingredient_match_llm_timeout_sec = int(
+        os.getenv("INGREDIENT_MATCH_LLM_TIMEOUT_SEC", _nested_value(config, "ingredient_match_llm", "timeout_sec", 20))
+    )
+    ingredient_match_llm_max_retries = int(
+        os.getenv("INGREDIENT_MATCH_LLM_MAX_RETRIES", _nested_value(config, "ingredient_match_llm", "max_retries", 1))
+    )
+    ingredient_match_llm_max_output_tokens = int(
+        os.getenv("INGREDIENT_MATCH_LLM_MAX_OUTPUT_TOKENS", _nested_value(config, "ingredient_match_llm", "max_output_tokens", 700))
+    )
+    ingredient_match_llm_reasoning_effort = str(
+        os.getenv(
+            "INGREDIENT_MATCH_LLM_REASONING_EFFORT",
+            _nested_value(config, "ingredient_match_llm", "reasoning_effort", "minimal"),
+        )
+    ).strip()
+    ingredient_match_llm_fallback_value = os.getenv(
+        "INGREDIENT_MATCH_LLM_FALLBACK_TO_LOCAL",
+        _nested_value(config, "ingredient_match_llm", "fallback_to_local", False),
+    )
+    ingredient_match_llm_fallback_to_local = str(ingredient_match_llm_fallback_value).strip().lower() in {"1", "true", "on", "yes"}
 
     upload_temp_dir = root_dir / str(_nested_value(config, "upload", "temp_dir", "tmp/uploads"))
     upload_max_file_size_mb = int(_nested_value(config, "upload", "max_file_size_mb", 10))
@@ -124,6 +172,16 @@ def get_settings() -> ApiSettings:
         local_llm_base_url=local_llm_base_url,
         local_llm_timeout_sec=local_llm_timeout_sec,
         local_llm_max_retries=local_llm_max_retries,
+        ingredient_match_llm_provider=ingredient_match_llm_provider,
+        ingredient_match_llm_model=ingredient_match_llm_model,
+        ingredient_match_llm_api_key_env=ingredient_match_llm_api_key_env,
+        ingredient_match_llm_env_path=ingredient_match_llm_env_path,
+        ingredient_match_llm_base_url=ingredient_match_llm_base_url,
+        ingredient_match_llm_timeout_sec=ingredient_match_llm_timeout_sec,
+        ingredient_match_llm_max_retries=ingredient_match_llm_max_retries,
+        ingredient_match_llm_max_output_tokens=ingredient_match_llm_max_output_tokens,
+        ingredient_match_llm_reasoning_effort=ingredient_match_llm_reasoning_effort,
+        ingredient_match_llm_fallback_to_local=ingredient_match_llm_fallback_to_local,
         upload_temp_dir=upload_temp_dir,
         upload_max_file_size_mb=upload_max_file_size_mb,
         upload_allowed_extensions=upload_allowed_extensions,

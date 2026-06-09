@@ -388,6 +388,13 @@
       gap: 8px;
       margin-bottom: 8px;
     }
+    .recommendation-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
     .tab-strip button {
       background: #f5f5f5;
       color: #444;
@@ -462,10 +469,20 @@
       margin-bottom: 8px;
     }
     .loading-stage,
-    .loading-subtext {
+    .loading-subtext,
+    .loading-detail {
       font-size: 12px;
       line-height: 1.5;
       color: #4a6054;
+    }
+    .loading-detail {
+      margin-top: 6px;
+      padding: 6px 8px;
+      border: 1px solid var(--line);
+      background: #f7faf8;
+      color: #2f4e3f;
+      word-break: keep-all;
+      overflow-wrap: anywhere;
     }
     .loading-progress-head {
       display: flex;
@@ -533,6 +550,7 @@
         <div class="loading-bar-fill" id="loadingBarFill"></div>
       </div>
       <div class="loading-subtext" id="loadingSubtext">분석 시간은 이미지 품질과 OCR 텍스트 양에 따라 달라질 수 있습니다.</div>
+      <div class="loading-detail" id="loadingDetail" hidden></div>
     </div>
   </div>
   <header class="app-header">
@@ -626,7 +644,10 @@
               <h2>추천 결과 TOP10</h2>
               <div class="hint-text" id="recommendationModeText">이미지를 분석하면 추천 결과가 표시됩니다.</div>
             </div>
-            <span class="section-step">STEP 4</span>
+            <div class="recommendation-actions">
+              <button type="button" class="ghost-button" id="llmRerankButton" disabled>LLM 2차 재정렬</button>
+              <span class="section-step">STEP 4</span>
+            </div>
           </div>
           <div id="recommendationList" class="empty-panel">추천 결과가 아직 없습니다.</div>
         </section>
@@ -652,6 +673,7 @@
       baseUrl: defaultApiBase || window.location.origin,
       dirty: false,
       latestMode: "image",
+      llmReranking: false,
     };
 
     const fileInput = document.getElementById("fileInput");
@@ -671,11 +693,13 @@
     const loadingPercent = document.getElementById("loadingPercent");
     const loadingBarFill = document.getElementById("loadingBarFill");
     const loadingSubtext = document.getElementById("loadingSubtext");
+    const loadingDetail = document.getElementById("loadingDetail");
     const errorBox = document.getElementById("errorBox");
     const successBox = document.getElementById("successBox");
     const recommendationModeText = document.getElementById("recommendationModeText");
     const dirtyChip = document.getElementById("dirtyChip");
     const apiBaseInput = document.getElementById("apiBaseInput");
+    const llmRerankButton = document.getElementById("llmRerankButton");
 
     apiBaseInput.value = state.baseUrl;
 
@@ -714,20 +738,133 @@
     };
 
     let loadingTimers = [];
+    let loadingPollTimer = null;
+    let loadingProgressRequestId = "";
+    let loadingPollActive = false;
+    let loadingPollController = null;
+    const loadingPollIntervalMs = 1000;
+    const loadingPollMaxMs = 10 * 60 * 1000;
 
     function clearLoadingTimers() {
       loadingTimers.forEach((timerId) => window.clearTimeout(timerId));
       loadingTimers = [];
     }
 
-    function updateLoadingState({ title = "", label = "", message = "", percent = 0, subtext = "" } = {}) {
+    function stopProgressPolling() {
+      if (loadingPollTimer) {
+        window.clearTimeout(loadingPollTimer);
+        loadingPollTimer = null;
+      }
+      if (loadingPollController) {
+        loadingPollController.abort();
+        loadingPollController = null;
+      }
+      loadingPollActive = false;
+      loadingProgressRequestId = "";
+    }
+
+    function makeRequestId(prefix = "ocr") {
+      if (window.crypto && typeof window.crypto.randomUUID === "function") {
+        return `${prefix}-${window.crypto.randomUUID()}`;
+      }
+      return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    }
+
+    function buildProgressDetail(data) {
+      const parts = [];
+      const detail = String((data && data.detail) || "").trim();
+      const currentIngredient = String((data && data.current_ingredient) || "").trim();
+      if (detail) parts.push(detail);
+      if (currentIngredient && !detail.includes(currentIngredient)) parts.push(`현재 원료: ${currentIngredient}`);
+      if (Number.isFinite(Number(data && data.current)) && Number.isFinite(Number(data && data.total)) && Number(data.total) > 0) {
+        parts.push(`진행: ${Number(data.current)} / ${Number(data.total)}`);
+      }
+      return parts.join(" · ");
+    }
+
+    function updateLoadingState({ title = "", label = "", message = "", percent = 0, subtext = "", detail = undefined } = {}) {
       if (title) loadingTitle.textContent = title;
       if (label) loadingStepLabel.textContent = label;
       if (message) loadingMessage.textContent = message;
       if (subtext) loadingSubtext.textContent = subtext;
+      if (detail !== undefined && loadingDetail) {
+        loadingDetail.textContent = detail || "";
+        loadingDetail.hidden = !detail;
+      }
       const safePercent = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
       loadingPercent.textContent = `${safePercent}%`;
       loadingBarFill.style.width = `${safePercent}%`;
+    }
+
+    function isTerminalProgress(data) {
+      const status = String((data && data.status) || "").toLowerCase();
+      const phase = String((data && data.phase) || "").toLowerCase();
+      const percent = Number(data && data.percent);
+      return status === "complete" || status === "error" || phase === "complete" || phase === "error" || percent >= 100;
+    }
+
+    function startProgressPolling(requestId, mode) {
+      stopProgressPolling();
+      if (!requestId) return;
+      loadingProgressRequestId = requestId;
+      loadingPollActive = true;
+      const startedAt = Date.now();
+      const preset = loadingPresets[mode] || {};
+      const poll = async () => {
+        if (!loadingPollActive || loadingProgressRequestId !== requestId) return;
+        if (Date.now() - startedAt > loadingPollMaxMs) {
+          updateLoadingState({
+            title: preset.title || "Analysis Running",
+            label: "SERVER",
+            message: "진행률 조회 제한시간을 넘겨 polling을 중지했습니다.",
+            percent: 99,
+            subtext: preset.subtext || "서버 요청 완료 여부를 기다리는 중입니다.",
+            detail: "본 요청은 계속 처리될 수 있습니다. 완료되지 않으면 다시 시도해주세요.",
+          });
+          stopProgressPolling();
+          return;
+        }
+        try {
+          loadingPollController = new AbortController();
+          const response = await fetch(`${getApiBase()}/api/recommend/progress/${encodeURIComponent(requestId)}`, {
+            signal: loadingPollController.signal,
+          });
+          loadingPollController = null;
+          if (!loadingPollActive || loadingProgressRequestId !== requestId) return;
+          if (!response.ok) {
+            loadingPollTimer = window.setTimeout(poll, loadingPollIntervalMs);
+            return;
+          }
+          const data = await response.json();
+          if (!loadingPollActive || loadingProgressRequestId !== requestId) return;
+          if (!data || data.status === "unknown" || data.status === "missing") {
+            loadingPollTimer = window.setTimeout(poll, loadingPollIntervalMs);
+            return;
+          }
+          clearLoadingTimers();
+          updateLoadingState({
+            title: preset.title || "Analysis Running",
+            label: data.phase || "SERVER",
+            message: data.message || "서버에서 처리 중입니다.",
+            percent: data.percent ?? 15,
+            subtext: preset.subtext || "서버 진행상황을 확인하는 중입니다.",
+            detail: buildProgressDetail(data),
+          });
+          if (isTerminalProgress(data)) {
+            stopProgressPolling();
+            return;
+          }
+        } catch (error) {
+          if (error && error.name === "AbortError") return;
+          // Progress polling is best-effort; the main request still controls success/failure.
+        } finally {
+          loadingPollController = null;
+        }
+        if (loadingPollActive && loadingProgressRequestId === requestId) {
+          loadingPollTimer = window.setTimeout(poll, loadingPollIntervalMs);
+        }
+      };
+      poll();
     }
 
     function startLoadingProgress(mode, fallbackMessage = "처리 중...") {
@@ -750,6 +887,7 @@
         message: preset.steps[0].message,
         percent: 0,
         subtext: preset.subtext,
+        detail: "",
       });
       preset.steps.forEach((step) => {
         const timerId = window.setTimeout(() => {
@@ -807,23 +945,145 @@
           { label: "STEP 4 / 4", message: "Formatting the recommendation results.", percent: 92, delay: 2600 },
         ],
       },
+      rerank: {
+        title: "LLM Re-ranking Running",
+        subtext: "Keeping the current ingredient profile and asking the LLM to review the final order.",
+        steps: [
+          { label: "STEP 1 / 3", message: "Preparing the current recommendation candidates.", percent: 18, delay: 150 },
+          { label: "STEP 2 / 3", message: "Running the LLM second-pass ordering.", percent: 58, delay: 900 },
+          { label: "STEP 3 / 3", message: "Rendering the re-ranked result.", percent: 90, delay: 1800 },
+        ],
+      },
     };
 
     let loadingTimers = [];
+    let loadingPollTimer = null;
+    let loadingProgressRequestId = "";
+    let loadingPollActive = false;
+    let loadingPollController = null;
+    const loadingPollIntervalMs = 1000;
+    const loadingPollMaxMs = 10 * 60 * 1000;
 
     function clearLoadingTimers() {
       loadingTimers.forEach((timerId) => window.clearTimeout(timerId));
       loadingTimers = [];
     }
 
-    function updateLoadingState({ title = "", label = "", message = "", percent = 0, subtext = "" } = {}) {
+    function stopProgressPolling() {
+      if (loadingPollTimer) {
+        window.clearTimeout(loadingPollTimer);
+        loadingPollTimer = null;
+      }
+      if (loadingPollController) {
+        loadingPollController.abort();
+        loadingPollController = null;
+      }
+      loadingPollActive = false;
+      loadingProgressRequestId = "";
+    }
+
+    function makeRequestId(prefix = "ocr") {
+      if (window.crypto && typeof window.crypto.randomUUID === "function") {
+        return `${prefix}-${window.crypto.randomUUID()}`;
+      }
+      return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    }
+
+    function buildProgressDetail(data) {
+      const parts = [];
+      const detail = String((data && data.detail) || "").trim();
+      const currentIngredient = String((data && data.current_ingredient) || "").trim();
+      if (detail) parts.push(detail);
+      if (currentIngredient && !detail.includes(currentIngredient)) parts.push(`현재 원료: ${currentIngredient}`);
+      if (Number.isFinite(Number(data && data.current)) && Number.isFinite(Number(data && data.total)) && Number(data.total) > 0) {
+        parts.push(`진행: ${Number(data.current)} / ${Number(data.total)}`);
+      }
+      return parts.join(" · ");
+    }
+
+    function updateLoadingState({ title = "", label = "", message = "", percent = 0, subtext = "", detail = undefined } = {}) {
       if (title) loadingTitle.textContent = title;
       if (label) loadingStepLabel.textContent = label;
       if (message) loadingMessage.textContent = message;
       if (subtext) loadingSubtext.textContent = subtext;
+      if (detail !== undefined && loadingDetail) {
+        loadingDetail.textContent = detail || "";
+        loadingDetail.hidden = !detail;
+      }
       const safePercent = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
       loadingPercent.textContent = `${safePercent}%`;
       loadingBarFill.style.width = `${safePercent}%`;
+    }
+
+    function isTerminalProgress(data) {
+      const status = String((data && data.status) || "").toLowerCase();
+      const phase = String((data && data.phase) || "").toLowerCase();
+      const percent = Number(data && data.percent);
+      return status === "complete" || status === "error" || phase === "complete" || phase === "error" || percent >= 100;
+    }
+
+    function startProgressPolling(requestId, mode) {
+      stopProgressPolling();
+      if (!requestId) return;
+      loadingProgressRequestId = requestId;
+      loadingPollActive = true;
+      const startedAt = Date.now();
+      const preset = loadingPresets[mode] || {};
+      const poll = async () => {
+        if (!loadingPollActive || loadingProgressRequestId !== requestId) return;
+        if (Date.now() - startedAt > loadingPollMaxMs) {
+          updateLoadingState({
+            title: preset.title || "Analysis Running",
+            label: "SERVER",
+            message: "진행률 조회 제한시간을 넘겨 polling을 중지했습니다.",
+            percent: 99,
+            subtext: preset.subtext || "서버 요청 완료 여부를 기다리는 중입니다.",
+            detail: "본 요청은 계속 처리될 수 있습니다. 완료되지 않으면 다시 시도해주세요.",
+          });
+          stopProgressPolling();
+          return;
+        }
+        try {
+          loadingPollController = new AbortController();
+          const response = await fetch(`${getApiBase()}/api/recommend/progress/${encodeURIComponent(requestId)}`, {
+            signal: loadingPollController.signal,
+          });
+          loadingPollController = null;
+          if (!loadingPollActive || loadingProgressRequestId !== requestId) return;
+          if (!response.ok) {
+            loadingPollTimer = window.setTimeout(poll, loadingPollIntervalMs);
+            return;
+          }
+          const data = await response.json();
+          if (!loadingPollActive || loadingProgressRequestId !== requestId) return;
+          if (!data || data.status === "unknown" || data.status === "missing") {
+            loadingPollTimer = window.setTimeout(poll, loadingPollIntervalMs);
+            return;
+          }
+          clearLoadingTimers();
+          updateLoadingState({
+            title: preset.title || "Analysis Running",
+            label: data.phase || "SERVER",
+            message: data.message || "서버에서 처리 중입니다.",
+            percent: data.percent ?? 15,
+            subtext: preset.subtext || "서버 진행상황을 확인하는 중입니다.",
+            detail: buildProgressDetail(data),
+          });
+          if (isTerminalProgress(data)) {
+            stopProgressPolling();
+            return;
+          }
+        } catch (error) {
+          if (error && error.name === "AbortError") return;
+          // Progress polling is best-effort; the main request still controls success/failure.
+        } finally {
+          loadingPollController = null;
+        }
+        if (loadingPollActive && loadingProgressRequestId === requestId) {
+          loadingPollTimer = window.setTimeout(poll, loadingPollIntervalMs);
+        }
+      };
+      poll();
     }
 
     function startLoadingProgress(mode, fallbackMessage = "Processing...") {
@@ -846,6 +1106,7 @@
         message: preset.steps[0].message,
         percent: 0,
         subtext: preset.subtext,
+        detail: "",
       });
       preset.steps.forEach((step) => {
         const timerId = window.setTimeout(() => {
@@ -862,11 +1123,13 @@
     }
 
     function finishLoading(message = "Done.") {
+      stopProgressPolling();
       clearLoadingTimers();
       updateLoadingState({
         label: "DONE",
         message,
         percent: 100,
+        detail: "",
       });
       const hideTimerId = window.setTimeout(() => {
         loadingOverlay.classList.remove("active");
@@ -875,6 +1138,7 @@
     }
 
     function cancelLoading() {
+      stopProgressPolling();
       clearLoadingTimers();
       loadingOverlay.classList.remove("active");
     }
@@ -919,21 +1183,52 @@
       return items.map((item) => `<span class="chip ${className}">${escapeHtml(item)}</span>`).join("");
     }
 
+    function hasRecommendationRows(response) {
+      return Boolean(
+        response
+        && (
+          safeArray(response.recommendations).length
+          || safeArray(response.official_recommendations).length
+          || safeArray(response.uploaded_similar_cases).length
+        )
+      );
+    }
+
+    function updateLlmRerankButton(response) {
+      if (!llmRerankButton) return;
+      const applied = Boolean(response && response.llm_rerank_applied);
+      llmRerankButton.disabled = state.llmReranking || !hasRecommendationRows(response) || applied;
+      llmRerankButton.textContent = state.llmReranking
+        ? "재정렬 중..."
+        : applied
+          ? "LLM 재정렬 적용됨"
+          : "LLM 2차 재정렬";
+    }
+
     function renderIngredientDbMatchStatusTable(items) {
       const rows = safeArray(items);
       if (!rows.length) {
         return '<div class="empty-panel">원료별 기능성원료 DB 매칭 상태가 없습니다.</div>';
       }
+      const renderList = (value) => safeArray(value).length ? safeArray(value).map((item) => escapeHtml(item)).join(", ") : "-";
+      const renderWeight = (value) => {
+        const num = Number(value);
+        return Number.isFinite(num) ? num.toFixed(2) : "-";
+      };
       return `
         <div class="table-wrap">
           <table class="data-table">
             <thead>
               <tr>
                 <th>원료</th>
-                <th>정규화</th>
-                <th>역할</th>
-                <th>DB 기능성원료 여부</th>
-                <th>매칭 원료</th>
+                <th>functional match</th>
+                <th>matched ingredient</th>
+                <th>ingredient_type</th>
+                <th>vector_include</th>
+                <th>ingredient_main_category</th>
+                <th>sub_function_categories</th>
+                <th>semantic_weight</th>
+                <th>semantic_weight_reason</th>
                 <th>relation</th>
               </tr>
             </thead>
@@ -941,10 +1236,14 @@
               ${rows.map((item) => `
                 <tr>
                   <td>${escapeHtml(item.display_name || item.raw_ingredient || "-")}</td>
-                  <td>${escapeHtml(item.normalized_for_matching || "-")}</td>
-                  <td>${escapeHtml(item.input_role || "-")}</td>
-                  <td>${item.is_functional_match ? '<span class="sub-badge high">매칭됨</span>' : '<span class="sub-badge low">비매칭</span>'}</td>
+                  <td>${item.is_functional_match ? '<span class="sub-badge high">matched</span>' : '<span class="sub-badge low">unmatched</span>'}</td>
                   <td>${escapeHtml(item.functional_ingredient_name || "-")}</td>
+                  <td>${escapeHtml(item.ingredient_type || "-")}</td>
+                  <td>${item.vector_include ? '<span class="sub-badge high">true</span>' : '<span class="sub-badge low">false</span>'}</td>
+                  <td>${escapeHtml(item.ingredient_main_category || item.category_main || "-")}</td>
+                  <td>${renderList(item.sub_function_categories)}</td>
+                  <td>${renderWeight(item.semantic_weight)}</td>
+                  <td>${escapeHtml(item.semantic_weight_reason || "-")}</td>
                   <td>${escapeHtml(item.relation_type || "-")}</td>
                 </tr>
               `).join("")}
@@ -997,6 +1296,9 @@
       const ocr = response.ocr || {};
       const quality = response.quality || {};
       const debug = response.debug || {};
+      const matchStatuses = safeArray(response.ingredient_db_match_statuses);
+      const functionalMatchCount = matchStatuses.filter((item) => item.is_functional_match).length;
+      const vectorIncludeCount = matchStatuses.filter((item) => item.vector_include).length;
 
       const html = [];
       html.push('<div class="stack">');
@@ -1007,6 +1309,16 @@
 
       html.push('<table class="summary-table"><tbody>');
       html.push(`<tr><th>제품명 후보</th><td>${escapeHtml(parsed.product_name_candidate || "-")}</td></tr>`);
+      const llmCategory = parsed.product_main_category || "";
+      const llmCategoryConfidence = Number(parsed.product_category_confidence);
+      const llmCategoryReason = parsed.product_category_reason || "";
+      const llmCategoryText = llmCategory
+        ? `${escapeHtml(llmCategory)}${Number.isFinite(llmCategoryConfidence) && llmCategoryConfidence > 0 ? ` (${llmCategoryConfidence.toFixed(2)})` : ""}${llmCategoryReason ? `<br><span class="inline-note">${escapeHtml(llmCategoryReason)}</span>` : ""}`
+        : "-";
+      html.push(`<tr><th>LLM 추정 카테고리</th><td>${llmCategoryText}</td></tr>`);
+      if (safeArray(parsed.product_sub_categories).length) {
+        html.push(`<tr><th>LLM 보조 카테고리</th><td>${escapeHtml(safeArray(parsed.product_sub_categories).join(", "))}</td></tr>`);
+      }
       html.push(`<tr><th>추정 메인 카테고리</th><td>${escapeHtml(estimated.product_main_category || "-")}</td></tr>`);
       html.push(`<tr><th>품질 등급</th><td>${escapeHtml(quality.quality_grade || estimated.quality_grade || "-")}</td></tr>`);
       html.push(`<tr><th>프로필 신뢰도</th><td>${formatScore(quality.profile_confidence ?? estimated.confidence)}</td></tr>`);
@@ -1015,8 +1327,8 @@
       html.push('</tbody></table>');
 
       html.push('<div class="detail-grid">');
-      html.push(`<div class="detail-block"><div class="label">주요 원료</div><div class="value chip-row">${renderChips(safeArray(estimated.primary_ingredients), "small")}</div></div>`);
-      html.push(`<div class="detail-block"><div class="label">정규화 주요 원료</div><div class="value chip-row">${renderChips(safeArray(parsed.primary_ingredients_normalized), "small")}</div></div>`);
+      html.push(`<div class="detail-block"><div class="label">functional matches</div><div class="value">${functionalMatchCount} / ${matchStatuses.length}</div></div>`);
+      html.push(`<div class="detail-block"><div class="label">vector included</div><div class="value">${vectorIncludeCount} / ${matchStatuses.length}</div></div>`);
       html.push(`<div class="detail-block"><div class="label">추출 원료 목록</div><div class="value chip-row">${renderChips(safeArray(parsed.normalized_ingredients), "small")}</div></div>`);
       html.push('</div>');
       html.push('<div class="detail-block" style="margin-top:8px;">');
@@ -1119,7 +1431,7 @@
         renderIngredientEditor(response);
       });
 
-      document.getElementById("rerunButton").addEventListener("click", rerunWithEditedIngredients);
+      document.getElementById("rerunButton").addEventListener("click", () => rerunWithEditedIngredients(false));
     }
 
     function cleanIngredients() {
@@ -1250,8 +1562,13 @@
       const quality = (response && response.quality) || {};
       const llmRerankApplied = Boolean(response && response.llm_rerank_applied);
       const llmRerankError = String((response && response.llm_rerank_error) || "");
-      const modeLabel = state.latestMode === "ingredients" ? "수정된 원료 기준 추천 결과입니다." : "OCR 추출 결과 기준 추천 결과입니다.";
+      const modeLabel = llmRerankApplied
+        ? "LLM 2차 재정렬 결과입니다."
+        : state.latestMode === "ingredients"
+          ? "수정된 원료 기준 추천 결과입니다."
+          : "OCR 추출 결과 기준 추천 결과입니다.";
       recommendationModeText.textContent = response ? modeLabel : "이미지를 분석하면 추천 결과가 표시됩니다.";
+      updateLlmRerankButton(response);
 
       if (!recommendations.length && !officialRecommendations.length && !uploadedSimilarCases.length) {
         recommendationList.className = "empty-panel";
@@ -1267,6 +1584,8 @@
         html.push('<div class="helper-note"><strong>LLM 2차 재정렬 적용됨</strong><br>공식 후보군을 먼저 계산한 뒤 GPT OSS가 최종 순서를 다시 검토했습니다. 순서가 그대로일 수도 있습니다.</div>');
       } else if (llmRerankError) {
         html.push(`<div class="helper-note"><strong>LLM 재정렬 미적용</strong><br>${escapeHtml(llmRerankError)}</div>`);
+      } else {
+        html.push('<div class="helper-note"><strong>기본 유사도 순서</strong><br>LLM 2차 재정렬은 우측 상단 버튼을 눌렀을 때만 별도로 적용됩니다.</div>');
       }
       html.push('<div class="helper-note"><strong>조회 기준</strong><br>공식 카탈로그 추천을 우선 표시하며, 업로드 기반 유사 사례는 별도 구역으로 분리해 참고용으로 제공합니다.</div>');
       html.push(buildRecommendationSection(officialRecommendations, "공식 카탈로그 추천", "공식 카탈로그 추천 결과가 없습니다."));
@@ -1326,94 +1645,20 @@
       return false;
     }
 
-    async function recommendByImage() {
+    async function recommendByImage(llmRerank = false) {
       if (!state.file) return;
       setError("");
       setSuccess("");
       startLoadingProgress("image", "OCR 분석 및 추천 생성 중...");
+      const requestId = makeRequestId("image");
+      startProgressPolling(requestId, "image");
       try {
         const formData = new FormData();
         formData.append("file", state.file);
         formData.append("top_k", String(defaultTopK));
         formData.append("candidate_limit", String(defaultCandidateLimit));
-        formData.append("llm_rerank", "true");
-
-        const response = await fetch(`${getApiBase()}/api/recommend/by-image`, {
-          method: "POST",
-          body: formData,
-        });
-        if (!response.ok) {
-          throw new Error(`이미지 분석 실패 (${response.status})`);
-        }
-        const data = await response.json();
-        state.imageResponse = data;
-        state.ingredientResponse = null;
-        state.originalIngredients = buildEditorIngredientSource(data);
-        state.editableIngredients = [...state.originalIngredients];
-        cleanIngredients();
-        syncDirtyState();
-        state.latestMode = "image";
-        showResponsePanels(data);
-        setSuccess("이미지 분석이 완료되었습니다. 추출된 원료를 확인한 뒤 필요하면 수정해서 다시 추천받으세요.");
-      } catch (error) {
-        cancelLoading();
-        setError(buildErrorMessage(error));
-      } finally {
-        finishLoading("이미지 분석이 완료되었습니다.");
-      }
-    }
-
-    async function rerunWithEditedIngredients() {
-      cleanIngredients();
-      syncDirtyState();
-      if (!state.editableIngredients.length) {
-        setError("최소 1개 이상의 원료가 필요합니다.");
-        return;
-      }
-      setError("");
-      setSuccess("");
-      startLoadingProgress("ingredients", "수정한 원료 기준으로 추천 재생성 중...");
-      try {
-        const response = await fetch(`${getApiBase()}/api/recommend/by-ingredients`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            ingredients: state.editableIngredients,
-            product_name_candidate: (((state.imageResponse || {}).parsed || {}).product_name_candidate || ((state.ingredientResponse || {}).parsed || {}).product_name_candidate || ""),
-            base_trace_id: (((state.imageResponse || {}).trace_id) || ((state.ingredientResponse || {}).trace_id) || ""),
-            top_k: defaultTopK,
-            candidate_limit: defaultCandidateLimit,
-            llm_rerank: true,
-          }),
-        });
-        if (!response.ok) {
-          throw new Error(`재추천 실패 (${response.status})`);
-        }
-        const data = await response.json();
-        state.ingredientResponse = data;
-        state.latestMode = "ingredients";
-        renderResultPanel(data);
-        renderRecommendations(data);
-        setSuccess("수정된 원료 기준 추천 결과입니다.");
-      } catch (error) {
-        cancelLoading();
-        setError(buildErrorMessage(error));
-      } finally {
-        finishLoading("원료 기준 재추천이 완료되었습니다.");
-      }
-    }
-
-    async function recommendByImage() {
-      if (!state.file) return;
-      setError("");
-      setSuccess("");
-      startLoadingProgress("image", "OCR 분석 및 추천 생성 중...");
-      try {
-        const formData = new FormData();
-        formData.append("file", state.file);
-        formData.append("top_k", String(defaultTopK));
-        formData.append("candidate_limit", String(defaultCandidateLimit));
-        formData.append("llm_rerank", "true");
+        formData.append("llm_rerank", llmRerank ? "true" : "false");
+        formData.append("request_id", requestId);
 
         const response = await fetch(`${getApiBase()}/api/recommend/by-image`, {
           method: "POST",
@@ -1436,10 +1681,12 @@
       } catch (error) {
         cancelLoading();
         setError(buildErrorMessage(error));
+      } finally {
+        stopProgressPolling();
       }
     }
 
-    async function rerunWithEditedIngredients() {
+    async function rerunWithEditedIngredients(llmRerank = false) {
       cleanIngredients();
       syncDirtyState();
       if (!state.editableIngredients.length) {
@@ -1449,6 +1696,8 @@
       setError("");
       setSuccess("");
       startLoadingProgress("ingredients", "수정한 원료 기준으로 추천 재생성 중...");
+      const requestId = makeRequestId("ingredients");
+      startProgressPolling(requestId, "ingredients");
       try {
         const response = await fetch(`${getApiBase()}/api/recommend/by-ingredients`, {
           method: "POST",
@@ -1459,7 +1708,8 @@
             base_trace_id: (((state.imageResponse || {}).trace_id) || ((state.ingredientResponse || {}).trace_id) || ""),
             top_k: defaultTopK,
             candidate_limit: defaultCandidateLimit,
-            llm_rerank: true,
+            llm_rerank: Boolean(llmRerank),
+            request_id: requestId,
           }),
         });
         if (!response.ok) {
@@ -1475,6 +1725,57 @@
       } catch (error) {
         cancelLoading();
         setError(buildErrorMessage(error));
+      } finally {
+        stopProgressPolling();
+      }
+    }
+
+    async function rerankCurrentRecommendations() {
+      const currentResponse = state.latestMode === "ingredients" ? state.ingredientResponse : state.imageResponse;
+      if (!hasRecommendationRows(currentResponse)) {
+        setError("먼저 기본 추천 결과를 생성해야 LLM 2차 재정렬을 적용할 수 있습니다.");
+        return;
+      }
+      cleanIngredients();
+      if (!state.editableIngredients.length) {
+        setError("LLM 재정렬에 사용할 원료 목록이 없습니다.");
+        return;
+      }
+      state.llmReranking = true;
+      updateLlmRerankButton(currentResponse);
+      setError("");
+      setSuccess("");
+      startLoadingProgress("rerank", "LLM 2차 재정렬 실행 중...");
+      try {
+        const response = await fetch(`${getApiBase()}/api/recommend/by-ingredients`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ingredients: state.editableIngredients,
+            product_name_candidate: (((state.imageResponse || {}).parsed || {}).product_name_candidate || ((state.ingredientResponse || {}).parsed || {}).product_name_candidate || ""),
+            base_trace_id: (((state.imageResponse || {}).trace_id) || ((state.ingredientResponse || {}).trace_id) || ""),
+            top_k: defaultTopK,
+            candidate_limit: defaultCandidateLimit,
+            llm_rerank: true,
+          }),
+        });
+        if (!response.ok) {
+          throw new Error(`LLM 재정렬 실패 (${response.status})`);
+        }
+        const data = await response.json();
+        state.ingredientResponse = data;
+        state.latestMode = "ingredients";
+        renderResultPanel(data);
+        renderRecommendations(data);
+        finishLoading("LLM 2차 재정렬이 완료되었습니다.");
+        setSuccess("LLM 2차 재정렬 결과입니다.");
+      } catch (error) {
+        cancelLoading();
+        setError(buildErrorMessage(error));
+        updateLlmRerankButton(currentResponse);
+      } finally {
+        state.llmReranking = false;
+        updateLlmRerankButton(state.ingredientResponse || state.imageResponse);
       }
     }
 
@@ -1495,6 +1796,7 @@
       state.originalIngredients = [];
       state.editableIngredients = [];
       state.dirty = false;
+      state.llmReranking = false;
       dirtyChip.hidden = true;
       if (state.previewUrl) URL.revokeObjectURL(state.previewUrl);
       state.previewUrl = "";
@@ -1532,7 +1834,8 @@
         event.preventDefault();
       }
     });
-    analyzeButton.addEventListener("click", recommendByImage);
+    analyzeButton.addEventListener("click", () => recommendByImage(false));
+    llmRerankButton.addEventListener("click", rerankCurrentRecommendations);
     resetButton.addEventListener("click", resetAll);
   </script>
 </body>

@@ -1,0 +1,1982 @@
+import json
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+import scripts.recommendation_quality_judge_batch as judge_batch  # noqa: E402
+from scripts.recommendation_quality_judge_batch import (  # noqa: E402
+    build_batch_requests,
+    build_openai_batch_requests,
+    build_high_score_weak_diagnostics,
+    build_snapshot_item,
+    compact_profile,
+    extract_response_text,
+    merge_parts,
+    parse_model_json,
+    next_sample_plan,
+    pattern_features_for_row,
+    pattern_impact_rows,
+    quality_gate_decision,
+    response_from_batch_line,
+    select_product_ids,
+    summarize_chunks,
+    validation_status_decision,
+)
+
+
+def test_select_product_ids_stratifies_by_main_category():
+    profiles = {
+        "p1": {"report_no": "1", "product_main_category": "면역"},
+        "p2": {"report_no": "2", "product_main_category": "면역"},
+        "p3": {"report_no": "3", "product_main_category": "장 건강"},
+        "p4": {"report_no": "4", "product_main_category": "장 건강"},
+    }
+    product_vectors = {key: {"x": 1.0} for key in profiles}
+
+    selected = select_product_ids(
+        profiles,
+        product_vectors,
+        all_products=False,
+        report_nos=[],
+        main_categories=[],
+        sample_size=0,
+        per_category=1,
+        seed=1,
+    )
+
+    assert len(selected) == 2
+    assert {profiles[product_id]["product_main_category"] for product_id in selected} == {"면역", "장 건강"}
+
+
+def test_select_product_ids_filters_by_main_category():
+    profiles = {
+        "p1": {"report_no": "1", "product_main_category": "A"},
+        "p2": {"report_no": "2", "product_main_category": "A"},
+        "p3": {"report_no": "3", "product_main_category": "B"},
+    }
+    product_vectors = {key: {"x": 1.0} for key in profiles}
+
+    selected = select_product_ids(
+        profiles,
+        product_vectors,
+        all_products=False,
+        report_nos=[],
+        main_categories=["B"],
+        sample_size=0,
+        per_category=10,
+        seed=1,
+    )
+
+    assert selected == ["p3"]
+
+
+def test_select_product_ids_force_includes_report_nos_in_sample():
+    profiles = {
+        "p1": {"report_no": "1", "product_main_category": "A"},
+        "p2": {"report_no": "2", "product_main_category": "A"},
+        "p3": {"report_no": "3", "product_main_category": "B"},
+        "p4": {"report_no": "4", "product_main_category": "B"},
+    }
+    product_vectors = {key: {"x": 1.0} for key in profiles}
+
+    selected = select_product_ids(
+        profiles,
+        product_vectors,
+        all_products=False,
+        report_nos=[],
+        include_report_nos=["4"],
+        main_categories=["A"],
+        sample_size=1,
+        per_category=1,
+        seed=1,
+    )
+
+    assert selected == ["p4"]
+
+
+def test_build_batch_requests_contains_json_response_config():
+    snapshot = {
+        "key": "recjudge_000001",
+        "base_product": compact_profile(
+            {
+                "report_no": "B1",
+                "product_name": "base",
+                "product_main_category": "면역",
+                "primary_ingredients": ["홍삼"],
+            }
+        ),
+        "recommendations": [
+            {
+                "rank": 1,
+                "target_profile": compact_profile(
+                    {
+                        "report_no": "T1",
+                        "product_name": "target",
+                        "product_main_category": "면역",
+                        "primary_ingredients": ["홍삼"],
+                    }
+                ),
+                "similarity_score": 0.9,
+                "function_similarity_score": 1.0,
+                "core_match_score": 1.0,
+                "substitutability": "high",
+                "shared_ingredients": ["홍삼"],
+                "shared_categories": ["면역"],
+                "semantic_core_overlap": ["홍삼"],
+                "semantic_core_reason": "full_semantic_core_coverage",
+                "score_adjustments": [],
+                "local_risk_flags": [],
+                "algorithm_reason": "홍삼 공통",
+            }
+        ],
+    }
+
+    requests = build_batch_requests([snapshot])
+
+    assert requests[0]["key"] == "recjudge_000001"
+    assert requests[0]["request"]["generation_config"]["response_mime_type"] == "application/json"
+    prompt = requests[0]["request"]["contents"][0]["parts"][0]["text"]
+    assert "reasonable|acceptable_adjacent|weak|bad" in prompt
+    assert "홍삼" in prompt
+
+
+def test_build_openai_batch_requests_uses_responses_json_schema():
+    snapshot = {
+        "key": "recjudge_000001",
+        "base_product": compact_profile(
+            {
+                "report_no": "B1",
+                "product_name": "base",
+                "product_main_category": "硫댁뿭",
+                "primary_ingredients": ["?띿궪"],
+            }
+        ),
+        "recommendations": [
+            {
+                "rank": 1,
+                "target_profile": compact_profile(
+                    {
+                        "report_no": "T1",
+                        "product_name": "target",
+                        "product_main_category": "硫댁뿭",
+                        "primary_ingredients": ["?띿궪"],
+                    }
+                ),
+                "similarity_score": 0.9,
+                "function_similarity_score": 1.0,
+                "core_match_score": 1.0,
+                "substitutability": "high",
+                "recommendation_quality": "strong_match",
+                "recommendation_review_reason": "",
+                "shared_ingredients": ["?띿궪"],
+                "shared_categories": ["硫댁뿭"],
+                "semantic_core_overlap": ["?띿궪"],
+                "semantic_core_reason": "full_semantic_core_coverage",
+                "score_adjustments": [],
+                "local_risk_flags": [],
+                "algorithm_reason": "?띿궪 怨듯넻",
+            }
+        ],
+    }
+
+    requests = build_openai_batch_requests([snapshot])
+
+    assert requests[0]["custom_id"] == "recjudge_000001"
+    assert requests[0]["method"] == "POST"
+    assert requests[0]["url"] == "/v1/responses"
+    assert requests[0]["body"]["model"] == "gpt-5-nano"
+    assert requests[0]["body"]["text"]["format"]["type"] == "json_schema"
+    assert requests[0]["body"]["text"]["format"]["strict"] is True
+    assert requests[0]["body"]["reasoning"]["effort"] == "minimal"
+
+
+def test_build_batch_requests_skips_empty_recommendations():
+    assert build_batch_requests([{"key": "recjudge_000001", "base_product": {}, "recommendations": []}]) == []
+
+
+def test_build_snapshot_item_filters_display_ineligible_rows():
+    profiles = {
+        "base": {
+            "report_no": "B1",
+            "product_name": "base",
+            "product_main_category": "nutrition",
+            "primary_ingredients": ["a"],
+        },
+        "low": {
+            "report_no": "T1",
+            "product_name": "low",
+            "product_main_category": "nutrition",
+            "primary_ingredients": ["a"],
+        },
+        "high": {
+            "report_no": "T2",
+            "product_name": "high",
+            "product_main_category": "nutrition",
+            "primary_ingredients": ["a"],
+        },
+    }
+    rows = [
+        {
+            "target_product_id": "low",
+            "similarity_score": 0.64,
+            "function_similarity_score": 1.0,
+            "core_match_score": 1.0,
+            "substitutability": "low",
+            "recommendation_display_eligible": False,
+            "shared_ingredients_json": json.dumps(["a"]),
+            "shared_categories_json": json.dumps(["nutrition"]),
+            "base_only_ingredients_json": "[]",
+            "target_only_ingredients_json": "[]",
+            "explanation_json": "{}",
+            "reason": "low",
+        },
+        {
+            "target_product_id": "high",
+            "similarity_score": 0.8,
+            "function_similarity_score": 1.0,
+            "core_match_score": 1.0,
+            "substitutability": "high",
+            "recommendation_quality": "strong_match",
+            "recommendation_display_eligible": True,
+            "shared_ingredients_json": json.dumps(["a"]),
+            "shared_categories_json": json.dumps(["nutrition"]),
+            "base_only_ingredients_json": "[]",
+            "target_only_ingredients_json": "[]",
+            "explanation_json": "{}",
+            "reason": "high",
+        },
+    ]
+
+    snapshot = build_snapshot_item("recjudge_000001", "base", rows, profiles)
+
+    assert len(snapshot["recommendations"]) == 1
+    assert snapshot["recommendations"][0]["target_profile"]["report_no"] == "T2"
+    assert snapshot["recommendations"][0]["rank"] == 1
+
+
+def test_parse_batch_inline_response_text_json():
+    payload = {
+        "key": "recjudge_000001",
+        "inlineResponse": {
+            "response": {
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [
+                                {
+                                    "text": json.dumps(
+                                        {
+                                            "base_report_no": "B1",
+                                            "labels": [
+                                                {
+                                                    "rank": 1,
+                                                    "target_report_no": "T1",
+                                                    "judgment": "reasonable",
+                                                    "confidence": 0.9,
+                                                    "reason": "핵심 원료와 카테고리가 일치",
+                                                    "risk_flags": [],
+                                                    "suggested_rule": "",
+                                                }
+                                            ],
+                                            "overall_notes": "",
+                                        },
+                                        ensure_ascii=False,
+                                    )
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        },
+    }
+
+    response = response_from_batch_line(payload)
+    parsed = parse_model_json(extract_response_text(response))
+
+    assert parsed["labels"][0]["judgment"] == "reasonable"
+
+
+def test_parse_openai_batch_response_text_json():
+    payload = {
+        "custom_id": "recjudge_000001",
+        "response": {
+            "status_code": 200,
+            "body": {
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": json.dumps(
+                                    {
+                                        "base_report_no": "B1",
+                                        "labels": [
+                                            {
+                                                "rank": 1,
+                                                "target_report_no": "T1",
+                                                "judgment": "reasonable",
+                                                "confidence": 0.9,
+                                                "reason": "same core ingredient",
+                                                "risk_flags": [],
+                                                "suggested_rule": "",
+                                            }
+                                        ],
+                                        "overall_notes": "",
+                                    }
+                                ),
+                            }
+                        ],
+                    }
+                ]
+            },
+        },
+    }
+
+    response = response_from_batch_line(payload)
+    parsed = parse_model_json(extract_response_text(response))
+
+    assert parsed["labels"][0]["target_report_no"] == "T1"
+
+
+def test_apply_results_discards_unmatched_extra_labels(tmp_path):
+    output_dir = tmp_path / "part"
+    output_dir.mkdir()
+    snapshot = {
+        "key": "recjudge_000001",
+        "base_product": {
+            "report_no": "B1",
+            "product_name": "base",
+            "product_main_category": "cat",
+        },
+        "recommendations": [
+            {
+                "rank": 1,
+                "target_profile": {
+                    "report_no": "T1",
+                    "product_name": "target one",
+                    "product_main_category": "cat",
+                },
+                "similarity_score": 0.8,
+                "function_similarity_score": 0.9,
+                "core_match_score": 1.0,
+                "shared_ingredients": ["a"],
+                "shared_categories": ["cat"],
+                "local_risk_flags": [],
+                "local_quality_bucket": "likely_reasonable",
+            },
+            {
+                "rank": 2,
+                "target_profile": {
+                    "report_no": "T2",
+                    "product_name": "target two",
+                    "product_main_category": "cat",
+                },
+                "similarity_score": 0.7,
+                "function_similarity_score": 0.8,
+                "core_match_score": 1.0,
+                "shared_ingredients": ["a"],
+                "shared_categories": ["cat"],
+                "local_risk_flags": [],
+                "local_quality_bucket": "likely_reasonable",
+            },
+        ],
+    }
+    (output_dir / "recommendation_snapshot.jsonl").write_text(json.dumps(snapshot) + "\n", encoding="utf-8")
+    response = {
+        "custom_id": "recjudge_000001",
+        "response": {
+            "body": {
+                "output_text": json.dumps(
+                    {
+                        "base_report_no": "B1",
+                        "labels": [
+                            {
+                                "rank": 1,
+                                "target_report_no": "T1",
+                                "judgment": "reasonable",
+                                "confidence": 0.9,
+                                "reason": "good",
+                                "risk_flags": [],
+                            },
+                            {
+                                "rank": 2,
+                                "target_report_no": "T2",
+                                "judgment": "acceptable_adjacent",
+                                "confidence": 0.8,
+                                "reason": "adjacent",
+                                "risk_flags": [],
+                            },
+                            {
+                                "rank": 3,
+                                "target_report_no": "T3",
+                                "judgment": "weak",
+                                "confidence": 0.6,
+                                "reason": "extra model label",
+                                "risk_flags": [],
+                            },
+                        ],
+                        "overall_notes": "",
+                    }
+                )
+            }
+        },
+    }
+    (output_dir / judge_batch.DEFAULT_RESULT_JSONL_NAME).write_text(json.dumps(response) + "\n", encoding="utf-8")
+
+    judge_batch.apply_results(
+        SimpleNamespace(
+            output_dir=str(output_dir),
+            result_jsonl="",
+            snapshot_jsonl="",
+            high_score_threshold=0.65,
+        )
+    )
+
+    rows = judge_batch.read_csv_records(output_dir / "gemini_judge_results.csv")
+    errors = judge_batch.read_csv_records(output_dir / "gemini_judge_errors.csv")
+    summary = json.loads((output_dir / "gemini_judge_summary.json").read_text(encoding="utf-8"))
+
+    assert [row["target_report_no"] for row in rows] == ["T1", "T2"]
+    assert len(errors) == 1
+    assert "unmatched judge label" in errors[0]["error"]
+    assert summary["result_count"] == 2
+    assert summary["error_count"] == 1
+    assert summary["discarded_label_count"] == 1
+    assert summary["label_coverage"]["expected_label_count"] == 2
+    assert summary["label_coverage"]["actual_label_count"] == 2
+    assert summary["label_coverage"]["mismatch_count"] == 0
+
+
+def test_gemini_submit_reuses_existing_job_without_jsonl_or_helper(tmp_path, monkeypatch, capsys):
+    output_dir = tmp_path / "run"
+    output_dir.mkdir()
+    (output_dir / judge_batch.DEFAULT_GEMINI_JOB_FILE_NAME).write_text("batches/gemini_existing\n", encoding="utf-8")
+    monkeypatch.setattr(
+        judge_batch,
+        "run_command",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("helper command should not run")),
+    )
+
+    judge_batch.submit(
+        SimpleNamespace(
+            output_dir=str(output_dir),
+            health_batch_dir=str(tmp_path / "missing_helper_dir"),
+            jsonl="",
+            name="",
+            job_file="",
+            force=False,
+        )
+    )
+
+    result = json.loads(capsys.readouterr().out)
+
+    assert result["job_name"] == "batches/gemini_existing"
+    assert result["reused"] is True
+    assert result["jsonl_exists"] is False
+
+
+def test_gemini_check_rejects_empty_job_file_before_running_helper(tmp_path, monkeypatch):
+    output_dir = tmp_path / "run"
+    output_dir.mkdir()
+    (output_dir / judge_batch.DEFAULT_GEMINI_JOB_FILE_NAME).write_text("\n", encoding="utf-8")
+    monkeypatch.setattr(
+        judge_batch,
+        "run_command",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("helper command should not run")),
+    )
+
+    try:
+        judge_batch.check(
+            SimpleNamespace(
+                output_dir=str(output_dir),
+                health_batch_dir=str(tmp_path / "missing_helper_dir"),
+                job="",
+                job_file="",
+                watch=False,
+                download=False,
+                download_output="",
+                allow_failure=False,
+            )
+        )
+    except RuntimeError as exc:
+        assert "Gemini Batch job file is empty" in str(exc)
+    else:
+        raise AssertionError("empty Gemini job files should not be checked")
+
+
+def test_gemini_check_rejects_blank_explicit_job_before_running_helper(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        judge_batch,
+        "run_command",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("helper command should not run")),
+    )
+
+    try:
+        judge_batch.check(
+            SimpleNamespace(
+                output_dir=str(tmp_path),
+                health_batch_dir=str(tmp_path),
+                job="  ",
+                job_file="",
+                watch=False,
+                download=False,
+                download_output="",
+                allow_failure=False,
+            )
+        )
+    except RuntimeError as exc:
+        assert "Gemini Batch job name is empty" in str(exc)
+    else:
+        raise AssertionError("blank Gemini job names should not be checked")
+
+
+def test_openai_list_filters_active_batches_and_writes_json(tmp_path, monkeypatch):
+    class FakeBatches:
+        def __init__(self):
+            self.limit = None
+
+        def list(self, **kwargs):
+            self.limit = kwargs.get("limit")
+            return [
+                {
+                    "id": "batch_active",
+                    "status": "in_progress",
+                    "created_at": 1,
+                    "request_counts": {"completed": 3, "failed": 0, "total": 5},
+                    "metadata": {"name": "active validation"},
+                    "input_file_id": "file_input",
+                },
+                {
+                    "id": "batch_done",
+                    "status": "completed",
+                    "created_at": 2,
+                    "completed_at": 3,
+                    "request_counts": {"completed": 7, "failed": 0, "total": 7},
+                    "metadata": {"name": "done validation"},
+                },
+            ]
+
+    fake_batches = FakeBatches()
+    fake_client = SimpleNamespace(batches=fake_batches)
+    monkeypatch.setattr(judge_batch, "load_openai_client", lambda env_path: fake_client)
+    output_json = tmp_path / "openai_batches.json"
+
+    judge_batch.openai_list(
+        SimpleNamespace(
+            env_path="unused.env",
+            limit=10,
+            active_only=True,
+            output_json=str(output_json),
+        )
+    )
+
+    result = json.loads(output_json.read_text(encoding="utf-8"))
+
+    assert fake_batches.limit == 10
+    assert result["count"] == 1
+    assert result["batches"][0]["id"] == "batch_active"
+    assert result["batches"][0]["metadata_name"] == "active validation"
+    assert result["batches"][0]["request_counts"]["total"] == 5
+    assert "validating" in result["active_statuses"]
+
+
+def test_openai_check_watch_downloads_when_completed(tmp_path, monkeypatch):
+    class FakeBatches:
+        def __init__(self):
+            self.calls = 0
+
+        def retrieve(self, job_id):
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "id": job_id,
+                    "status": "in_progress",
+                    "request_counts": {"completed": 1, "failed": 0, "total": 2},
+                }
+            return {
+                "id": job_id,
+                "status": "completed",
+                "request_counts": {"completed": 2, "failed": 0, "total": 2},
+                "output_file_id": "file_output",
+            }
+
+    class FakeFiles:
+        def content(self, file_id):
+            assert file_id == "file_output"
+            return b'{"custom_id":"recjudge_000001"}\n'
+
+    fake_batches = FakeBatches()
+    fake_client = SimpleNamespace(batches=fake_batches, files=FakeFiles())
+    monkeypatch.setattr(judge_batch, "load_openai_client", lambda env_path: fake_client)
+    monkeypatch.setattr(judge_batch.time, "sleep", lambda seconds: None)
+
+    judge_batch.openai_check(
+        SimpleNamespace(
+            output_dir=str(tmp_path),
+            env_path="unused.env",
+            job="batch_test",
+            job_file="",
+            download=True,
+            download_output="",
+            download_errors=True,
+            error_output="",
+            watch=True,
+            poll_seconds=1,
+            timeout_seconds=30,
+        )
+    )
+
+    result_path = tmp_path / "openai_recommendation_judge_result.jsonl"
+
+    assert fake_batches.calls == 2
+    assert result_path.read_text(encoding="utf-8") == '{"custom_id":"recjudge_000001"}\n'
+
+
+def test_openai_check_rejects_blank_explicit_job_before_loading_client(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        judge_batch,
+        "load_openai_client",
+        lambda env_path: (_ for _ in ()).throw(AssertionError("client should not be loaded")),
+    )
+
+    try:
+        judge_batch.openai_check(
+            SimpleNamespace(
+                output_dir=str(tmp_path),
+                env_path="unused.env",
+                job="  ",
+                job_file="",
+                download=False,
+                download_output="",
+                download_errors=False,
+                error_output="",
+                watch=False,
+                poll_seconds=1,
+                timeout_seconds=0,
+            )
+        )
+    except RuntimeError as exc:
+        assert "OpenAI Batch job id is empty" in str(exc)
+    else:
+        raise AssertionError("blank OpenAI job ids should not be checked")
+
+
+def test_openai_cancel_rejects_blank_explicit_job_before_loading_client(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        judge_batch,
+        "load_openai_client",
+        lambda env_path: (_ for _ in ()).throw(AssertionError("client should not be loaded")),
+    )
+
+    try:
+        judge_batch.openai_cancel(
+            SimpleNamespace(
+                output_dir=str(tmp_path),
+                env_path="unused.env",
+                job="\t",
+                job_file="",
+            )
+        )
+    except RuntimeError as exc:
+        assert "OpenAI Batch job id is empty" in str(exc)
+    else:
+        raise AssertionError("blank OpenAI job ids should not be cancelled")
+
+
+def test_openai_run_submits_watches_downloads_and_finalizes(tmp_path, monkeypatch):
+    class FakeFiles:
+        def __init__(self):
+            self.created = False
+
+        def create(self, file, purpose):
+            self.created = True
+            assert purpose == "batch"
+            return SimpleNamespace(id="file_input")
+
+        def content(self, file_id):
+            assert file_id == "file_output"
+            return b'{"custom_id":"recjudge_000001"}\n'
+
+    class FakeBatches:
+        def __init__(self):
+            self.created = False
+
+        def list(self, **kwargs):
+            assert kwargs["limit"] == 20
+            return []
+
+        def create(self, input_file_id, endpoint, completion_window, metadata):
+            self.created = True
+            assert input_file_id == "file_input"
+            assert endpoint == "/v1/responses"
+            assert completion_window == "24h"
+            assert metadata["model"] == "gpt-5-nano"
+            return SimpleNamespace(id="batch_new", status="validating")
+
+        def retrieve(self, job_id):
+            assert job_id == "batch_new"
+            return {
+                "id": job_id,
+                "status": "completed",
+                "request_counts": {"completed": 1, "failed": 0, "total": 1},
+                "output_file_id": "file_output",
+            }
+
+    fake_files = FakeFiles()
+    fake_batches = FakeBatches()
+    fake_client = SimpleNamespace(files=fake_files, batches=fake_batches)
+    finalize_calls = []
+    monkeypatch.setattr(judge_batch, "load_openai_client", lambda env_path: fake_client)
+    monkeypatch.setattr(judge_batch.time, "sleep", lambda seconds: None)
+
+    def fake_finalize(args):
+        finalize_calls.append((args.output_dir, args.result_jsonl, args.high_score_threshold, args.min_label_count))
+        Path(args.output_dir, "openai_finalize_summary.json").write_text(
+            json.dumps({"decision": "pass_continue_validation_without_algorithm_change"}),
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(judge_batch, "finalize_openai_result", fake_finalize)
+    output_dir = tmp_path / "run"
+    output_dir.mkdir()
+    (output_dir / "openai_recommendation_judge_batch.jsonl").write_text("{}\n", encoding="utf-8")
+
+    judge_batch.openai_run(
+        SimpleNamespace(
+            output_dir=str(output_dir),
+            env_path="unused.env",
+            jsonl="",
+            name="test run",
+            job_file="",
+            model="gpt-5-nano",
+            force=False,
+            download_output="",
+            error_output="",
+            poll_seconds=1,
+            timeout_seconds=30,
+            snapshot_jsonl="",
+            pattern_output_dir="",
+            ingredient_category_profile="",
+            high_score_threshold=0.65,
+            max_weak_or_bad_rate=0.10,
+            max_high_score_weak_or_bad_rate=0.02,
+            min_label_count=50,
+            min_actionable_pattern_weak_count=5,
+            min_actionable_pattern_weak_rate=0.50,
+            max_actionable_pattern_non_weak_affected=5,
+            skip_finalize=False,
+            fail_on_review=False,
+            fail_on_incomplete=False,
+            require_no_active=True,
+            active_check_limit=20,
+        )
+    )
+
+    run_summary = json.loads((output_dir / "openai_run_summary.json").read_text(encoding="utf-8"))
+
+    assert fake_files.created is True
+    assert fake_batches.created is True
+    job_file_text = (output_dir / judge_batch.DEFAULT_OPENAI_JOB_FILE_NAME).read_text(encoding="utf-8").strip()
+    result_jsonl_text = (output_dir / "openai_recommendation_judge_result.jsonl").read_text(encoding="utf-8")
+    assert job_file_text == "batch_new"
+    assert result_jsonl_text == '{"custom_id":"recjudge_000001"}\n'
+    assert finalize_calls == [(str(output_dir), str(output_dir / "openai_recommendation_judge_result.jsonl"), 0.65, 50)]
+    assert run_summary["submitted"]["job_id"] == "batch_new"
+    assert run_summary["submitted"]["active_preflight_checked"] is True
+    assert run_summary["active_preflight_checked"] is True
+    assert run_summary["active_preflight_count"] == 0
+    assert run_summary["wait"]["status"] == "completed"
+    assert run_summary["finalized"] is True
+
+
+def test_openai_run_reuses_existing_job_without_jsonl_and_finalizes(tmp_path, monkeypatch):
+    class FakeFiles:
+        def create(self, file, purpose):
+            raise AssertionError("new input file should not be created")
+
+        def content(self, file_id):
+            assert file_id == "file_output"
+            return b'{"custom_id":"recjudge_000001"}\n'
+
+    class FakeBatches:
+        def create(self, **kwargs):
+            raise AssertionError("new batch should not be submitted")
+
+        def retrieve(self, job_id):
+            assert job_id == "batch_existing"
+            return {
+                "id": job_id,
+                "status": "completed",
+                "request_counts": {"completed": 1, "failed": 0, "total": 1},
+                "output_file_id": "file_output",
+            }
+
+    fake_client = SimpleNamespace(files=FakeFiles(), batches=FakeBatches())
+    finalize_calls = []
+    monkeypatch.setattr(judge_batch, "load_openai_client", lambda env_path: fake_client)
+
+    def fake_finalize(args):
+        finalize_calls.append((args.output_dir, args.result_jsonl))
+        Path(args.output_dir, "openai_finalize_summary.json").write_text(
+            json.dumps({"decision": "pass_continue_validation_without_algorithm_change"}),
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(judge_batch, "finalize_openai_result", fake_finalize)
+    output_dir = tmp_path / "run"
+    output_dir.mkdir()
+    (output_dir / judge_batch.DEFAULT_OPENAI_JOB_FILE_NAME).write_text("batch_existing\n", encoding="utf-8")
+
+    judge_batch.openai_run(
+        SimpleNamespace(
+            output_dir=str(output_dir),
+            env_path="unused.env",
+            jsonl="",
+            name="test run",
+            job_file="",
+            model="gpt-5-nano",
+            force=False,
+            validation_status_json="",
+            allow_after_validation_stop=False,
+            download_output="",
+            error_output="",
+            poll_seconds=1,
+            timeout_seconds=30,
+            snapshot_jsonl="",
+            pattern_output_dir="",
+            ingredient_category_profile="",
+            high_score_threshold=0.65,
+            max_weak_or_bad_rate=0.10,
+            max_high_score_weak_or_bad_rate=0.02,
+            min_label_count=50,
+            min_actionable_pattern_weak_count=5,
+            min_actionable_pattern_weak_rate=0.50,
+            max_actionable_pattern_non_weak_affected=5,
+            skip_finalize=False,
+            fail_on_review=False,
+            fail_on_incomplete=False,
+            require_no_active=True,
+            active_check_limit=20,
+        )
+    )
+
+    run_summary = json.loads((output_dir / "openai_run_summary.json").read_text(encoding="utf-8"))
+
+    assert run_summary["submitted"]["job_id"] == "batch_existing"
+    assert run_summary["submitted"]["reused"] is True
+    assert run_summary["submitted"]["jsonl_exists"] is False
+    assert run_summary["submitted"]["active_preflight_checked"] is False
+    assert run_summary["active_preflight_checked"] is False
+    assert run_summary["wait"]["status"] == "completed"
+    assert finalize_calls == [(str(output_dir), str(output_dir / "openai_recommendation_judge_result.jsonl"))]
+
+
+def test_openai_run_require_no_active_blocks_new_submit(tmp_path, monkeypatch):
+    class FakeBatches:
+        def list(self, **kwargs):
+            assert kwargs["limit"] == 20
+            return [
+                {
+                    "id": "batch_active",
+                    "status": "in_progress",
+                    "request_counts": {"completed": 0, "failed": 0, "total": 1},
+                    "metadata": {"name": "active"},
+                }
+            ]
+
+        def create(self, **kwargs):
+            raise AssertionError("new batch should not be submitted")
+
+    fake_client = SimpleNamespace(files=SimpleNamespace(), batches=FakeBatches())
+    monkeypatch.setattr(judge_batch, "load_openai_client", lambda env_path: fake_client)
+    output_dir = tmp_path / "run"
+    output_dir.mkdir()
+    (output_dir / "openai_recommendation_judge_batch.jsonl").write_text("{}\n", encoding="utf-8")
+
+    try:
+        judge_batch.openai_run(
+            SimpleNamespace(
+                output_dir=str(output_dir),
+                env_path="unused.env",
+                jsonl="",
+                name="test run",
+                job_file="",
+                model="gpt-5-nano",
+                force=False,
+                download_output="",
+                error_output="",
+                poll_seconds=1,
+                timeout_seconds=30,
+                snapshot_jsonl="",
+                pattern_output_dir="",
+                ingredient_category_profile="",
+                high_score_threshold=0.65,
+                max_weak_or_bad_rate=0.10,
+                max_high_score_weak_or_bad_rate=0.02,
+                min_label_count=50,
+                min_actionable_pattern_weak_count=5,
+                min_actionable_pattern_weak_rate=0.50,
+                max_actionable_pattern_non_weak_affected=5,
+                skip_finalize=False,
+                fail_on_review=False,
+                fail_on_incomplete=False,
+                require_no_active=True,
+                active_check_limit=20,
+            )
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("openai_run should stop when active batches are present")
+
+
+def test_openai_submit_require_no_active_blocks_new_submit(tmp_path, monkeypatch):
+    class FakeFiles:
+        def create(self, **kwargs):
+            raise AssertionError("input file should not be uploaded while an active batch exists")
+
+    class FakeBatches:
+        def list(self, **kwargs):
+            assert kwargs["limit"] == 20
+            return [
+                {
+                    "id": "batch_active",
+                    "status": "in_progress",
+                    "request_counts": {"completed": 0, "failed": 0, "total": 1},
+                    "metadata": {"name": "active"},
+                }
+            ]
+
+        def create(self, **kwargs):
+            raise AssertionError("new batch should not be submitted")
+
+    fake_client = SimpleNamespace(files=FakeFiles(), batches=FakeBatches())
+    monkeypatch.setattr(judge_batch, "load_openai_client", lambda env_path: fake_client)
+    output_dir = tmp_path / "run"
+    output_dir.mkdir()
+    (output_dir / "openai_recommendation_judge_batch.jsonl").write_text("{}\n", encoding="utf-8")
+
+    try:
+        judge_batch.create_or_reuse_openai_batch(
+            SimpleNamespace(
+                output_dir=str(output_dir),
+                env_path="unused.env",
+                jsonl="",
+                name="test run",
+                job_file="",
+                model="gpt-5-nano",
+                force=False,
+                validation_status_json="",
+                allow_after_validation_stop=False,
+                require_no_active=True,
+                active_check_limit=20,
+            )
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("openai-submit should stop when active batches are present")
+
+    assert not (output_dir / judge_batch.DEFAULT_OPENAI_JOB_FILE_NAME).exists()
+
+
+def test_openai_submit_blocks_new_batch_when_validation_status_stops_sampling(tmp_path, monkeypatch):
+    output_dir = tmp_path / "run"
+    output_dir.mkdir()
+    (output_dir / "openai_recommendation_judge_batch.jsonl").write_text("{}\n", encoding="utf-8")
+    status_json = tmp_path / "validation_status.json"
+    status_json.write_text(
+        json.dumps({"next_action": "stop_sampling_keep_current_algorithm"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        judge_batch,
+        "load_openai_client",
+        lambda env_path: (_ for _ in ()).throw(AssertionError("client should not be loaded")),
+    )
+
+    try:
+        judge_batch.create_or_reuse_openai_batch(
+            SimpleNamespace(
+                output_dir=str(output_dir),
+                env_path="unused.env",
+                jsonl="",
+                name="test run",
+                job_file="",
+                model="gpt-5-nano",
+                force=False,
+                validation_status_json=str(status_json),
+                allow_after_validation_stop=False,
+            )
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("openai-submit should stop when validation status recommends stopping sampling")
+
+    assert not (output_dir / judge_batch.DEFAULT_OPENAI_JOB_FILE_NAME).exists()
+
+
+def test_openai_submit_blocks_validation_stop_before_requiring_jsonl(tmp_path, monkeypatch):
+    output_dir = tmp_path / "run"
+    output_dir.mkdir()
+    status_json = tmp_path / "validation_status.json"
+    status_json.write_text(
+        json.dumps({"next_action": "stop_sampling_keep_current_algorithm"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        judge_batch,
+        "load_openai_client",
+        lambda env_path: (_ for _ in ()).throw(AssertionError("client should not be loaded")),
+    )
+
+    try:
+        judge_batch.create_or_reuse_openai_batch(
+            SimpleNamespace(
+                output_dir=str(output_dir),
+                env_path="unused.env",
+                jsonl="",
+                name="test run",
+                job_file="",
+                model="gpt-5-nano",
+                force=False,
+                validation_status_json=str(status_json),
+                allow_after_validation_stop=False,
+            )
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("openai-submit should stop before requiring a JSONL when validation status stops sampling")
+
+    assert not (output_dir / judge_batch.DEFAULT_OPENAI_JOB_FILE_NAME).exists()
+
+
+def test_openai_submit_reuses_existing_job_without_jsonl_even_after_validation_stop(tmp_path, monkeypatch):
+    output_dir = tmp_path / "run"
+    output_dir.mkdir()
+    (output_dir / judge_batch.DEFAULT_OPENAI_JOB_FILE_NAME).write_text("batch_existing\n", encoding="utf-8")
+    status_json = tmp_path / "validation_status.json"
+    status_json.write_text(
+        json.dumps({"next_action": "stop_sampling_keep_current_algorithm"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        judge_batch,
+        "load_openai_client",
+        lambda env_path: (_ for _ in ()).throw(AssertionError("client should not be loaded")),
+    )
+
+    result = judge_batch.create_or_reuse_openai_batch(
+        SimpleNamespace(
+            output_dir=str(output_dir),
+            env_path="unused.env",
+            jsonl="",
+            name="test run",
+            job_file="",
+            model="gpt-5-nano",
+            force=False,
+            validation_status_json=str(status_json),
+            allow_after_validation_stop=False,
+            require_no_active=True,
+            active_check_limit=20,
+        )
+    )
+
+    assert result["job_id"] == "batch_existing"
+    assert result["reused"] is True
+    assert result["jsonl_exists"] is False
+
+
+def test_openai_submit_rejects_empty_existing_job_file_before_loading_client(tmp_path, monkeypatch):
+    output_dir = tmp_path / "run"
+    output_dir.mkdir()
+    (output_dir / judge_batch.DEFAULT_OPENAI_JOB_FILE_NAME).write_text(" \n", encoding="utf-8")
+    monkeypatch.setattr(
+        judge_batch,
+        "load_openai_client",
+        lambda env_path: (_ for _ in ()).throw(AssertionError("client should not be loaded")),
+    )
+
+    try:
+        judge_batch.create_or_reuse_openai_batch(
+            SimpleNamespace(
+                output_dir=str(output_dir),
+                env_path="unused.env",
+                jsonl="",
+                name="test run",
+                job_file="",
+                model="gpt-5-nano",
+                force=False,
+                validation_status_json="",
+                allow_after_validation_stop=False,
+                require_no_active=True,
+                active_check_limit=20,
+            )
+        )
+    except RuntimeError as exc:
+        assert "OpenAI Batch job file is empty" in str(exc)
+    else:
+        raise AssertionError("empty OpenAI job files should not be reused")
+
+
+def test_openai_run_blocks_validation_stop_before_loading_client(tmp_path, monkeypatch):
+    output_dir = tmp_path / "run"
+    output_dir.mkdir()
+    (output_dir / "openai_recommendation_judge_batch.jsonl").write_text("{}\n", encoding="utf-8")
+    status_json = tmp_path / "validation_status.json"
+    status_json.write_text(
+        json.dumps({"next_action": "stop_sampling_keep_current_algorithm"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        judge_batch,
+        "load_openai_client",
+        lambda env_path: (_ for _ in ()).throw(AssertionError("client should not be loaded")),
+    )
+
+    try:
+        judge_batch.openai_run(
+            SimpleNamespace(
+                output_dir=str(output_dir),
+                env_path="unused.env",
+                job_file="",
+                force=False,
+                validation_status_json=str(status_json),
+                allow_after_validation_stop=False,
+                active_check_limit=20,
+                require_no_active=True,
+            )
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("openai-run should stop before loading the OpenAI client")
+
+    assert not (output_dir / judge_batch.DEFAULT_OPENAI_JOB_FILE_NAME).exists()
+
+
+def test_openai_run_rejects_empty_existing_job_file_before_loading_client(tmp_path, monkeypatch):
+    output_dir = tmp_path / "run"
+    output_dir.mkdir()
+    (output_dir / judge_batch.DEFAULT_OPENAI_JOB_FILE_NAME).write_text("\n", encoding="utf-8")
+    monkeypatch.setattr(
+        judge_batch,
+        "load_openai_client",
+        lambda env_path: (_ for _ in ()).throw(AssertionError("client should not be loaded")),
+    )
+
+    try:
+        judge_batch.openai_run(
+            SimpleNamespace(
+                output_dir=str(output_dir),
+                env_path="unused.env",
+                job_file="",
+                force=False,
+                validation_status_json="",
+                allow_after_validation_stop=False,
+                active_check_limit=20,
+                require_no_active=True,
+            )
+        )
+    except RuntimeError as exc:
+        assert "OpenAI Batch job file is empty" in str(exc)
+    else:
+        raise AssertionError("openai-run should stop on an empty existing job file")
+
+
+def test_merge_parts_suppresses_retry_covered_errors(tmp_path, monkeypatch):
+    output_dir = tmp_path / "merged"
+    part_dir = tmp_path / "chunk_part_000"
+    retry_dir = tmp_path / "chunk_part_retry_000"
+    part_dir.mkdir()
+    retry_dir.mkdir()
+
+    (part_dir / "gemini_judge_results.csv").write_text(
+        "key,base_main_category,judge_judgment,similarity_score\n"
+        "recjudge_000001,장 건강,reasonable,0.8\n",
+        encoding="utf-8-sig",
+    )
+    (part_dir / "gemini_judge_errors.csv").write_text(
+        "line_number,key,error,raw\n"
+        "1,recjudge_000002,timeout,{}\n",
+        encoding="utf-8-sig",
+    )
+    (part_dir / "gemini_judge_summary.json").write_text(
+        json.dumps({"error_count": 1}),
+        encoding="utf-8",
+    )
+    (retry_dir / "gemini_judge_results.csv").write_text(
+        "key,base_main_category,judge_judgment,similarity_score\n"
+        "recjudge_000002,장 건강,acceptable_adjacent,0.7\n",
+        encoding="utf-8-sig",
+    )
+    (retry_dir / "gemini_judge_errors.csv").write_text(
+        "line_number,key,error,raw\n",
+        encoding="utf-8-sig",
+    )
+    (retry_dir / "gemini_judge_summary.json").write_text(
+        json.dumps({"error_count": 0}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.chdir(tmp_path)
+    merge_parts(
+        SimpleNamespace(
+            output_dir=str(output_dir),
+            parts_glob=str(tmp_path / "chunk_part*"),
+            high_score_threshold=0.65,
+        )
+    )
+
+    summary = json.loads((output_dir / "merged_gemini_judge_summary.json").read_text(encoding="utf-8"))
+
+    assert summary["result_count"] == 2
+    assert summary["error_count"] == 0
+    assert summary["raw_error_count"] == 1
+    assert summary["retry_covered_error_count"] == 1
+    assert (output_dir / "merged_gemini_judge_errors.csv").read_text(encoding="utf-8-sig").strip() == "part_dir,line_number,key,error,raw"
+    assert "recjudge_000002" in (output_dir / "merged_gemini_judge_errors_all.csv").read_text(encoding="utf-8-sig")
+
+
+def test_summarize_chunks_prefers_impact_scores_and_applies_retry(tmp_path):
+    output_dir = tmp_path / "merged"
+    impact_part = tmp_path / "recommendation_quality_judge_v2_8_openai_chunk_000_002"
+    retry_parent = tmp_path / "recommendation_quality_judge_v2_9_openai_chunk_002_003"
+    retry_dir = tmp_path / "recommendation_quality_judge_v2_9_openai_chunk_002_003_retry_000001"
+    impact_part.mkdir()
+    retry_parent.mkdir()
+    retry_dir.mkdir()
+
+    snapshot_impact = [
+        {
+            "key": "recjudge_000001",
+            "base_product": {"report_no": "B1"},
+            "recommendations": [{"rank": 1}, {"rank": 2}],
+        },
+        {
+            "key": "recjudge_000002",
+            "base_product": {"report_no": "B2"},
+            "recommendations": [{"rank": 1}],
+        },
+    ]
+    (impact_part / "recommendation_snapshot.jsonl").write_text(
+        "\n".join(json.dumps(row) for row in snapshot_impact) + "\n",
+        encoding="utf-8",
+    )
+    (impact_part / "post_fix_score_impact.csv").write_text(
+        "base_report_no,base_product_name,base_main_category,target_report_no,target_product_name,target_main_category,rank,"
+        "judge_judgment,judge_confidence,judge_reason,old_similarity_score,new_similarity_score,score_delta,"
+        "old_high_weak_or_bad,new_high_weak_or_bad,reduced_below_high_threshold,shared_after_json,"
+        "score_adjustment_types_json,score_adjustments_json\n"
+        "B1,base one,cat,T1,target one,cat,1,weak,0.7,too broad,0.8,0.5,-0.3,1,0,1,[],[],[]\n"
+        "B1,base one,cat,T2,target two,cat,2,reasonable,0.9,good,0.7,0.7,0.0,0,0,0,[],[],[]\n"
+        "B2,base two,cat,T3,target three,cat,1,weak,0.8,still high,0.8,0.8,0.0,1,1,0,[],[],[]\n",
+        encoding="utf-8-sig",
+    )
+
+    (retry_parent / "recommendation_snapshot.jsonl").write_text(
+        json.dumps(
+            {
+                "key": "recjudge_000001",
+                "base_product": {"report_no": "B3"},
+                "recommendations": [{"rank": 1}],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (retry_parent / "gemini_judge_results.csv").write_text(
+        "key,base_report_no,base_product_name,base_main_category,rank,target_report_no,target_product_name,target_main_category,"
+        "similarity_score,function_similarity_score,core_match_score,shared_ingredients_json,shared_categories_json,"
+        "local_risk_flags_json,local_quality_bucket,judge_judgment,judge_confidence,judge_reason,judge_risk_flags_json,suggested_rule\n"
+        "recjudge_000001,B3,base three,cat,1,T4,target four,cat,0.9,,,[],[],[],likely_reasonable,weak,0.6,extra label,[],\n",
+        encoding="utf-8-sig",
+    )
+
+    (retry_dir / "recommendation_snapshot.jsonl").write_text(
+        json.dumps(
+            {
+                "key": "recjudge_000001",
+                "base_product": {"report_no": "B3"},
+                "recommendations": [{"rank": 1}],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (retry_dir / "gemini_judge_results.csv").write_text(
+        "key,base_report_no,base_product_name,base_main_category,rank,target_report_no,target_product_name,target_main_category,"
+        "similarity_score,function_similarity_score,core_match_score,shared_ingredients_json,shared_categories_json,"
+        "local_risk_flags_json,local_quality_bucket,judge_judgment,judge_confidence,judge_reason,judge_risk_flags_json,suggested_rule\n"
+        "recjudge_000001,B3,base three,cat,1,T4,target four,cat,0.9,,,[],[],[],likely_reasonable,acceptable_adjacent,0.9,retry fixed,[],\n",
+        encoding="utf-8-sig",
+    )
+
+    summarize_chunks(
+        SimpleNamespace(
+            output_dir=str(output_dir),
+            parts_glob=[str(tmp_path / "recommendation_quality_judge_v2_*_openai_chunk_*_*")],
+            retry_glob=[str(tmp_path / "recommendation_quality_judge_v2_*_openai_chunk_*_retry_*")],
+            high_score_threshold=0.65,
+        )
+    )
+
+    summary = json.loads((output_dir / "openai_chunk_judge_summary.json").read_text(encoding="utf-8"))
+    merged_csv = (output_dir / "openai_chunk_judge_results.csv").read_text(encoding="utf-8-sig")
+
+    assert summary["coverage_ok"] is True
+    assert summary["expected_label_count"] == 4
+    assert summary["actual_label_count"] == 4
+    assert summary["judgment_counts"] == {"weak": 2, "reasonable": 1, "acceptable_adjacent": 1}
+    assert summary["current_high_score_weak_or_bad_count"] == 1
+    assert summary["retry_replacements"][0]["removed_label_count"] == 1
+    assert "post_fix_score_impact" in merged_csv
+    assert "retry fixed" in merged_csv
+    assert "extra label" not in merged_csv
+
+
+def test_pattern_features_and_impact_rows_capture_cross_role_primary_overlap():
+    base = {
+        "report_no": "B1",
+        "product_name": "base",
+        "product_main_category": "skin",
+        "primary_ingredients": ["hyaluronic"],
+        "secondary_ingredients": ["vitamin-c"],
+        "category_scores": {"skin": 5.0},
+        "role_by_ingredient": {"hyaluronic": "primary", "vitamin-c": "secondary"},
+        "ingredient_scores": [
+            {"ingredient": "hyaluronic", "weight": 0.95, "role": "primary", "category_main": "skin", "category_sub": ""},
+            {"ingredient": "vitamin-c", "weight": 0.95, "role": "secondary", "category_main": "skin", "category_sub": ""},
+        ],
+    }
+    target = {
+        "report_no": "T1",
+        "product_name": "target",
+        "product_main_category": "skin",
+        "primary_ingredients": ["vitamin-c"],
+        "secondary_ingredients": ["hyaluronic"],
+        "category_scores": {"skin": 5.0},
+        "role_by_ingredient": {"vitamin-c": "primary", "hyaluronic": "secondary"},
+        "ingredient_scores": [
+            {"ingredient": "vitamin-c", "weight": 0.95, "role": "primary", "category_main": "skin", "category_sub": ""},
+            {"ingredient": "hyaluronic", "weight": 0.95, "role": "secondary", "category_main": "skin", "category_sub": ""},
+        ],
+    }
+    ingredient_profiles = {
+        "hyaluronic": {"ingredient_main_category": "skin", "ingredient_type": "functional", "vector_include": True, "is_excipient": False},
+        "vitamin-c": {"ingredient_main_category": "skin", "ingredient_type": "functional", "vector_include": True, "is_excipient": False},
+    }
+    weak_row = {
+        "base_report_no": "B1",
+        "target_report_no": "T1",
+        "judge_judgment": "weak",
+        "similarity_score": "0.8",
+        "function_similarity_score": "0.5",
+    }
+    reasonable_row = dict(weak_row, judge_judgment="reasonable")
+
+    weak_features = pattern_features_for_row(weak_row, base, target, ingredient_profiles)
+    reasonable_features = pattern_features_for_row(reasonable_row, base, target, ingredient_profiles)
+    impact_rows = pattern_impact_rows([weak_features, reasonable_features], high_score_threshold=0.65)
+    impact_by_name = {row["pattern"]: row for row in impact_rows}
+
+    assert weak_features["no_primary_primary_overlap_cross_role"] == 1
+    assert weak_features["primary_primary_overlap_count"] == 0
+    assert weak_features["shared_count"] == 2
+    assert impact_by_name["no_primary_primary_overlap_cross_role_shared_le2"]["matched_count"] == 2
+    assert impact_by_name["no_primary_primary_overlap_cross_role_shared_le2"]["weak_or_bad_count"] == 1
+    assert impact_by_name["no_primary_primary_overlap_cross_role_shared_le2"]["non_weak_affected_count"] == 1
+
+
+def test_quality_gate_passes_when_rates_are_low_and_patterns_are_not_actionable():
+    args = SimpleNamespace(
+        max_weak_or_bad_rate=0.10,
+        max_high_score_weak_or_bad_rate=0.02,
+        min_label_count=50,
+        min_actionable_pattern_weak_count=5,
+        min_actionable_pattern_weak_rate=0.50,
+        max_actionable_pattern_non_weak_affected=5,
+    )
+    summary = {
+        "row_count": 2135,
+        "weak_or_bad_rate": 0.0745,
+        "high_score_weak_or_bad_count": 25,
+        "pattern_impacts": [
+            {
+                "pattern": "cross_role",
+                "weak_or_bad_count": 6,
+                "weak_or_bad_rate": 0.1333,
+                "non_weak_affected_count": 39,
+            }
+        ],
+    }
+
+    result = quality_gate_decision(summary, args)
+
+    assert result["decision"] == "pass_continue_validation_without_algorithm_change"
+    assert result["high_score_weak_or_bad_rate"] == 0.0117
+    assert result["actionable_pattern_count"] == 0
+
+
+def test_quality_gate_flags_low_blast_radius_algorithm_candidate():
+    args = SimpleNamespace(
+        max_weak_or_bad_rate=0.10,
+        max_high_score_weak_or_bad_rate=0.02,
+        min_label_count=50,
+        min_actionable_pattern_weak_count=5,
+        min_actionable_pattern_weak_rate=0.50,
+        max_actionable_pattern_non_weak_affected=5,
+    )
+    summary = {
+        "row_count": 1000,
+        "weak_or_bad_rate": 0.03,
+        "high_score_weak_or_bad_count": 10,
+        "pattern_impacts": [
+            {
+                "pattern": "candidate",
+                "weak_or_bad_count": 5,
+                "weak_or_bad_rate": 0.7143,
+                "non_weak_affected_count": 2,
+            }
+        ],
+    }
+
+    result = quality_gate_decision(summary, args)
+
+    assert result["decision"] == "algorithm_change_candidate"
+    assert result["actionable_pattern_count"] == 1
+
+
+def test_quality_gate_requests_more_sampling_when_rates_exceed_gate_without_actionable_pattern():
+    args = SimpleNamespace(
+        max_weak_or_bad_rate=0.10,
+        max_high_score_weak_or_bad_rate=0.02,
+        min_label_count=50,
+        min_actionable_pattern_weak_count=5,
+        min_actionable_pattern_weak_rate=0.50,
+        max_actionable_pattern_non_weak_affected=5,
+    )
+    summary = {
+        "row_count": 1000,
+        "weak_or_bad_rate": 0.12,
+        "high_score_weak_or_bad_count": 35,
+        "pattern_impacts": [
+            {
+                "pattern": "broad_pattern",
+                "weak_or_bad_count": 12,
+                "weak_or_bad_rate": 0.10,
+                "non_weak_affected_count": 108,
+            }
+        ],
+    }
+
+    result = quality_gate_decision(summary, args)
+
+    assert result["decision"] == "review_collect_more_targeted_samples"
+    assert "overall_weak_rate_exceeds_gate" in result["reasons"]
+    assert "high_score_weak_rate_exceeds_gate" in result["reasons"]
+
+
+def test_quality_gate_requests_more_sampling_for_tiny_samples():
+    args = SimpleNamespace(
+        max_weak_or_bad_rate=0.10,
+        max_high_score_weak_or_bad_rate=0.02,
+        min_label_count=50,
+        min_actionable_pattern_weak_count=5,
+        min_actionable_pattern_weak_rate=0.50,
+        max_actionable_pattern_non_weak_affected=5,
+    )
+    summary = {
+        "row_count": 7,
+        "weak_or_bad_rate": 0.0,
+        "high_score_weak_or_bad_count": 0,
+        "pattern_impacts": [],
+    }
+
+    result = quality_gate_decision(summary, args)
+
+    assert result["decision"] == "review_collect_more_targeted_samples"
+    assert "label_count_below_quality_gate_minimum" in result["reasons"]
+    assert result["gate"]["min_label_count"] == 50
+
+
+def test_validate_results_orchestrates_summary_analysis_and_gate(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_summarize(args):
+        calls.append(("summarize", args.output_dir, list(args.parts_glob), list(args.retry_glob)))
+        output_dir = Path(args.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "openai_chunk_judge_results.csv").write_text("base_report_no,target_report_no\n", encoding="utf-8")
+        (output_dir / "openai_chunk_judge_summary.json").write_text(json.dumps({"actual_label_count": 1}), encoding="utf-8")
+
+    def fake_analyze(args):
+        calls.append(("analyze", args.results_csv, args.output_dir))
+        output_dir = Path(args.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "judge_pattern_features.csv").write_text(
+            "base_main_category,rank,judge_judgment,current_similarity_score,function_similarity_score,"
+            "same_primary_set,shared_core_count,primary_primary_overlap_count\n",
+            encoding="utf-8",
+        )
+        (output_dir / "judge_pattern_summary.json").write_text(
+            json.dumps(
+                {
+                    "row_count": 1,
+                    "weak_or_bad_rate": 0.0,
+                    "high_score_weak_or_bad_count": 0,
+                    "pattern_impacts": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def fake_quality_gate_decision(summary, args):
+        calls.append(("gate", summary["row_count"], args.max_weak_or_bad_rate, args.min_label_count))
+        return {
+            "decision": "pass_continue_validation_without_algorithm_change",
+            "row_count": summary["row_count"],
+            "weak_or_bad_rate": summary["weak_or_bad_rate"],
+        }
+
+    monkeypatch.setattr(judge_batch, "summarize_chunks", fake_summarize)
+    monkeypatch.setattr(judge_batch, "analyze_patterns", fake_analyze)
+    monkeypatch.setattr(judge_batch, "quality_gate_decision", fake_quality_gate_decision)
+
+    judge_batch.validate_results(
+        SimpleNamespace(
+            output_dir=str(tmp_path / "validation"),
+            parts_glob=["output/chunk_*"],
+            retry_glob=["output/retry_*"],
+            ingredient_category_profile="",
+            high_score_threshold=0.65,
+            max_weak_or_bad_rate=0.10,
+            max_high_score_weak_or_bad_rate=0.02,
+            min_label_count=50,
+            min_actionable_pattern_weak_count=5,
+            min_actionable_pattern_weak_rate=0.50,
+            max_actionable_pattern_non_weak_affected=5,
+            fail_on_review=False,
+        )
+    )
+
+    validation_summary = json.loads((tmp_path / "validation" / "judge_validation_summary.json").read_text(encoding="utf-8"))
+
+    assert [item[0] for item in calls] == ["summarize", "analyze", "gate"]
+    assert validation_summary["decision"] == "pass_continue_validation_without_algorithm_change"
+    assert validation_summary["recommended_next_action"] == "collect_more_holdout_samples"
+    assert (tmp_path / "validation" / "judge_quality_gate.json").exists()
+    assert (tmp_path / "validation" / "high_score_weak_diagnostics.json").exists()
+    assert (tmp_path / "validation" / "validation_status.json").exists()
+    assert validation_summary["outputs"]["high_score_weak_diagnostics_json"].endswith("high_score_weak_diagnostics.json")
+    assert validation_summary["outputs"]["validation_status_json"].endswith("validation_status.json")
+
+
+def test_finalize_openai_result_orchestrates_apply_analysis_and_gate(tmp_path, monkeypatch):
+    calls = []
+    output_dir = tmp_path / "part"
+    output_dir.mkdir()
+    result_jsonl = output_dir / "openai_recommendation_judge_result.jsonl"
+    result_jsonl.write_text("{}\n", encoding="utf-8")
+
+    def fake_apply(args):
+        calls.append(("apply", args.output_dir, args.result_jsonl, args.high_score_threshold))
+        Path(args.output_dir, "gemini_judge_results.csv").write_text("base_report_no,target_report_no\n", encoding="utf-8")
+
+    def fake_analyze(args):
+        calls.append(("analyze", args.results_csv, args.output_dir, args.high_score_threshold))
+        pattern_dir = Path(args.output_dir)
+        pattern_dir.mkdir(parents=True, exist_ok=True)
+        (pattern_dir / "judge_pattern_features.csv").write_text(
+            "base_main_category,rank,judge_judgment,current_similarity_score,function_similarity_score,"
+            "same_primary_set,shared_core_count,primary_primary_overlap_count\n",
+            encoding="utf-8",
+        )
+        (pattern_dir / "judge_pattern_summary.json").write_text(
+            json.dumps(
+                {
+                    "row_count": 10,
+                    "weak_or_bad_rate": 0.1,
+                    "high_score_weak_or_bad_count": 1,
+                    "pattern_impacts": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def fake_quality_gate_decision(summary, args):
+        calls.append(("gate", summary["row_count"], args.max_weak_or_bad_rate, args.min_label_count))
+        return {
+            "decision": "pass_continue_validation_without_algorithm_change",
+            "row_count": summary["row_count"],
+            "weak_or_bad_rate": summary["weak_or_bad_rate"],
+        }
+
+    monkeypatch.setattr(judge_batch, "apply_results", fake_apply)
+    monkeypatch.setattr(judge_batch, "analyze_patterns", fake_analyze)
+    monkeypatch.setattr(judge_batch, "quality_gate_decision", fake_quality_gate_decision)
+
+    judge_batch.finalize_openai_result(
+        SimpleNamespace(
+            output_dir=str(output_dir),
+            result_jsonl="",
+            snapshot_jsonl="",
+            pattern_output_dir="",
+            ingredient_category_profile="",
+            high_score_threshold=0.65,
+            max_weak_or_bad_rate=0.10,
+            max_high_score_weak_or_bad_rate=0.02,
+            min_label_count=50,
+            min_actionable_pattern_weak_count=5,
+            min_actionable_pattern_weak_rate=0.50,
+            max_actionable_pattern_non_weak_affected=5,
+            fail_on_review=False,
+        )
+    )
+
+    summary = json.loads((output_dir / "openai_finalize_summary.json").read_text(encoding="utf-8"))
+
+    assert [item[0] for item in calls] == ["apply", "analyze", "gate"]
+    assert summary["decision"] == "pass_continue_validation_without_algorithm_change"
+    assert summary["recommended_next_action"] == "collect_more_holdout_samples"
+    assert (output_dir / "judge_quality_gate.json").exists()
+    assert (output_dir / "high_score_weak_diagnostics.json").exists()
+    assert (output_dir / "validation_status.json").exists()
+    pattern_summary_json = summary["outputs"]["pattern_summary_json"]
+    assert pattern_summary_json.endswith("patterns\\judge_pattern_summary.json") or pattern_summary_json.endswith("patterns/judge_pattern_summary.json")
+
+
+def test_write_validation_report_builds_markdown_from_validation_outputs(tmp_path):
+    validation_dir = tmp_path / "validation"
+    pattern_dir = validation_dir / "patterns"
+    pattern_dir.mkdir(parents=True)
+    (validation_dir / "openai_chunk_judge_summary.json").write_text(
+        json.dumps(
+            {
+                "actual_label_count": 100,
+                "expected_label_count": 100,
+                "coverage_ok": True,
+                "product_count": 20,
+                "request_count": 10,
+                "judgment_counts": {
+                    "reasonable": 30,
+                    "acceptable_adjacent": 60,
+                    "weak": 10,
+                },
+                "weak_or_bad_rate": 0.10,
+                "current_high_score_weak_or_bad_count": 1,
+                "category_judgment_counts": {
+                    "A|reasonable": 5,
+                    "A|acceptable_adjacent": 5,
+                    "A|weak": 5,
+                    "B|reasonable": 20,
+                    "B|acceptable_adjacent": 20,
+                    "B|weak": 0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (pattern_dir / "judge_pattern_summary.json").write_text(
+        json.dumps(
+            {
+                "pattern_impacts": [
+                    {
+                        "pattern": "candidate",
+                        "matched_count": 12,
+                        "weak_or_bad_count": 5,
+                        "weak_or_bad_rate": 0.4167,
+                        "non_weak_affected_count": 7,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (validation_dir / "judge_quality_gate.json").write_text(
+        json.dumps(
+            {
+                "decision": "pass_continue_validation_without_algorithm_change",
+                "reasons": ["candidate_patterns_are_not_actionable_without_overfiltering"],
+                "high_score_weak_or_bad_count": 1,
+                "high_score_weak_or_bad_rate": 0.01,
+                "actionable_pattern_count": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (validation_dir / "high_score_weak_diagnostics.json").write_text(
+        json.dumps(
+            {
+                "high_score_row_count": 80,
+                "high_score_weak_or_bad_count": 1,
+                "within_high_score_weak_or_bad_rate": 0.0125,
+                "overall_high_score_weak_or_bad_rate": 0.01,
+                "condition_impacts": [
+                    {
+                        "condition": "function_lt_0_40",
+                        "matched_count": 12,
+                        "weak_or_bad_count": 1,
+                        "weak_or_bad_rate": 0.0833,
+                        "non_weak_affected_count": 11,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (validation_dir / "validation_status.json").write_text(
+        json.dumps({"next_action": "stop_sampling_keep_current_algorithm"}),
+        encoding="utf-8",
+    )
+
+    judge_batch.write_validation_report(
+        SimpleNamespace(
+            validation_dir=str(validation_dir),
+            summary_json="",
+            pattern_summary_json="",
+            quality_gate_json="",
+            diagnostics_json="",
+            validation_status_json="",
+            output_md="",
+            top_categories=1,
+            top_patterns=1,
+        )
+    )
+
+    report = (validation_dir / "judge_validation_report.md").read_text(encoding="utf-8")
+
+    assert "pass_continue_validation_without_algorithm_change" in report
+    assert "keep_current_algorithm" in report
+    assert "| Label coverage | 100 / 100 |" in report
+    assert "| A | 15 | 5 | 33.33% |" in report
+    assert "| candidate | 12 | 5 | 41.67% | 7 |" in report
+    assert "## High-Score Weak Diagnostics" in report
+    assert "| function_lt_0_40 | 12 | 1 | 8.33% | 11 |" in report
+    assert "Recommended next action: `stop_sampling_keep_current_algorithm`" in report
+
+
+def test_validation_status_decision_stops_when_gate_passes_with_enough_labels():
+    quality_gate = {
+        "decision": "pass_continue_validation_without_algorithm_change",
+        "row_count": 5747,
+    }
+    diagnostics = {
+        "condition_impacts": [
+            {
+                "condition": "broad_condition",
+                "weak_or_bad_count": 24,
+                "weak_or_bad_rate": 0.038,
+                "non_weak_affected_count": 607,
+            }
+        ]
+    }
+
+    status = validation_status_decision(quality_gate, diagnostics, min_label_count=5000)
+
+    assert status["next_action"] == "stop_sampling_keep_current_algorithm"
+    assert "quality_gate_passed_with_sufficient_labels" in status["reasons"]
+    assert status["diagnostic_candidate_count"] == 0
+
+
+def test_validation_status_decision_collects_more_when_labels_are_low():
+    quality_gate = {
+        "decision": "pass_continue_validation_without_algorithm_change",
+        "row_count": 4999,
+    }
+
+    status = validation_status_decision(quality_gate, None, min_label_count=5000)
+
+    assert status["next_action"] == "collect_more_holdout_samples"
+    assert "label_count_below_validation_stop_minimum" in status["reasons"]
+
+
+def test_build_high_score_weak_diagnostics_counts_only_high_score_rows():
+    rows = [
+        {
+            "base_main_category": "A",
+            "rank": "1",
+            "judge_judgment": "weak",
+            "current_similarity_score": "0.80",
+            "function_similarity_score": "0.20",
+            "same_primary_set": "1",
+            "shared_core_count": "1",
+            "primary_primary_overlap_count": "2",
+        },
+        {
+            "base_main_category": "A",
+            "rank": "2",
+            "judge_judgment": "reasonable",
+            "current_similarity_score": "0.90",
+            "function_similarity_score": "0.20",
+            "same_primary_set": "1",
+            "shared_core_count": "1",
+            "primary_primary_overlap_count": "2",
+        },
+        {
+            "base_main_category": "B",
+            "rank": "3",
+            "judge_judgment": "acceptable_adjacent",
+            "current_similarity_score": "0.70",
+            "function_similarity_score": "0.50",
+            "same_primary_set": "0",
+            "shared_core_count": "0",
+            "primary_primary_overlap_count": "0",
+        },
+        {
+            "base_main_category": "B",
+            "rank": "4",
+            "judge_judgment": "weak",
+            "current_similarity_score": "0.50",
+            "function_similarity_score": "0.10",
+            "same_primary_set": "0",
+            "shared_core_count": "0",
+            "primary_primary_overlap_count": "0",
+        },
+    ]
+
+    result = build_high_score_weak_diagnostics(rows, high_score_threshold=0.65)
+
+    assert result["row_count"] == 4
+    assert result["high_score_row_count"] == 3
+    assert result["high_score_weak_or_bad_count"] == 1
+    assert result["overall_high_score_weak_or_bad_rate"] == 0.25
+    assert result["within_high_score_weak_or_bad_rate"] == 0.3333
+    assert result["high_score_weak_by_category"] == [{"category": "A", "count": 1}]
+    assert result["high_score_weak_by_rank"] == [{"rank": "1", "count": 1}]
+    feature_counts = {
+        row["feature"]: row["count"]
+        for row in result["high_score_weak_feature_counts"]
+    }
+    assert feature_counts["function_lt_0_30"] == 1
+    assert feature_counts["same_primary_set"] == 1
+    impacts = {
+        row["condition"]: row
+        for row in result["condition_impacts"]
+    }
+    assert impacts["function_lt_0_30"]["matched_count"] == 2
+    assert impacts["function_lt_0_30"]["weak_or_bad_count"] == 1
+    assert impacts["function_lt_0_30"]["non_weak_affected_count"] == 1
+
+
+def test_next_sample_plan_selects_high_weak_rate_categories_before_fallback():
+    summary = {
+        "category_judgment_counts": {
+            "A|reasonable": 20,
+            "A|acceptable_adjacent": 60,
+            "A|weak": 20,
+            "B|reasonable": 40,
+            "B|acceptable_adjacent": 55,
+            "B|weak": 5,
+            "C|reasonable": 10,
+            "C|acceptable_adjacent": 80,
+            "C|weak": 10,
+            "D|reasonable": 8,
+            "D|acceptable_adjacent": 1,
+            "D|weak": 1,
+        }
+    }
+    args = SimpleNamespace(
+        summary_json="summary.json",
+        min_labels=50,
+        min_weak_rate=0.10,
+        max_categories=3,
+        per_category=7,
+        seed=123,
+        sample_output_dir="output/next",
+        top_k=10,
+        workers=4,
+        progress_every=10,
+    )
+
+    plan = next_sample_plan(summary, args)
+
+    assert [row["category"] for row in plan["selected_categories"]] == ["A", "C", "B"]
+    assert plan["selected_categories"][0]["selection_reason"] == "weak_rate_above_threshold"
+    assert plan["selected_categories"][2]["selection_reason"] == "weak_count_fallback"
+    assert "--main-category" in plan["prepare_command"]
+    assert "A" in plan["prepare_command"]
+    assert plan["openai_run_command"][:3] == ["python", "scripts\\recommendation_quality_judge_batch.py", "openai-run"]
+    assert "--require-no-active" in plan["openai_run_command"]
+    assert "output/next" in plan["openai_run_command"]
+    assert "D" not in [row["category"] for row in plan["selected_categories"]]
+
+
+def test_next_sample_plan_skips_when_validation_status_stops_sampling(tmp_path):
+    status_json = tmp_path / "validation_status.json"
+    status_json.write_text(
+        json.dumps({"next_action": "stop_sampling_keep_current_algorithm"}),
+        encoding="utf-8",
+    )
+    summary = {
+        "category_judgment_counts": {
+            "A|reasonable": 20,
+            "A|acceptable_adjacent": 60,
+            "A|weak": 20,
+        }
+    }
+    args = SimpleNamespace(
+        summary_json="summary.json",
+        validation_status_json=str(status_json),
+        min_labels=50,
+        min_weak_rate=0.10,
+        max_categories=3,
+        per_category=7,
+        seed=123,
+        sample_output_dir="output/next",
+        top_k=10,
+        workers=4,
+        progress_every=10,
+    )
+
+    plan = next_sample_plan(summary, args)
+
+    assert plan["should_prepare_sample"] is False
+    assert plan["skip_reason"] == "validation_status_recommends_stop_sampling"
+    assert plan["selected_categories"] == []
+    assert plan["prepare_command"] == []
+    assert plan["openai_run_command"] == []
+
+
+def test_next_sample_plan_carries_non_stop_validation_status_to_openai_run(tmp_path):
+    status_json = tmp_path / "validation_status.json"
+    status_json.write_text(
+        json.dumps({"next_action": "collect_more_targeted_samples"}),
+        encoding="utf-8",
+    )
+    summary = {
+        "category_judgment_counts": {
+            "A|reasonable": 20,
+            "A|acceptable_adjacent": 60,
+            "A|weak": 20,
+        }
+    }
+    args = SimpleNamespace(
+        summary_json="summary.json",
+        validation_status_json=str(status_json),
+        min_labels=50,
+        min_weak_rate=0.10,
+        max_categories=3,
+        per_category=7,
+        seed=123,
+        sample_output_dir="output/next",
+        top_k=10,
+        workers=4,
+        progress_every=10,
+    )
+
+    plan = next_sample_plan(summary, args)
+
+    assert plan["should_prepare_sample"] is True
+    assert plan["validation_status_next_action"] == "collect_more_targeted_samples"
+    assert "--validation-status-json" in plan["openai_run_command"]
+    assert str(status_json) in plan["openai_run_command"]
