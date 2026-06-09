@@ -76,6 +76,20 @@
 - 두 데이터셋을 결합해 원료 표준명 → 기능성 카테고리 매핑 DB(`functional_category_map`) 구축
 - 기능성 인정 여부, 기능성 내용, 원료 표준명 기반 카테고리 분류에 활용
 
+### 🤖 ML 추천 품질 예측 (XGBoost)
+
+- GPT-4o-mini Batch API로 80,395건 레이블링한 학습 데이터로 XGBoost 모델 학습
+- **입력 피처**: `similarity_score`, 원료 중복 패턴(shared_count, core_overlap), 카테고리 일치, rank 등 36개
+- **출력**: `ml_quality_score` (0-1), `ml_weak_probability`, `ml_label` (good/uncertain/weak)
+- **현재 단계 — Shadow Mode**: 추천 결과에 ML 점수가 포함되지만 순서·필터에 영향 없음 (로깅용)
+- **다음 단계**: `RECOMMENDATION_QUALITY_ML_PHASE=filter` 환경변수로 약한 추천 자동 차단 가능
+- Train ROC-AUC: **0.983**, Average Precision: **0.829**
+
+```bash
+# 모델 재학습 (새 판정 데이터 추가 후)
+python scripts/train_recommendation_quality_model.py --model xgboost --eval
+```
+
 ### 👤 개인화 추천
 - 업로드 제품 프로필 ↔ 데이터베이스 전 제품 벡터 유사도 실시간 계산
 - 기능 유사도, 원료 유사도, 카테고리 일치도 종합 점수화
@@ -93,6 +107,7 @@
 | **임베딩** | OpenAI Embeddings (RAG 검색용) |
 | **데이터베이스** | SQLite (WAL 모드), Pandas |
 | **유사도 엔진** | 커스텀 Semantic Weighted Jaccard v2.13 |
+| **추천 품질 모델** | XGBoost (Shadow Mode) — 8만 건 배치 판정 데이터로 학습 |
 | **인프라** | AWS EC2, Python 3.10+ |
 
 ---
@@ -122,7 +137,8 @@ medicine_similarity/
 │   ├── build_ingredient_match_cache_v2.py      # 매칭 캐시 구축
 │   ├── build_functional_category_map.py        # 기능성 카테고리 매핑
 │   ├── recommendation_quality_judge_batch.py   # 배치 품질 평가
-│   └── run_recommendation_quality_eval.py      # 품질 지표 계산
+│   ├── run_recommendation_quality_eval.py      # 품질 지표 계산
+│   └── train_recommendation_quality_model.py   # ML 추천 품질 모델 학습
 ├── tests/                              # pytest 테스트
 ├── docs/
 │   └── assets/                         # README 이미지

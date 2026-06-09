@@ -54,6 +54,10 @@ output/failed_*.csv
 output/**
 outputs/**
 
+## Keep trained ML model artifacts
+!output/ml_models/
+!output/ml_models/*.pkl
+
 ## Logs
 logs/
 logs/*.log

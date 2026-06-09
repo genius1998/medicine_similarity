@@ -97,6 +97,7 @@ from api.ingredient_parse_service import (
 )
 from api.local_llm_client import extract_json_from_llm_content
 from api.ocr_service import extract_text_from_image, save_temp_upload
+from api.recommendation_quality_model import predict_quality_batch
 from api.recommendation_service import RecommendationService
 from api.request_progress import (  # re-exported for backward compatibility
     PROGRESS_TTL_SECONDS,
@@ -3548,6 +3549,29 @@ class UploadRecommendationService:
             item["rank"] = index
             item["reason"] = self._override_recommendation_reason(temp_profile, item)
             item["explanation"]["reason"] = item["reason"]
+
+        # --- ML quality scoring (Shadow Mode: scores logged, never filter results) ---
+        try:
+            base_main_category = str(temp_profile.get("product_main_category", "") or "")
+            ml_input_rows = [
+                {
+                    "similarity_score": item.get("similarity_score", 0.0),
+                    "function_similarity_score": item.get("function_similarity_score", 0.0),
+                    "core_match_score": item.get("core_match_score", 0.0),
+                    "rank": item.get("rank", 1),
+                    "base_main_category": base_main_category,
+                    "target_main_category": item.get("target_product_main_category", ""),
+                    "shared_categories_json": item.get("shared_categories", []),
+                    "score_adjustment_types_json": item.get("score_adjustment_types", []),
+                }
+                for item in rows
+            ]
+            ml_results = predict_quality_batch(ml_input_rows)
+            for item, ml in zip(rows, ml_results):
+                item.update(ml)
+        except Exception:
+            pass  # ML errors never affect production results
+
         update_request_progress(
             request_id,
             phase="recommendation_formatting",

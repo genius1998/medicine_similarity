@@ -11,6 +11,7 @@ import pandas as pd
 
 from api.db import sqlite_connection
 from api.local_llm_client import call_local_llm, extract_json_from_llm_content
+from api.recommendation_quality_model import predict_quality_batch, should_filter_recommendation
 from api.product_search_service import search_profile_records
 from scripts.enhance_similarity_with_explanation import (
     build_vector_indexes,
@@ -1132,11 +1133,13 @@ class RecommendationService:
             and item not in semantic_shared_target_ingredients
             and (not semantic_detail or not is_semantic_excipient_name(item))
         ]
+        base_main_category = str((base_profile or {}).get("product_main_category", "") or "")
         return {
             "rank": rank,
             "target_report_no": target_report_no,
             "target_product_name": str(row.get("target_product_name", "") or ""),
             "target_product_main_category": str(target_profile.get("product_main_category", "") or ""),
+            "base_main_category": base_main_category,
             "similarity_score": similarity_score,
             "function_similarity_score": function_similarity_score,
             "core_match_score": core_match_score,
@@ -1162,6 +1165,29 @@ class RecommendationService:
         ][:top_k]
         for index, item in enumerate(rows, start=1):
             item["rank"] = index
+
+        # --- ML quality scoring (Shadow Mode by default) ---
+        try:
+            # Build score-row dicts for ML inference
+            ml_input_rows = [
+                {
+                    "similarity_score": item.get("similarity_score", 0.0),
+                    "function_similarity_score": item.get("function_similarity_score", 0.0),
+                    "core_match_score": item.get("core_match_score", 0.0),
+                    "rank": item.get("rank", 1),
+                    "base_main_category": item.get("base_main_category", ""),
+                    "target_main_category": item.get("target_product_main_category", ""),
+                    "shared_categories_json": item.get("shared_categories", []),
+                    "score_adjustment_types_json": item.get("score_adjustment_types", []),
+                }
+                for item in rows
+            ]
+            ml_results = predict_quality_batch(ml_input_rows)
+            for item, ml in zip(rows, ml_results):
+                item.update(ml)
+        except Exception:
+            pass  # ML errors never affect production results
+
         return rows
 
     def _candidate_summary_for_llm(self, recommendation: dict) -> dict:
