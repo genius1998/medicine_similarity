@@ -35,7 +35,10 @@ SIMILARITY_ALGORITHM_V2_7 = "semantic_weighted_jaccard_v2_7"
 SIMILARITY_ALGORITHM_V2_8 = "semantic_weighted_jaccard_v2_8"
 SIMILARITY_ALGORITHM_V2_9 = "semantic_weighted_jaccard_v2_9"
 SIMILARITY_ALGORITHM_V2_10 = "semantic_weighted_jaccard_v2_10"
-SIMILARITY_ALGORITHM_V2 = "semantic_weighted_jaccard_v2_11"
+SIMILARITY_ALGORITHM_V2_11 = "semantic_weighted_jaccard_v2_11"
+SIMILARITY_ALGORITHM_V2_12 = "semantic_weighted_jaccard_v2_12"
+SIMILARITY_ALGORITHM_V2_13 = "semantic_weighted_jaccard_v2_13"
+SIMILARITY_ALGORITHM_V2 = "semantic_weighted_jaccard_v2_13"
 SIMILARITY_ALGORITHM_VERSION = SIMILARITY_ALGORITHM_V2
 SIMILARITY_ALGORITHM_ALIASES = {
     "v1": SIMILARITY_ALGORITHM_V1,
@@ -129,6 +132,20 @@ NARROW_BASE_BROAD_TARGET_SCORE_CAP = 0.64
 NARROW_BASE_BROAD_TARGET_SCORE_MIN = 0.75
 NARROW_BASE_BROAD_TARGET_MAX_BASE_VECTOR_SIZE = 2
 NARROW_BASE_BROAD_TARGET_MIN_TARGET_ONLY = 3
+# Single-key base divergent target cap (v2_12):
+# Fires when base is a true single-ingredient product that is fully covered by a shared key
+# which IS also the target's primary ingredient, but the target has additional ingredients
+# that add significant weight (≥0.20). This indicates the target serves a broader/different
+# function than the base, even though the primary is shared.
+# Example: 매실추출물 base → 매실추출물+계피 target (plum fatigue → plum+cinnamon/blood sugar)
+SINGLE_KEY_BASE_DIVERGENT_TARGET_SCORE_CAP = 0.64
+SINGLE_KEY_BASE_DIVERGENT_TARGET_SCORE_MIN = 0.75
+# Threshold calibrated for support-level ingredient weights (~0.3 per ingredient).
+# Score=0.800 with support-level primary (weight~0.3) means target_only ≈ 0.075 > 0.05,
+# so the cap fires for same-primary matches where target adds 1+ meaningful ingredients.
+# Score=0.970 (nearly identical products, target adds only trace) gives target_only ≈ 0.009
+# which is safely below threshold → trace-addition cases are not capped.
+SINGLE_KEY_BASE_DIVERGENT_TARGET_MIN_EXTRA_WEIGHT = 0.05
 LIPID_LECITHIN_SINGLE_CORE_BROAD_TARGET_SCORE_CAP = 0.64
 LIPID_LECITHIN_SINGLE_CORE_BROAD_TARGET_SCORE_MAX = 0.90
 LIPID_LECITHIN_SINGLE_CORE_BROAD_TARGET_TARGET_ONLY_KEYS = 1
@@ -1585,6 +1602,52 @@ def calculate_semantic_weighted_jaccard_v2(
                 "target_only_count": len(target_only_semantic_keys),
             }
         )
+    # Single-key base divergent target cap (v2_13):
+    # Fires when a strictly single-ingredient base matches a target that has additional
+    # ingredients, indicating the target serves a broader/different functional profile.
+    # Two sub-cases:
+    # (A) Shared key IS target's primary: target adds other ingredients with significant
+    #     combined weight (≥ MIN_EXTRA_WEIGHT threshold). Catches "매실 → 매실+계피" style.
+    # (B) Shared key is NOT target's primary: the base ingredient is merely an additive in
+    #     the target (e.g., "홍경천 → 칼슘+홍경천" where calci is the target's main purpose).
+    #     Even 1 target_only key indicates the base and target serve different primary functions.
+    # The existing narrow_base_broad_target_score_cap handles target_only ≥ 3 for size ≤ 2.
+    # This cap fills the gap for target_only = 1–2 when base is strictly single-ingredient.
+    _target_only_weight_sum = sum(
+        float(target_vector.get(k, 0) or 0)
+        for k in target_only_semantic_keys
+        if not str(k).startswith("__")
+    )
+    _shared_in_target_primary = bool(
+        _target_primary_sem_keys and shared_keys and shared_keys[0] in _target_primary_sem_keys
+    )
+    if (
+        score >= SINGLE_KEY_BASE_DIVERGENT_TARGET_SCORE_MIN
+        and base_main_category == target_main_category
+        and _non_private_base_vector_size == 1  # strictly single-ingredient base
+        and len(shared_keys) == 1
+        and not base_only_semantic_keys
+        and target_only_semantic_keys  # target has additional ingredient(s)
+        and (
+            # Case A: shared IS target's primary, but target adds substantial additional weight
+            (_shared_in_target_primary and _target_only_weight_sum >= SINGLE_KEY_BASE_DIVERGENT_TARGET_MIN_EXTRA_WEIGHT)
+            # Case B: shared is NOT target's primary (base ingredient is an additive in target)
+            or (not _shared_in_target_primary)
+        )
+    ):
+        original_score = score
+        score = min(score, SINGLE_KEY_BASE_DIVERGENT_TARGET_SCORE_CAP)
+        score_adjustments.append(
+            {
+                "type": "single_key_base_divergent_target_score_cap",
+                "cap": SINGLE_KEY_BASE_DIVERGENT_TARGET_SCORE_CAP,
+                "original_score": round(float(original_score), 6),
+                "main_category": base_main_category,
+                "shared_keys": shared_keys,
+                "target_only_count": len(target_only_semantic_keys),
+                "target_only_weight_sum": round(float(_target_only_weight_sum), 6),
+            }
+        )
     # Cap 혈중지질 pairs where the base product's PRIMARY ingredient(s) are NOT shared.
     # Uses the actual primary_ingredients field from the base profile, so the check is
     # mechanism-aware: omega-3 base ↔ fiber target (no omega-3 shared) → cap fires;
@@ -2023,6 +2086,8 @@ def recommendation_quality_metadata(
         reason = "lipid_lecithin_single_core_broad_target"
     elif any("lipid_no_primary_shared" in item for item in adjustment_types):
         reason = "lipid_no_primary_shared_cross_mechanism"
+    elif any("single_key_base_divergent_target" in item for item in adjustment_types):
+        reason = "single_key_base_divergent_target"
     elif any("narrow_base_broad_target" in item for item in adjustment_types):
         reason = "narrow_base_broad_target"
     elif any("low_shared_coverage" in item for item in adjustment_types):

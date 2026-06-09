@@ -144,7 +144,7 @@ ROLE_WEIGHT = {
     "support": 0.45,
 }
 
-NON_FUNCTIONAL_CACHE_RELATION_TYPES = {"excipient", "unrelated", "unknown", "error"}
+NON_FUNCTIONAL_CACHE_RELATION_TYPES = {"excipient", "unrelated", "unknown", "error", "same_function_only"}
 
 LOW_OCR_CONFIDENCE_THRESHOLD = 0.6
 LOW_PARSE_CONFIDENCE_THRESHOLD = 0.65
