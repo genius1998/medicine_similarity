@@ -33,7 +33,8 @@ SIMILARITY_ALGORITHM_V2_5 = "semantic_weighted_jaccard_v2_5"
 SIMILARITY_ALGORITHM_V2_6 = "semantic_weighted_jaccard_v2_6"
 SIMILARITY_ALGORITHM_V2_7 = "semantic_weighted_jaccard_v2_7"
 SIMILARITY_ALGORITHM_V2_8 = "semantic_weighted_jaccard_v2_8"
-SIMILARITY_ALGORITHM_V2 = "semantic_weighted_jaccard_v2_9"
+SIMILARITY_ALGORITHM_V2_9 = "semantic_weighted_jaccard_v2_9"
+SIMILARITY_ALGORITHM_V2 = "semantic_weighted_jaccard_v2_10"
 SIMILARITY_ALGORITHM_VERSION = SIMILARITY_ALGORITHM_V2
 SIMILARITY_ALGORITHM_ALIASES = {
     "v1": SIMILARITY_ALGORITHM_V1,
@@ -58,6 +59,8 @@ SIMILARITY_ALGORITHM_ALIASES = {
     "v2_8": SIMILARITY_ALGORITHM_V2,
     "v2.9": SIMILARITY_ALGORITHM_V2,
     "v2_9": SIMILARITY_ALGORITHM_V2,
+    "v2.10": SIMILARITY_ALGORITHM_V2,
+    "v2_10": SIMILARITY_ALGORITHM_V2,
     SIMILARITY_ALGORITHM_V2_LEGACY: SIMILARITY_ALGORITHM_V2,
     SIMILARITY_ALGORITHM_V2_1: SIMILARITY_ALGORITHM_V2,
     SIMILARITY_ALGORITHM_V2_2: SIMILARITY_ALGORITHM_V2,
@@ -79,6 +82,8 @@ SIMILARITY_ALGORITHM_ALIASES = {
     "semantic_v2_7": SIMILARITY_ALGORITHM_V2,
     "semantic_v2_8": SIMILARITY_ALGORITHM_V2,
     "semantic_v2_9": SIMILARITY_ALGORITHM_V2,
+    "semantic_v2_10": SIMILARITY_ALGORITHM_V2,
+    SIMILARITY_ALGORITHM_V2_9: SIMILARITY_ALGORITHM_V2,
 }
 DEFAULT_TOP_K = 10
 DEFAULT_CANDIDATE_LIMIT = 1000
@@ -114,6 +119,28 @@ ORAL_SINGLE_CORE_BROAD_TARGET_MIN_TARGET_ONLY_KEYS = 2
 LIPID_LECITHIN_SINGLE_CORE_BROAD_TARGET_SCORE_CAP = 0.64
 LIPID_LECITHIN_SINGLE_CORE_BROAD_TARGET_SCORE_MAX = 0.90
 LIPID_LECITHIN_SINGLE_CORE_BROAD_TARGET_TARGET_ONLY_KEYS = 1
+# Primary lipid-lowering semantic keys: products whose core mechanism is one of these
+# are considered "primary lipid" products. Matching two 혈중지질 products is only
+# mechanistically strong when they share at least one of these keys.
+LIPID_PRIMARY_SEMANTIC_KEYS: frozenset = frozenset(
+    {
+        "오메가3 지방 산류",  # omega-3 fatty acids (EPA/DHA)
+        "EPA 및 DHA 함유 유지",  # EPA and DHA-containing oil
+        "홍국",  # red yeast rice
+        "식물스테롤류",  # plant sterols
+        "식물스테롤",  # plant sterol
+        "나이아신",  # niacin (HDL/LDL mechanism)
+        "감마리놀렌산 함유 유지",  # GLA-containing oil
+        "폴리코사놀",  # policosanol
+        "EPA",
+        "DHA",
+        "난소화성말토덱스트린",  # resistant maltodextrin: primary for pure fiber products
+        "차전자피식이섬유",  # psyllium husk: primary for pure fiber products
+    }
+)
+# Score cap when two 혈중지질 products do not share any primary lipid-lowering ingredient
+# but the base product has such an ingredient (different mechanism cross-match).
+LIPID_NO_PRIMARY_SHARED_SCORE_CAP = 0.50
 CROSS_MAIN_SHARED_SUBCATEGORY_ONLY_SCORE_CAP = 0.64
 NUTRITION_SUBTYPE_MISMATCH_SCORE_CAP = 0.52
 NUTRITION_GENERIC_LOW_CORE_COVERAGE_SCORE_CAP = 0.64
@@ -1503,6 +1530,31 @@ def calculate_semantic_weighted_jaccard_v2(
                 "target_only_semantic_keys": target_only_semantic_keys,
             }
         )
+    # Cap 혈중지질 pairs where the base product's primary lipid-lowering ingredient
+    # (e.g., EPA/DHA, niacin, plant sterols, red yeast rice, fiber) is NOT shared with the target.
+    # This catches cross-mechanism matches (omega-3 ↔ fiber, niacin ↔ probiotic) that are
+    # systematically rated "weak" by LLM judges because the lipid-lowering mechanisms differ.
+    _shared_set = set(shared_keys)
+    _base_only_set = set(base_only_semantic_keys)
+    if (
+        score > LIPID_NO_PRIMARY_SHARED_SCORE_CAP
+        and base_main_category == LIPID_MAIN_CATEGORY
+        and target_main_category == LIPID_MAIN_CATEGORY
+        and not (_shared_set & LIPID_PRIMARY_SEMANTIC_KEYS)
+        and _base_only_set & LIPID_PRIMARY_SEMANTIC_KEYS
+    ):
+        original_score = score
+        score = min(score, LIPID_NO_PRIMARY_SHARED_SCORE_CAP)
+        score_adjustments.append(
+            {
+                "type": "lipid_no_primary_shared_score_cap",
+                "cap": LIPID_NO_PRIMARY_SHARED_SCORE_CAP,
+                "original_score": round(float(original_score), 6),
+                "main_category": base_main_category,
+                "shared_keys": shared_keys,
+                "base_only_primary_keys": sorted(_base_only_set & LIPID_PRIMARY_SEMANTIC_KEYS),
+            }
+        )
     if (
         score > NO_CORE_WEAK_SHARED_WITH_EXTRA_SCORE_CAP
         and base_main_category == target_main_category
@@ -1910,6 +1962,8 @@ def recommendation_quality_metadata(
         reason = "oral_single_core_broad_target"
     elif any("lipid_lecithin_single_core_broad_target" in item for item in adjustment_types):
         reason = "lipid_lecithin_single_core_broad_target"
+    elif any("lipid_no_primary_shared" in item for item in adjustment_types):
+        reason = "lipid_no_primary_shared_cross_mechanism"
     elif any("low_shared_coverage" in item for item in adjustment_types):
         reason = "low_shared_coverage"
     elif single_core_low_shared_coverage:
