@@ -34,7 +34,8 @@ SIMILARITY_ALGORITHM_V2_6 = "semantic_weighted_jaccard_v2_6"
 SIMILARITY_ALGORITHM_V2_7 = "semantic_weighted_jaccard_v2_7"
 SIMILARITY_ALGORITHM_V2_8 = "semantic_weighted_jaccard_v2_8"
 SIMILARITY_ALGORITHM_V2_9 = "semantic_weighted_jaccard_v2_9"
-SIMILARITY_ALGORITHM_V2 = "semantic_weighted_jaccard_v2_10"
+SIMILARITY_ALGORITHM_V2_10 = "semantic_weighted_jaccard_v2_10"
+SIMILARITY_ALGORITHM_V2 = "semantic_weighted_jaccard_v2_11"
 SIMILARITY_ALGORITHM_VERSION = SIMILARITY_ALGORITHM_V2
 SIMILARITY_ALGORITHM_ALIASES = {
     "v1": SIMILARITY_ALGORITHM_V1,
@@ -61,6 +62,8 @@ SIMILARITY_ALGORITHM_ALIASES = {
     "v2_9": SIMILARITY_ALGORITHM_V2,
     "v2.10": SIMILARITY_ALGORITHM_V2,
     "v2_10": SIMILARITY_ALGORITHM_V2,
+    "v2.11": SIMILARITY_ALGORITHM_V2,
+    "v2_11": SIMILARITY_ALGORITHM_V2,
     SIMILARITY_ALGORITHM_V2_LEGACY: SIMILARITY_ALGORITHM_V2,
     SIMILARITY_ALGORITHM_V2_1: SIMILARITY_ALGORITHM_V2,
     SIMILARITY_ALGORITHM_V2_2: SIMILARITY_ALGORITHM_V2,
@@ -83,7 +86,9 @@ SIMILARITY_ALGORITHM_ALIASES = {
     "semantic_v2_8": SIMILARITY_ALGORITHM_V2,
     "semantic_v2_9": SIMILARITY_ALGORITHM_V2,
     "semantic_v2_10": SIMILARITY_ALGORITHM_V2,
+    "semantic_v2_11": SIMILARITY_ALGORITHM_V2,
     SIMILARITY_ALGORITHM_V2_9: SIMILARITY_ALGORITHM_V2,
+    SIMILARITY_ALGORITHM_V2_10: SIMILARITY_ALGORITHM_V2,
 }
 DEFAULT_TOP_K = 10
 DEFAULT_CANDIDATE_LIMIT = 1000
@@ -116,6 +121,14 @@ NO_CORE_WEAK_SHARED_WITH_EXTRA_MAX_SHARED_KEYS = 2
 ORAL_SINGLE_CORE_BROAD_TARGET_SCORE_CAP = 0.64
 ORAL_SINGLE_CORE_BROAD_TARGET_SCORE_MAX = 0.75
 ORAL_SINGLE_CORE_BROAD_TARGET_MIN_TARGET_ONLY_KEYS = 2
+# General cap: narrow-base (≤2 semantic keys total) matched with a broad-target that shares
+# only 1 ingredient and has 3+ unique ingredients. The shared ingredient must NOT be the
+# target's primary ingredient (if it were, it would be a legitimate "pure ingredient → enhanced"
+# recommendation). Applied after category-specific caps to serve as a safety net.
+NARROW_BASE_BROAD_TARGET_SCORE_CAP = 0.64
+NARROW_BASE_BROAD_TARGET_SCORE_MIN = 0.75
+NARROW_BASE_BROAD_TARGET_MAX_BASE_VECTOR_SIZE = 2
+NARROW_BASE_BROAD_TARGET_MIN_TARGET_ONLY = 3
 LIPID_LECITHIN_SINGLE_CORE_BROAD_TARGET_SCORE_CAP = 0.64
 LIPID_LECITHIN_SINGLE_CORE_BROAD_TARGET_SCORE_MAX = 0.90
 LIPID_LECITHIN_SINGLE_CORE_BROAD_TARGET_TARGET_ONLY_KEYS = 1
@@ -126,6 +139,7 @@ LIPID_PRIMARY_SEMANTIC_KEYS: frozenset = frozenset(
     {
         "오메가3 지방 산류",  # omega-3 fatty acids (EPA/DHA)
         "EPA 및 DHA 함유 유지",  # EPA and DHA-containing oil
+        "불포화지방산",  # unsaturated fatty acids (omega-3 umbrella)
         "홍국",  # red yeast rice
         "식물스테롤류",  # plant sterols
         "식물스테롤",  # plant sterol
@@ -134,12 +148,18 @@ LIPID_PRIMARY_SEMANTIC_KEYS: frozenset = frozenset(
         "폴리코사놀",  # policosanol
         "EPA",
         "DHA",
-        "난소화성말토덱스트린",  # resistant maltodextrin: primary for pure fiber products
-        "차전자피식이섬유",  # psyllium husk: primary for pure fiber products
+        # Fiber-based primary lipid mechanisms — kept SEPARATE from the cap logic.
+        # The cap should NOT fire when fiber IS shared (fiber ↔ fiber is fine).
+        # These appear here so "fiber base_only" can trigger the cap vs. non-fiber target.
+        "난소화성말토덱스트린",
+        "차전자피식이섬유",
+        "프락토올리고당",
     }
 )
 # Score cap when two 혈중지질 products do not share any primary lipid-lowering ingredient
-# but the base product has such an ingredient (different mechanism cross-match).
+# but the base product HAS one in its base_only keys (different mechanism cross-match).
+# Fiber items in LIPID_PRIMARY_SEMANTIC_KEYS are intentional: an omega-3 base that has
+# no omega-3 shared with a fiber target will correctly trigger this cap.
 LIPID_NO_PRIMARY_SHARED_SCORE_CAP = 0.50
 CROSS_MAIN_SHARED_SUBCATEGORY_ONLY_SCORE_CAP = 0.64
 NUTRITION_SUBTYPE_MISMATCH_SCORE_CAP = 0.52
@@ -1530,18 +1550,57 @@ def calculate_semantic_weighted_jaccard_v2(
                 "target_only_semantic_keys": target_only_semantic_keys,
             }
         )
-    # Cap 혈중지질 pairs where the base product's primary lipid-lowering ingredient
-    # (e.g., EPA/DHA, niacin, plant sterols, red yeast rice, fiber) is NOT shared with the target.
-    # This catches cross-mechanism matches (omega-3 ↔ fiber, niacin ↔ probiotic) that are
-    # systematically rated "weak" by LLM judges because the lipid-lowering mechanisms differ.
+    # General narrow-base broad-target cap: a product with very few semantic ingredients
+    # (≤2) that shares exactly 1 key with a rich target (3+ target-only keys) gets an
+    # inflated jaccard score because its single ingredient is fully covered. Cap this
+    # when the score is high and the shared ingredient is NOT the target's primary.
+    # (This generalises the oral/lecithin specific caps to all categories.)
+    _target_primary_sem_keys = frozenset(
+        semantic_ingredient_key(str(ing).strip())
+        for ing in (target_profile.get("primary_ingredients", []) or [])
+        if str(ing or "").strip()
+    )
+    _non_private_base_vector_size = sum(
+        1 for k in base_vector if not k.startswith("__") and float(base_vector.get(k, 0) or 0) > 0
+    )
+    if (
+        score >= NARROW_BASE_BROAD_TARGET_SCORE_MIN
+        and base_main_category == target_main_category
+        and _non_private_base_vector_size <= NARROW_BASE_BROAD_TARGET_MAX_BASE_VECTOR_SIZE
+        and len(shared_keys) == 1
+        and not base_only_semantic_keys
+        and len(target_only_semantic_keys) >= NARROW_BASE_BROAD_TARGET_MIN_TARGET_ONLY
+        and shared_keys[0] not in _target_primary_sem_keys
+    ):
+        original_score = score
+        score = min(score, NARROW_BASE_BROAD_TARGET_SCORE_CAP)
+        score_adjustments.append(
+            {
+                "type": "narrow_base_broad_target_score_cap",
+                "cap": NARROW_BASE_BROAD_TARGET_SCORE_CAP,
+                "original_score": round(float(original_score), 6),
+                "main_category": base_main_category,
+                "shared_keys": shared_keys,
+                "base_vector_size": _non_private_base_vector_size,
+                "target_only_count": len(target_only_semantic_keys),
+            }
+        )
+    # Cap 혈중지질 pairs where the base product's PRIMARY ingredient(s) are NOT shared.
+    # Uses the actual primary_ingredients field from the base profile, so the check is
+    # mechanism-aware: omega-3 base ↔ fiber target (no omega-3 shared) → cap fires;
+    # fiber base ↔ fiber target (fiber shared) → cap does NOT fire.
     _shared_set = set(shared_keys)
-    _base_only_set = set(base_only_semantic_keys)
+    _base_primary_sem_keys = frozenset(
+        semantic_ingredient_key(str(ing).strip())
+        for ing in (base_profile.get("primary_ingredients", []) or [])
+        if str(ing or "").strip()
+    )
     if (
         score > LIPID_NO_PRIMARY_SHARED_SCORE_CAP
         and base_main_category == LIPID_MAIN_CATEGORY
         and target_main_category == LIPID_MAIN_CATEGORY
-        and not (_shared_set & LIPID_PRIMARY_SEMANTIC_KEYS)
-        and _base_only_set & LIPID_PRIMARY_SEMANTIC_KEYS
+        and _base_primary_sem_keys
+        and not (_shared_set & _base_primary_sem_keys)
     ):
         original_score = score
         score = min(score, LIPID_NO_PRIMARY_SHARED_SCORE_CAP)
@@ -1552,7 +1611,7 @@ def calculate_semantic_weighted_jaccard_v2(
                 "original_score": round(float(original_score), 6),
                 "main_category": base_main_category,
                 "shared_keys": shared_keys,
-                "base_only_primary_keys": sorted(_base_only_set & LIPID_PRIMARY_SEMANTIC_KEYS),
+                "base_primary_sem_keys": sorted(_base_primary_sem_keys),
             }
         )
     if (
@@ -1964,6 +2023,8 @@ def recommendation_quality_metadata(
         reason = "lipid_lecithin_single_core_broad_target"
     elif any("lipid_no_primary_shared" in item for item in adjustment_types):
         reason = "lipid_no_primary_shared_cross_mechanism"
+    elif any("narrow_base_broad_target" in item for item in adjustment_types):
+        reason = "narrow_base_broad_target"
     elif any("low_shared_coverage" in item for item in adjustment_types):
         reason = "low_shared_coverage"
     elif single_core_low_shared_coverage:
