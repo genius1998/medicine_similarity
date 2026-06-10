@@ -37,7 +37,22 @@
       max-width: 1500px;
       margin: 0 auto;
       padding: 12px 18px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
     }
+    .brand-logo-link {
+      display: flex;
+      align-items: center;
+      text-decoration: none;
+      flex-shrink: 0;
+    }
+    .brand-logo-link img {
+      height: 36px;
+      width: auto;
+      display: block;
+    }
+    .header-text { flex: 1; }
     h1 {
       margin: 0;
       font-size: 22px;
@@ -327,8 +342,13 @@
 
   <header class="app-header">
     <div class="header-inner">
-      <h1>성분콕</h1>
-      <div class="header-desc">건강기능식품 추천 서비스. 기존 제품 DB 기준으로 품목 상세 정보와 성분 기반 유사 제품 TOP10을 조회합니다.</div>
+      <a href="/home" class="brand-logo-link" aria-label="성분콕 홈으로 이동">
+        <img src="/static/assets/logo.png" alt="성분콕">
+      </a>
+      <div class="header-text">
+        <h1>성분콕</h1>
+        <div class="header-desc">건강기능식품 추천 서비스. 기존 제품 DB 기준으로 품목 상세 정보와 성분 기반 유사 제품 TOP10을 조회합니다.</div>
+      </div>
     </div>
   </header>
 
