@@ -13,13 +13,13 @@ jobs:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.EC2_HOST }}
+          host: 32.236.113.89
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             set -e
 
-            # 프로젝트 디렉토리로 이동 (일반적인 경로 두 가지 시도)
+            # 프로젝트 디렉토리로 이동
             if [ -d "/home/ubuntu/medicine_similarity_repo" ]; then
               cd /home/ubuntu/medicine_similarity_repo
             elif [ -d "/home/ubuntu/medicine_similarity" ]; then
@@ -38,7 +38,6 @@ jobs:
             fi
 
             echo "=== restart service ==="
-            # systemd 서비스가 있으면 사용, 없으면 프로세스 직접 재시작
             if systemctl list-units --type=service | grep -qE "medicine|uvicorn|api"; then
               SERVICE=$(systemctl list-units --type=service | grep -oE "[a-z_-]*(medicine|uvicorn|api)[a-z_-]*\.service" | head -1)
               echo "Restarting systemd service: $SERVICE"
