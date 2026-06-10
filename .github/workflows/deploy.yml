@@ -19,42 +19,62 @@ jobs:
           script: |
             set -e
 
-            # 프로젝트 디렉토리 자동 탐색 (git remote가 medicine_similarity인 폴더)
+            # 1. 프로젝트 디렉토리 탐색
             PROJECT_DIR=$(find /home/ubuntu /srv /opt /var/www 2>/dev/null -maxdepth 4 -name ".git" -type d \
               | xargs -I{} dirname {} \
               | xargs -I{} sh -c 'git -C {} remote get-url origin 2>/dev/null | grep -q "medicine_similarity" && echo {}' \
               | head -1)
 
             if [ -z "$PROJECT_DIR" ]; then
-              echo "=== 탐색된 디렉토리 목록 (디버그) ==="
-              ls /home/ubuntu/
-              echo "ERROR: project directory not found" && exit 1
+              echo "ERROR: project directory not found"
+              ls /home/ubuntu/ || true
+              exit 1
             fi
-
             echo "=== 프로젝트 경로: $PROJECT_DIR ==="
             cd "$PROJECT_DIR"
 
+            # 2. git pull
             echo "=== git pull ==="
             git pull origin main
 
-            echo "=== install dependencies (if changed) ==="
+            # 3. 의존성 설치
+            echo "=== install dependencies ==="
             if [ -f ".venv/bin/activate" ]; then
               source .venv/bin/activate
               pip install -q -r requirements_api.txt
             fi
 
-            echo "=== restart service ==="
-            if systemctl list-units --type=service | grep -qE "medicine|uvicorn|api"; then
-              SERVICE=$(systemctl list-units --type=service | grep -oE "[a-z_-]*(medicine|uvicorn|api)[a-z_-]*\.service" | head -1)
-              echo "Restarting systemd service: $SERVICE"
-              sudo systemctl restart "$SERVICE"
-            else
-              echo "No systemd service found. Restarting uvicorn process directly..."
-              pkill -f "uvicorn api.main:app" || true
-              sleep 1
-              source .venv/bin/activate
-              nohup uvicorn api.main:app --host 0.0.0.0 --port 8000 > logs/uvicorn.log 2>&1 &
-              echo "uvicorn restarted (PID: $!)"
+            # 4. systemd 서비스가 없으면 자동 생성
+            if ! systemctl list-unit-files 2>/dev/null | grep -q "medicine-api.service"; then
+              echo "=== systemd 서비스 최초 등록 ==="
+              UVICORN_BIN="$PROJECT_DIR/.venv/bin/uvicorn"
+
+              sudo tee /etc/systemd/system/medicine-api.service > /dev/null <<EOF
+            [Unit]
+            Description=Medicine Similarity API
+            After=network.target
+
+            [Service]
+            Type=simple
+            User=ubuntu
+            WorkingDirectory=$PROJECT_DIR
+            ExecStart=$UVICORN_BIN api.main:app --host 0.0.0.0 --port 8000
+            Restart=always
+            RestartSec=3
+
+            [Install]
+            WantedBy=multi-user.target
+            EOF
+
+              sudo systemctl daemon-reload
+              sudo systemctl enable medicine-api
+              echo "=== 서비스 등록 완료 ==="
             fi
+
+            # 5. 서비스 재시작
+            echo "=== restart medicine-api ==="
+            sudo systemctl restart medicine-api
+            sleep 2
+            sudo systemctl status medicine-api --no-pager
 
             echo "=== deploy complete ==="
