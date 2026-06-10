@@ -97,7 +97,7 @@ from api.ingredient_parse_service import (
 )
 from api.local_llm_client import extract_json_from_llm_content
 from api.ocr_service import extract_text_from_image, save_temp_upload
-from api.recommendation_quality_model import predict_quality_batch
+from api.recommendation_quality_model import predict_quality_batch, should_filter_recommendation
 from api.recommendation_service import RecommendationService
 from api.request_progress import (  # re-exported for backward compatibility
     PROGRESS_TTL_SECONDS,
@@ -3569,6 +3569,11 @@ class UploadRecommendationService:
             ml_results = predict_quality_batch(ml_input_rows)
             for item, ml in zip(rows, ml_results):
                 item.update(ml)
+            # Filter mode: remove weak recommendations
+            rows = [
+                item for item, ml in zip(rows, ml_results)
+                if not should_filter_recommendation(ml)
+            ]
         except Exception:
             pass  # ML errors never affect production results
 

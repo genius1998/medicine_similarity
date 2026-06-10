@@ -1185,6 +1185,11 @@ class RecommendationService:
             ml_results = predict_quality_batch(ml_input_rows)
             for item, ml in zip(rows, ml_results):
                 item.update(ml)
+            # Filter mode: remove weak recommendations
+            rows = [
+                item for item, ml in zip(rows, ml_results)
+                if not should_filter_recommendation(ml)
+            ]
         except Exception:
             pass  # ML errors never affect production results
 

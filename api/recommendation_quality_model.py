@@ -40,12 +40,12 @@ _MODEL_PATH = _REPO_ROOT / "output" / "ml_models" / "recommendation_quality_mode
 # ---------------------------------------------------------------------------
 
 RECOMMENDATION_QUALITY_ML_PHASE: str = os.environ.get(
-    "RECOMMENDATION_QUALITY_ML_PHASE", "shadow"
+    "RECOMMENDATION_QUALITY_ML_PHASE", "filter"
 ).lower()
 
 # Probability threshold above which a recommendation is flagged as weak.
 WEAK_PROBABILITY_THRESHOLD: float = float(
-    os.environ.get("RECOMMENDATION_QUALITY_WEAK_THRESHOLD", "0.50")
+    os.environ.get("RECOMMENDATION_QUALITY_WEAK_THRESHOLD", "0.834")
 )
 
 # ---------------------------------------------------------------------------
