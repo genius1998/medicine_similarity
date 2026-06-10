@@ -691,6 +691,7 @@ def get_similar_products(
     return RecommendationResponse(
         base_product=RecommendationBaseProduct(**payload["base_product"]),
         recommendations=[RecommendationItem(**item) for item in payload["recommendations"]],
+        filtered_recommendations=[RecommendationItem(**item) for item in payload.get("filtered_recommendations", [])],
         cache_used=bool(payload["cache_used"]),
         similarity_algorithm=str(payload.get("similarity_algorithm", "") or ""),
         llm_rerank_applied=bool(payload.get("llm_rerank_applied", False)),

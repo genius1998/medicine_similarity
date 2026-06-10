@@ -70,6 +70,11 @@ class RecommendationItem(BaseModel):
     uploaded_match_labels: List[str] = Field(default_factory=list)
     uploaded_status: str = ""
     uploaded_quality_grade: str = ""
+    # ML quality fields
+    ml_quality_score: Optional[float] = None
+    ml_weak_probability: Optional[float] = None
+    ml_label: Optional[str] = None
+    ml_phase: Optional[str] = None
 
 
 class RecommendationBaseProduct(BaseModel):
@@ -82,6 +87,7 @@ class RecommendationBaseProduct(BaseModel):
 class RecommendationResponse(BaseModel):
     base_product: RecommendationBaseProduct
     recommendations: List[RecommendationItem]
+    filtered_recommendations: List[RecommendationItem] = Field(default_factory=list)
     cache_used: bool
     similarity_algorithm: str = ""
     llm_rerank_applied: bool = False
