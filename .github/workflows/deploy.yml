@@ -71,7 +71,13 @@ jobs:
               echo "=== 서비스 등록 완료 ==="
             fi
 
-            # 5. 서비스 재시작
+            # 5. 포트 8000 점유 프로세스 강제 종료 (기존 수동 실행 uvicorn 제거)
+            echo "=== killing any process on port 8000 ==="
+            sudo fuser -k 8000/tcp || true
+            pkill -f "uvicorn api.main:app" || true
+            sleep 2
+
+            # 6. 서비스 재시작
             echo "=== restart medicine-api ==="
             sudo systemctl restart medicine-api
             sleep 3
