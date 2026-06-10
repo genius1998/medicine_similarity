@@ -4,6 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>성분콕</title>
+  <link rel="icon" type="image/png" href="/static/assets/favicon.png?v=transparent-20260605">
+  <link rel="apple-touch-icon" href="/static/assets/favicon.png?v=transparent-20260605">
+  <link rel="stylesheet" href="/static/css/brand.css">
+  <link rel="stylesheet" href="/static/css/onboarding.css?v=20260605">
   <style>
     :root {
       --bg: #f5f5f5;
@@ -29,7 +33,7 @@
     }
     .app-header {
       border-bottom: 1px solid var(--line-strong);
-      background: #f0f2f1;
+      background: #fefefe;
     }
     .header-inner {
       max-width: 1280px;
@@ -63,6 +67,481 @@
       max-width: 1280px;
       margin: 0 auto;
       padding: 14px 18px 32px;
+    }
+    .home-hero-shell {
+      border: 1px solid #d8eaf2;
+      border-radius: 6px;
+      background:
+        radial-gradient(circle at 16% 14%, rgba(18, 184, 179, 0.12), transparent 28%),
+        radial-gradient(circle at 86% 18%, rgba(94, 234, 212, 0.12), transparent 24%),
+        linear-gradient(135deg, #ffffff 0%, #f5fafc 100%);
+      padding: 24px;
+      margin-bottom: 12px;
+      overflow: hidden;
+    }
+    .home-hero-layout {
+      display: grid;
+      grid-template-columns: minmax(280px, 0.92fr) minmax(310px, 1.03fr) minmax(280px, 0.95fr);
+      gap: 18px;
+      align-items: center;
+    }
+    .home-hero-kicker {
+      margin: 0 0 8px;
+      color: #12b8b3;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+    }
+    .home-hero-title {
+      margin: 0;
+      color: #0b234a;
+      font-size: 34px;
+      line-height: 1.22;
+      font-weight: 800;
+      letter-spacing: 0;
+    }
+    .home-hero-highlight {
+      color: #12b8b3;
+      display: inline-block;
+      transition: transform 180ms ease, text-shadow 180ms ease;
+    }
+    .home-hero-shell:hover .home-hero-highlight,
+    .home-hero-shell:focus-within .home-hero-highlight {
+      transform: scale(1.025);
+      text-shadow: 0 0 18px rgba(18, 184, 179, 0.28);
+    }
+    .home-hero-subtitle {
+      margin: 12px 0 18px;
+      color: #475569;
+      font-size: 14px;
+      line-height: 1.7;
+    }
+    .home-hero-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .home-hero-button {
+      min-height: 44px;
+      border-radius: 4px;
+      padding: 0 16px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      font-weight: 800;
+      text-decoration: none;
+      transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease;
+    }
+    .home-hero-button.primary {
+      border: 1px solid #0d938f;
+      background: linear-gradient(135deg, #12b8b3 0%, #0d938f 100%);
+      color: #ffffff;
+      box-shadow: 0 10px 24px rgba(18, 184, 179, 0.2);
+    }
+    .home-hero-button.secondary {
+      border: 1px solid #0b234a;
+      background: #ffffff;
+      color: #0b234a;
+    }
+    .home-hero-button:hover,
+    .home-hero-button:focus-visible {
+      transform: translateY(-2px);
+      box-shadow: 0 14px 30px rgba(11, 35, 74, 0.14);
+      outline: none;
+    }
+    .ingredient-flow-panel {
+      position: relative;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .ingredient-flow-panel::before {
+      content: "";
+      position: absolute;
+      left: 12%;
+      right: 12%;
+      top: 50%;
+      border-top: 1px dashed rgba(18, 184, 179, 0.45);
+      z-index: 0;
+    }
+    .ingredient-flow-step {
+      position: relative;
+      z-index: 1;
+      border: 1px solid #d8eaf2;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.92);
+      padding: 13px;
+      box-shadow: 0 8px 22px rgba(11, 35, 74, 0.07);
+      transition: transform 170ms ease, box-shadow 170ms ease;
+    }
+    .ingredient-flow-step:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 14px 30px rgba(11, 35, 74, 0.13);
+    }
+    .ingredient-flow-badge {
+      width: 38px;
+      height: 38px;
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: #eef7fb;
+      color: #0b5e8e;
+      font-size: 12px;
+      font-weight: 800;
+      margin-bottom: 9px;
+      transition: background 170ms ease, color 170ms ease;
+    }
+    .ingredient-flow-step:hover .ingredient-flow-badge {
+      background: #12b8b3;
+      color: #ffffff;
+    }
+    .ingredient-flow-step small {
+      display: block;
+      color: #12b8b3;
+      font-size: 11px;
+      font-weight: 800;
+      margin-bottom: 3px;
+    }
+    .ingredient-flow-step strong {
+      display: block;
+      color: #0b234a;
+      font-size: 14px;
+      transition: transform 170ms ease;
+    }
+    .ingredient-flow-step:hover strong {
+      transform: scale(1.025);
+    }
+    .ingredient-flow-step span {
+      display: block;
+      margin-top: 5px;
+      color: #64748b;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .recommend-card-dashboard {
+      border: 1px solid #d8eaf2;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.94);
+      padding: 14px;
+      box-shadow: 0 14px 34px rgba(11, 35, 74, 0.12);
+    }
+    .recommend-card-note {
+      margin: 0 0 10px;
+      color: #64748b;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .recommend-card-panel {
+      border: 1px solid #e2eef4;
+      border-radius: 5px;
+      background: #ffffff;
+      padding: 11px;
+      margin-bottom: 10px;
+    }
+    .recommend-card-panel h3 {
+      margin: 0 0 9px;
+      color: #0b234a;
+      font-size: 14px;
+    }
+    .recommend-card-chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .recommend-card-chip {
+      border: 1px solid #cdeae8;
+      border-radius: 999px;
+      background: #effcfb;
+      color: #0b5e8e;
+      padding: 4px 8px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .recommend-card-scan {
+      position: relative;
+      min-height: 96px;
+      border: 1px solid #d8eaf2;
+      border-radius: 5px;
+      background: linear-gradient(180deg, #f8fcfd 0%, #ffffff 100%);
+      overflow: hidden;
+    }
+    .recommend-card-scan-title {
+      margin: 0;
+      padding: 10px 10px 6px;
+      color: #0b234a;
+      font-size: 13px;
+      font-weight: 800;
+    }
+    .recommend-card-scan-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      margin: 0 10px;
+      padding: 4px 0;
+      border-bottom: 1px solid #edf4f7;
+      color: #475569;
+      font-size: 11px;
+    }
+    .recommend-card-scan-line {
+      position: absolute;
+      left: 8px;
+      right: 8px;
+      top: 36px;
+      height: 2px;
+      border-radius: 999px;
+      background: #12b8b3;
+      box-shadow: 0 0 12px rgba(18, 184, 179, 0.7);
+      animation: homeHeroScan 3.2s ease-in-out infinite;
+    }
+    .recommend-card-item {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      align-items: center;
+      margin-top: 8px;
+    }
+    .recommend-card-name {
+      color: #0b234a;
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .recommend-card-percent {
+      color: #0d938f;
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .recommend-card-bar {
+      grid-column: 1 / -1;
+      height: 6px;
+      border-radius: 999px;
+      background: #edf4f7;
+      overflow: hidden;
+    }
+    .recommend-card-bar span {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #12b8b3 0%, #5eead4 100%);
+      transform-origin: left center;
+      animation: recommendCardFill 1200ms ease-out both;
+    }
+    .home-hero-trust {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 18px;
+    }
+    .home-hero-trust-item {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 9px;
+      min-height: 50px;
+      border: 1px solid #d8eaf2;
+      border-radius: 5px;
+      background: rgba(255, 255, 255, 0.9);
+      color: #0b234a;
+      font-size: 13px;
+      font-weight: 800;
+      box-shadow: 0 8px 22px rgba(11, 35, 74, 0.07);
+    }
+    .home-hero-feature-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .home-hero-feature-card {
+      position: relative;
+      border: 1px solid #d8eaf2;
+      border-radius: 6px;
+      background: #ffffff;
+      padding: 16px;
+      box-shadow: 0 8px 22px rgba(11, 35, 74, 0.07);
+      transition: transform 170ms ease, box-shadow 170ms ease;
+      overflow: hidden;
+    }
+    .home-hero-feature-card::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 0;
+      height: 3px;
+      background: #12b8b3;
+      transform: scaleX(0);
+      transform-origin: left center;
+      transition: transform 170ms ease;
+    }
+    .home-hero-feature-card:hover {
+      transform: scale(1.015);
+      box-shadow: 0 14px 30px rgba(11, 35, 74, 0.13);
+    }
+    .home-hero-feature-card:hover::before {
+      transform: scaleX(1);
+    }
+    .home-hero-feature-badge {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: #eef7fb;
+      color: #0b5e8e;
+      font-size: 12px;
+      font-weight: 800;
+      margin-bottom: 10px;
+      transition: background 170ms ease, color 170ms ease;
+    }
+    .home-hero-feature-card:hover .home-hero-feature-badge {
+      background: #12b8b3;
+      color: #ffffff;
+    }
+    .home-hero-feature-card h3 {
+      margin: 0 0 7px;
+      color: #0b234a;
+      font-size: 16px;
+    }
+    .home-hero-feature-card p {
+      margin: 0;
+      color: #475569;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .home-hero-gallery-head {
+      padding: 13px 14px 0;
+    }
+    .home-hero-gallery-head h2 {
+      margin: 0 0 3px;
+      color: #0b234a;
+      font-size: 17px;
+    }
+    .home-hero-gallery-head p {
+      margin: 0;
+      color: #64748b;
+      font-size: 12px;
+    }
+    .home-visual {
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: #f8fbfd;
+      overflow: hidden;
+      margin-bottom: 12px;
+    }
+    .home-carousel {
+      height: clamp(260px, 38vw, 420px);
+      position: relative;
+      padding: 10px;
+    }
+    .home-slide {
+      position: absolute;
+      inset: 10px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 520ms ease;
+    }
+    .home-slide.is-active {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .home-slide img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      max-width: none;
+      object-fit: contain;
+    }
+    .home-carousel-control {
+      position: absolute;
+      top: 50%;
+      z-index: 2;
+      width: 36px;
+      height: 36px;
+      transform: translateY(-50%);
+      border: 1px solid rgba(31, 91, 67, 0.22);
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.88);
+      color: var(--accent);
+      font-size: 24px;
+      line-height: 1;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .home-carousel-control:hover,
+    .home-carousel-control:focus-visible {
+      background: #ffffff;
+      border-color: rgba(31, 91, 67, 0.45);
+      outline: none;
+    }
+    .home-carousel-control.prev { left: 16px; }
+    .home-carousel-control.next { right: 16px; }
+    .home-carousel-dots {
+      position: absolute;
+      left: 50%;
+      bottom: 14px;
+      z-index: 2;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .home-carousel-dot {
+      width: 9px;
+      height: 9px;
+      padding: 0;
+      border: 1px solid rgba(31, 91, 67, 0.34);
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.86);
+      cursor: pointer;
+    }
+    .home-carousel-dot.is-active {
+      width: 24px;
+      border-radius: 999px;
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+    @keyframes homeHeroScan {
+      0%, 100% { transform: translateY(0); opacity: 0.55; }
+      50% { transform: translateY(48px); opacity: 1; }
+    }
+    @keyframes recommendCardFill {
+      0% { transform: scaleX(0.18); }
+      100% { transform: scaleX(1); }
+    }
+    .quick-start {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 14px;
+      border: 1px solid #cbded4;
+      border-radius: 4px;
+      background: #f7fbf9;
+      padding: 14px;
+      margin-bottom: 12px;
+    }
+    .quick-start h2 {
+      margin: 0 0 4px;
+      font-size: 18px;
+      color: #173d2d;
+    }
+    .quick-start p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .quick-start-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      min-width: 260px;
     }
     .alert-box {
       padding: 10px 12px;
@@ -438,6 +917,21 @@
       color: #333;
     }
     @media (max-width: 920px) {
+      .home-hero-layout {
+        grid-template-columns: 1fr;
+      }
+      .ingredient-flow-panel {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+      .ingredient-flow-panel::before {
+        left: 8%;
+        right: 8%;
+        top: 48px;
+      }
+      .home-hero-feature-grid,
+      .home-hero-trust {
+        grid-template-columns: 1fr;
+      }
       .layout { grid-template-columns: 1fr; }
       .menu-grid { grid-template-columns: 1fr; }
       .ingredient-panel-head { display: block; }
@@ -447,6 +941,99 @@
       .match-badge { margin-top: 8px; }
       .ingredient-match-grid { grid-template-columns: 1fr; }
       .ingredient-result dl { grid-template-columns: 1fr; }
+
+      .quick-start {
+        align-items: stretch;
+        flex-direction: column;
+      }
+      .quick-start-actions {
+        justify-content: flex-start;
+        min-width: 0;
+      }
+    }
+    @media (max-width: 700px) {
+      .home-hero-shell {
+        padding: 18px;
+      }
+      .home-hero-title {
+        font-size: 26px;
+      }
+      .home-hero-subtitle {
+        font-size: 13px;
+      }
+      .home-hero-actions {
+        align-items: stretch;
+        flex-direction: column;
+      }
+      .home-hero-button {
+        width: 100%;
+      }
+      .ingredient-flow-panel {
+        grid-template-columns: 1fr;
+      }
+      .ingredient-flow-panel::before {
+        top: 28px;
+        bottom: 28px;
+        left: 31px;
+        right: auto;
+        border-top: 0;
+        border-left: 1px dashed rgba(18, 184, 179, 0.45);
+      }
+      .ingredient-flow-step {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        column-gap: 12px;
+        align-items: start;
+      }
+      .ingredient-flow-badge {
+        grid-row: span 3;
+        margin-bottom: 0;
+      }
+      .recommend-card-dashboard {
+        padding: 12px;
+      }
+      .home-hero-trust-item {
+        justify-content: flex-start;
+        padding: 0 14px;
+      }
+      .home-carousel {
+        height: calc(100vw - 36px);
+        min-height: 280px;
+        padding: 0;
+      }
+      .home-slide {
+        inset: 0;
+      }
+      .home-slide img {
+        width: 100%;
+        height: 100%;
+      }
+      .home-carousel-control {
+        width: 30px;
+        height: 30px;
+        font-size: 20px;
+      }
+      .home-carousel-control.prev { left: 8px; }
+      .home-carousel-control.next { right: 8px; }
+      .home-carousel-dots { bottom: 8px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .home-slide,
+      .home-hero-highlight,
+      .home-hero-button,
+      .ingredient-flow-step,
+      .ingredient-flow-badge,
+      .ingredient-flow-step strong,
+      .home-hero-feature-card,
+      .home-hero-feature-card::before,
+      .home-hero-feature-badge {
+        transition: none;
+      }
+      .recommend-card-scan-line,
+      .recommend-card-bar span {
+        animation: none;
+      }
+
     }
   </style>
 </head>
@@ -454,7 +1041,7 @@
   <header class="app-header">
     <div class="header-inner">
       <div>
-        <h1>성분콕</h1>
+        <h1 class="brand-title"><a class="brand-link" href="/home"><img class="brand-logo" src="/static/assets/logo.png" alt="성분콕"></a></h1>
         <div class="header-desc">건강기능식품 추천 서비스</div>
       </div>
       <div class="nav-actions">
@@ -473,13 +1060,168 @@
   </header>
 
   <div class="wrap">
-    <div class="alert-box">
+    <section class="home-hero-shell" aria-label="성분콕 성분 분석 흐름" data-tour="home-intro">
+      <div class="home-hero-layout">
+        <div>
+          <p class="home-hero-kicker">INGREDIENT ANALYSIS FLOW</p>
+          <h2 class="home-hero-title">
+            건강기능식품 <span class="home-hero-highlight">성분</span>을 한눈에 분석하세요
+          </h2>
+          <p class="home-hero-subtitle">
+            제품 라벨을 업로드하면 <span class="home-hero-highlight">OCR</span>로 성분을 읽고,
+            <span class="home-hero-highlight">유사 제품</span>과 기능성 정보를 비교해드립니다.
+          </p>
+          <div class="home-hero-actions">
+            <a class="home-hero-button primary" href="/recommend/image">라벨 이미지로 분석하기</a>
+            <a class="home-hero-button secondary" href="/products">제품 DB에서 검색하기</a>
+          </div>
+        </div>
+
+        <div class="ingredient-flow-panel" aria-label="성분콕 분석 단계">
+          <article class="ingredient-flow-step">
+            <div class="ingredient-flow-badge" aria-hidden="true">UP</div>
+            <small>01</small>
+            <strong>라벨 업로드</strong>
+            <span>제품 라벨 또는 성분표 이미지를 선택합니다.</span>
+          </article>
+          <article class="ingredient-flow-step">
+            <div class="ingredient-flow-badge" aria-hidden="true">OCR</div>
+            <small>02</small>
+            <strong>OCR 인식</strong>
+            <span>이미지 속 성분명과 함량 정보를 읽어냅니다.</span>
+          </article>
+          <article class="ingredient-flow-step">
+            <div class="ingredient-flow-badge" aria-hidden="true">BAR</div>
+            <small>03</small>
+            <strong>성분 분석</strong>
+            <span>기능성 원료와 성분 구성을 정리합니다.</span>
+          </article>
+          <article class="ingredient-flow-step">
+            <div class="ingredient-flow-badge" aria-hidden="true">TOP</div>
+            <small>04</small>
+            <strong>유사 제품 추천</strong>
+            <span>성분 구성이 가까운 제품을 비교합니다.</span>
+          </article>
+        </div>
+
+        <aside class="recommend-card-dashboard" aria-label="예시 분석 결과 화면">
+          <p class="recommend-card-note">예시 분석 결과</p>
+          <div class="recommend-card-panel">
+            <h3>OCR 라벨 스캔</h3>
+            <div class="recommend-card-scan" aria-hidden="true">
+              <p class="recommend-card-scan-title">영양·기능정보</p>
+              <div class="recommend-card-scan-row"><span>비타민D</span><strong>10 μg</strong></div>
+              <div class="recommend-card-scan-row"><span>마그네슘</span><strong>100 mg</strong></div>
+              <div class="recommend-card-scan-row"><span>아연</span><strong>8.5 mg</strong></div>
+              <span class="recommend-card-scan-line"></span>
+            </div>
+          </div>
+          <div class="recommend-card-panel">
+            <h3>분석된 주요 성분</h3>
+            <div class="recommend-card-chip-row">
+              <span class="recommend-card-chip">비타민D</span>
+              <span class="recommend-card-chip">마그네슘</span>
+              <span class="recommend-card-chip">아연</span>
+              <span class="recommend-card-chip">셀레늄</span>
+            </div>
+          </div>
+          <div class="recommend-card-panel">
+            <h3>기능성 카테고리</h3>
+            <div class="recommend-card-chip-row">
+              <span class="recommend-card-chip">뼈 건강</span>
+              <span class="recommend-card-chip">면역 기능</span>
+              <span class="recommend-card-chip">에너지 대사</span>
+            </div>
+          </div>
+          <div class="recommend-card-panel">
+            <h3>유사 제품 추천 TOP3</h3>
+            <div class="recommend-card-item">
+              <span class="recommend-card-name">추천 제품 A</span>
+              <span class="recommend-card-percent">92%</span>
+              <span class="recommend-card-bar"><span style="width:92%"></span></span>
+            </div>
+            <div class="recommend-card-item">
+              <span class="recommend-card-name">추천 제품 B</span>
+              <span class="recommend-card-percent">87%</span>
+              <span class="recommend-card-bar"><span style="width:87%"></span></span>
+            </div>
+            <div class="recommend-card-item">
+              <span class="recommend-card-name">추천 제품 C</span>
+              <span class="recommend-card-percent">81%</span>
+              <span class="recommend-card-bar"><span style="width:81%"></span></span>
+            </div>
+          </div>
+        </aside>
+      </div>
+
+      <div class="home-hero-trust" aria-label="성분콕 신뢰 포인트">
+        <div class="home-hero-trust-item"><span aria-hidden="true">DATA</span> 공공데이터 기반</div>
+        <div class="home-hero-trust-item"><span aria-hidden="true">SAFE</span> 개인정보 보호</div>
+        <div class="home-hero-trust-item"><span aria-hidden="true">FAST</span> 빠른 성분 비교</div>
+      </div>
+    </section>
+
+    <section class="home-hero-feature-grid" aria-label="성분콕 핵심 기능">
+      <article class="home-hero-feature-card">
+        <div class="home-hero-feature-badge" aria-hidden="true">OCR</div>
+        <h3>OCR 성분 인식</h3>
+        <p>제품 라벨과 성분표 이미지를 기반으로 원료 정보를 추출합니다.</p>
+      </article>
+      <article class="home-hero-feature-card">
+        <div class="home-hero-feature-badge" aria-hidden="true">INFO</div>
+        <h3>기능성 원료 분석</h3>
+        <p>공공데이터 기반으로 주요 원료와 기능성 정보를 정리합니다.</p>
+      </article>
+      <article class="home-hero-feature-card">
+        <div class="home-hero-feature-badge" aria-hidden="true">TOP</div>
+        <h3>유사 제품 추천</h3>
+        <p>성분 구성과 기능성 카테고리를 기준으로 유사 제품을 비교합니다.</p>
+      </article>
+    </section>
+
+    <section class="home-visual" aria-label="성분콕 서비스 핵심 기능">
+      <div class="home-hero-gallery-head">
+        <h2>서비스 핵심 기능</h2>
+        <p>성분 분석, 공공데이터 비교, 유사 제품 추천 흐름을 이미지로 확인하세요.</p>
+      </div>
+      <div class="home-carousel" data-home-carousel>
+        <div class="home-slide is-active" data-carousel-slide aria-hidden="false">
+          <img src="/static/assets/home.png?v=20260605" alt="성분 분석부터 건강기능식품 맞춤 추천까지 이어지는 성분콕 서비스 흐름" decoding="async" fetchpriority="high">
+        </div>
+        <div class="home-slide" data-carousel-slide aria-hidden="true">
+          <img src="/static/assets/gonggond_data.png?v=20260605" alt="공공데이터 기반으로 건강기능식품 성분과 제품을 비교하는 성분콕 분석 화면" decoding="async">
+        </div>
+        <div class="home-slide" data-carousel-slide aria-hidden="true">
+          <img src="/static/assets/recommend.png?v=20260605" alt="나에게 맞는 건강기능식품을 성분 유사도와 기능성 정보로 추천하는 성분콕 화면" decoding="async">
+        </div>
+        <button class="home-carousel-control prev" type="button" aria-label="이전 배너" data-carousel-prev>&lsaquo;</button>
+        <button class="home-carousel-control next" type="button" aria-label="다음 배너" data-carousel-next>&rsaquo;</button>
+        <div class="home-carousel-dots" aria-label="배너 선택">
+          <button class="home-carousel-dot is-active" type="button" aria-label="1번 배너 보기" aria-current="true" data-carousel-dot="0"></button>
+          <button class="home-carousel-dot" type="button" aria-label="2번 배너 보기" data-carousel-dot="1"></button>
+          <button class="home-carousel-dot" type="button" aria-label="3번 배너 보기" data-carousel-dot="2"></button>
+        </div>
+      </div>
+    </section>
+
+    <section class="quick-start" data-tour="home-quick-start">
+      <div>
+        <h2>처음이라면 이미지 분석부터 시작하세요</h2>
+        <p>제품 라벨이나 성분표 사진이 있으면 OCR 분석으로 원료를 읽고 유사 제품을 바로 확인할 수 있습니다.</p>
+      </div>
+      <div class="quick-start-actions">
+        <a class="button" href="/recommend/image">이미지로 바로 분석하기</a>
+        <a class="button-secondary" href="/products">제품명으로 검색하기</a>
+      </div>
+    </section>
+
+    <div class="alert-box" data-tour="home-notice">
       공공데이터 기반 건강기능식품 분석 화면입니다. OCR 이미지 분석과 기존 제품 DB 조회를 각각 별도 화면으로 이동해서 사용할 수 있습니다.
     </div>
 
     <section class="layout">
       <div class="stack">
-        <section class="section-box">
+        <section class="section-box" data-tour="home-overview">
           <div class="section-caption">
             <div>
               <h2>서비스 개요</h2>
@@ -530,14 +1272,14 @@
             </div>
           </div>
           <div class="menu-grid">
-            <div class="menu-card">
+            <div class="menu-card" data-tour="home-ocr-card">
               <h3>OCR 이미지 분석</h3>
               <p>원재료명 또는 성분표 이미지를 업로드하고 OCR 결과를 검토한 뒤 원료를 수정하고 유사 제품을 추천받습니다.</p>
               <div class="button-row">
                 <a class="button" href="/recommend/image">OCR 기능 화면 이동</a>
               </div>
             </div>
-            <div class="menu-card">
+            <div class="menu-card" data-tour="home-products-card">
               <h3>기존 제품 목록 조회</h3>
               <p>공식 제품 DB에서 품목을 검색하고 상세 화면에서 제품 프로필과 유사 제품 TOP10을 조회합니다.</p>
               <div class="button-row">
@@ -563,7 +1305,7 @@
       </div>
 
       <div class="stack">
-        <section class="section-box">
+        <section class="section-box" data-tour="home-flow">
           <div class="section-caption">
             <div>
               <h2>사용 흐름</h2>
@@ -593,6 +1335,7 @@
       </div>
     </section>
   </div>
+
   <script>
     const ingredientInput = document.getElementById("ingredientSearchInput");
     const ingredientButton = document.getElementById("ingredientSearchButton");
@@ -729,5 +1472,117 @@
       }
     });
   </script>
+
+  <button class="tour-help-button" type="button" data-tour-launch="home">이용 방법</button>
+  <script>
+    window.SeongbunTourConfig = {
+      name: "home",
+      storageKey: "seongbunkok_home_tour_done",
+      autoStart: true,
+      autoDelayMs: 900,
+      steps: [
+        {
+          target: "[data-tour='home-intro']",
+          title: "성분콕 서비스 흐름을 먼저 확인하세요",
+          text: "성분콕은 성분표 이미지를 읽고 공공데이터 기반으로 비슷한 건강기능식품을 찾는 서비스입니다."
+        },
+        {
+          target: "[data-tour='home-quick-start']",
+          title: "처음이라면 이 두 버튼만 보면 됩니다",
+          text: "성분표 사진이 있으면 이미지 분석을, 제품명이 있으면 제품 검색을 선택하면 됩니다."
+        },
+        {
+          target: "[data-tour='home-ocr-card']",
+          title: "핵심 기능은 OCR 이미지 분석입니다",
+          text: "제품 라벨이나 성분표를 업로드한 뒤 원료를 확인하고 유사 제품 추천 결과를 볼 수 있습니다."
+        },
+        {
+          target: "[data-tour='home-products-card']",
+          title: "제품명으로도 검색할 수 있습니다",
+          text: "이미 알고 있는 제품이 있다면 공공데이터 제품 DB에서 검색하고 상세 정보를 확인하세요."
+        },
+        {
+          target: "[data-tour='home-flow']",
+          title: "전체 흐름은 네 단계입니다",
+          text: "이미지 업로드, OCR 결과 확인, 원료 수정, 추천 결과 검토 순서로 진행됩니다."
+        },
+        {
+          target: "[data-tour='home-notice']",
+          title: "추천 결과는 탐색 보조 정보입니다",
+          text: "섭취 결정 전에는 제품 표시사항과 개인 건강 상태를 함께 확인하는 것이 좋습니다."
+        }
+      ]
+    };
+  </script>
+  <script>
+    (() => {
+      const carousel = document.querySelector("[data-home-carousel]");
+      if (!carousel) return;
+
+      const slides = Array.from(carousel.querySelectorAll("[data-carousel-slide]"));
+      const dots = Array.from(carousel.querySelectorAll("[data-carousel-dot]"));
+      const prevButton = carousel.querySelector("[data-carousel-prev]");
+      const nextButton = carousel.querySelector("[data-carousel-next]");
+      const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const intervalMs = 6000;
+      let activeIndex = 0;
+      let timerId = null;
+
+      const setSlide = (index) => {
+        activeIndex = (index + slides.length) % slides.length;
+        slides.forEach((slide, slideIndex) => {
+          const isActive = slideIndex === activeIndex;
+          slide.classList.toggle("is-active", isActive);
+          slide.setAttribute("aria-hidden", isActive ? "false" : "true");
+        });
+        dots.forEach((dot, dotIndex) => {
+          const isActive = dotIndex === activeIndex;
+          dot.classList.toggle("is-active", isActive);
+          if (isActive) {
+            dot.setAttribute("aria-current", "true");
+          } else {
+            dot.removeAttribute("aria-current");
+          }
+        });
+      };
+
+      const stop = () => {
+        if (timerId) {
+          window.clearInterval(timerId);
+          timerId = null;
+        }
+      };
+
+      const start = () => {
+        if (reduceMotion || slides.length < 2) return;
+        stop();
+        timerId = window.setInterval(() => setSlide(activeIndex + 1), intervalMs);
+      };
+
+      prevButton.addEventListener("click", () => {
+        setSlide(activeIndex - 1);
+        start();
+      });
+      nextButton.addEventListener("click", () => {
+        setSlide(activeIndex + 1);
+        start();
+      });
+      dots.forEach((dot) => {
+        dot.addEventListener("click", () => {
+          setSlide(Number(dot.dataset.carouselDot));
+          start();
+        });
+      });
+      carousel.addEventListener("mouseenter", stop);
+      carousel.addEventListener("mouseleave", start);
+      carousel.addEventListener("focusin", stop);
+      carousel.addEventListener("focusout", start);
+
+      setSlide(0);
+      start();
+    })();
+  </script>
+  <script src="/static/js/onboarding.js?v=20260605" defer></script>
+
 </body>
 </html>

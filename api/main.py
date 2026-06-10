@@ -9,7 +9,8 @@ from urllib.parse import quote_plus
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from api.config import get_settings
@@ -36,6 +37,9 @@ service = RecommendationService()
 upload_service = UploadRecommendationService(service)
 ops_service = get_ops_service()
 templates = Jinja2Templates(directory=str(settings.templates_dir))
+static_dir = settings.root_dir / "api" / "static"
+static_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
 
 def _user_to_dict(user: Optional[AuthUser]) -> Optional[dict]:
@@ -182,6 +186,11 @@ async def audit_request_middleware(request: Request, call_next):
 def health() -> HealthResponse:
     service.health()
     return HealthResponse(status="ok", service=settings.service_name)
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon() -> FileResponse:
+    return FileResponse(static_dir / "assets" / "favicon.png", media_type="image/png")
 
 
 @app.get("/", response_class=HTMLResponse)

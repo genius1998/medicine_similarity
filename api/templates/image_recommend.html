@@ -4,6 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>성분콕</title>
+  <link rel="icon" type="image/png" href="/static/assets/favicon.png?v=transparent-20260605">
+  <link rel="apple-touch-icon" href="/static/assets/favicon.png?v=transparent-20260605">
+  <link rel="stylesheet" href="/static/css/brand.css">
+  <link rel="stylesheet" href="/static/css/onboarding.css?v=20260605">
   <style>
     :root {
       --bg: #f5f5f5;
@@ -33,7 +37,7 @@
     }
     .app-header {
       border-bottom: 1px solid var(--line-strong);
-      background: #f0f2f1;
+      background: #fefefe;
     }
     .header-inner {
       max-width: 1500px;
@@ -145,6 +149,264 @@
       display: grid;
       gap: 10px;
     }
+    .ocr-hero-shell {
+      border: 1px solid #d8eaf2;
+      border-radius: 6px;
+      background:
+        radial-gradient(circle at 20% 14%, rgba(18, 184, 179, 0.1), transparent 28%),
+        linear-gradient(135deg, #ffffff 0%, #f5fafc 100%);
+      padding: 22px;
+      margin-bottom: 12px;
+      overflow: hidden;
+    }
+    .ocr-hero-layout {
+      display: grid;
+      grid-template-columns: minmax(220px, 0.9fr) minmax(260px, 1fr) minmax(210px, 0.82fr);
+      gap: 18px;
+      align-items: center;
+    }
+    .ocr-hero-kicker {
+      margin: 0 0 8px;
+      color: #12b8b3;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+    }
+    .ocr-hero-title {
+      margin: 0;
+      color: #0b234a;
+      font-size: 28px;
+      line-height: 1.25;
+      font-weight: 800;
+      transition: transform 180ms ease, text-shadow 180ms ease;
+    }
+    .ocr-hero-title span {
+      color: #12b8b3;
+      transition: text-shadow 180ms ease;
+    }
+    .ocr-hero-shell:hover .ocr-hero-title,
+    .ocr-hero-shell:focus-within .ocr-hero-title {
+      transform: scale(1.01);
+      text-shadow: 0 7px 22px rgba(18, 184, 179, 0.12);
+    }
+    .ocr-hero-shell:hover .ocr-hero-title span,
+    .ocr-hero-shell:focus-within .ocr-hero-title span {
+      text-shadow: 0 0 18px rgba(18, 184, 179, 0.3);
+    }
+    .ocr-hero-subtitle {
+      margin: 10px 0 16px;
+      color: #475569;
+      font-size: 14px;
+      line-height: 1.65;
+    }
+    .ocr-hero-cta {
+      min-height: 42px;
+      border: 1px solid #0d938f;
+      border-radius: 4px;
+      padding: 0 16px;
+      background: #12b8b3;
+      color: #ffffff;
+      font-size: 14px;
+      font-weight: 800;
+      cursor: pointer;
+      box-shadow: 0 10px 24px rgba(18, 184, 179, 0.2);
+      transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease;
+    }
+    .ocr-hero-cta:hover,
+    .ocr-hero-cta:focus-visible {
+      background: #0ea7a2;
+      box-shadow: 0 14px 30px rgba(18, 184, 179, 0.28);
+      transform: translateY(-1px);
+      outline: none;
+    }
+    .ocr-hero-guide {
+      margin-top: 16px;
+      border: 1px solid #d8eaf2;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.86);
+      padding: 14px;
+      box-shadow: 0 8px 24px rgba(11, 35, 74, 0.08);
+      transition: transform 180ms ease, box-shadow 180ms ease;
+    }
+    .ocr-hero-guide:hover {
+      transform: scale(1.015);
+      box-shadow: 0 12px 30px rgba(11, 35, 74, 0.13);
+    }
+    .ocr-hero-guide strong {
+      display: block;
+      color: #0b234a;
+      font-size: 14px;
+      margin-bottom: 5px;
+    }
+    .ocr-hero-guide span {
+      color: #475569;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+    .ocr-hero-phone-wrap {
+      display: grid;
+      place-items: center;
+    }
+    .ocr-hero-phone {
+      position: relative;
+      width: min(250px, 100%);
+      aspect-ratio: 9 / 16;
+      border: 8px solid #0b234a;
+      border-radius: 28px;
+      background: linear-gradient(180deg, #eef7fb 0%, #ffffff 55%, #eaf4f8 100%);
+      box-shadow: 0 18px 42px rgba(11, 35, 74, 0.22);
+      overflow: hidden;
+    }
+    .ocr-hero-phone::before {
+      content: "";
+      position: absolute;
+      top: 8px;
+      left: 50%;
+      width: 82px;
+      height: 16px;
+      transform: translateX(-50%);
+      border-radius: 999px;
+      background: #0b234a;
+      z-index: 2;
+    }
+    .ocr-hero-label-card {
+      position: absolute;
+      left: 18px;
+      right: 18px;
+      top: 62px;
+      bottom: 62px;
+      border: 1px solid #c8dce7;
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.88);
+      padding: 16px 14px;
+      box-shadow: 0 10px 24px rgba(11, 35, 74, 0.12);
+    }
+    .ocr-hero-label-title {
+      margin: 0 0 12px;
+      color: #0b234a;
+      font-size: 15px;
+      font-weight: 800;
+      border-bottom: 2px solid #d8eaf2;
+      padding-bottom: 8px;
+    }
+    .ocr-hero-label-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      border-bottom: 1px solid #e4eef4;
+      padding: 7px 0;
+      color: #243b53;
+      font-size: 12px;
+      line-height: 1.3;
+    }
+    .ocr-hero-label-row span:last-child {
+      color: #0b234a;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .ocr-hero-scan-line {
+      position: absolute;
+      left: 10px;
+      right: 10px;
+      top: 74px;
+      height: 3px;
+      border-radius: 999px;
+      background: #12b8b3;
+      box-shadow: 0 0 12px rgba(18, 184, 179, 0.85), 0 0 28px rgba(18, 184, 179, 0.45);
+      animation: ocrHeroScan 3.4s ease-in-out infinite;
+      z-index: 3;
+    }
+    .ocr-hero-corner {
+      position: absolute;
+      width: 30px;
+      height: 30px;
+      border-color: rgba(255, 255, 255, 0.92);
+      z-index: 4;
+    }
+    .ocr-hero-corner.tl { top: 50px; left: 18px; border-top: 4px solid; border-left: 4px solid; border-radius: 8px 0 0; }
+    .ocr-hero-corner.tr { top: 50px; right: 18px; border-top: 4px solid; border-right: 4px solid; border-radius: 0 8px 0 0; }
+    .ocr-hero-corner.bl { bottom: 48px; left: 18px; border-bottom: 4px solid; border-left: 4px solid; border-radius: 0 0 0 8px; }
+    .ocr-hero-corner.br { bottom: 48px; right: 18px; border-bottom: 4px solid; border-right: 4px solid; border-radius: 0 0 8px; }
+    .ocr-hero-steps {
+      display: grid;
+      gap: 10px;
+    }
+    .ocr-hero-step-card {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 10px;
+      align-items: center;
+      border: 1px solid #d8eaf2;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.9);
+      padding: 12px;
+      box-shadow: 0 8px 22px rgba(11, 35, 74, 0.07);
+      transition: transform 170ms ease, box-shadow 170ms ease;
+    }
+    .ocr-hero-step-card:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 14px 30px rgba(11, 35, 74, 0.13);
+    }
+    .ocr-hero-step-badge {
+      width: 38px;
+      height: 38px;
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: #eef7fb;
+      color: #0b5e8e;
+      font-size: 18px;
+      transition: background 170ms ease, color 170ms ease;
+    }
+    .ocr-hero-step-card:hover .ocr-hero-step-badge {
+      background: #12b8b3;
+      color: #ffffff;
+    }
+    .ocr-hero-step-card strong {
+      display: block;
+      color: #0b234a;
+      font-size: 14px;
+      transition: transform 170ms ease;
+    }
+    .ocr-hero-step-card:hover strong {
+      transform: scale(1.02);
+    }
+    .ocr-hero-step-card span {
+      display: block;
+      color: #64748b;
+      font-size: 12px;
+      margin-top: 2px;
+      line-height: 1.45;
+    }
+    .ocr-hero-trust {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 18px;
+    }
+    .ocr-hero-trust-item {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      min-height: 56px;
+      border: 1px solid #d8eaf2;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.9);
+      color: #0b234a;
+      font-size: 13px;
+      font-weight: 800;
+      box-shadow: 0 8px 22px rgba(11, 35, 74, 0.07);
+    }
+    .ocr-hero-trust-icon {
+      color: #0b72b5;
+      font-size: 20px;
+    }
+    @keyframes ocrHeroScan {
+      0%, 100% { transform: translateY(0); opacity: 0.55; }
+      50% { transform: translateY(236px); opacity: 1; }
+    }
     .dropzone {
       border: 1px dashed #b9c4bd;
       border-radius: 4px;
@@ -152,15 +414,27 @@
       background: #fcfcfc;
       text-align: left;
       cursor: pointer;
+      transition: border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
     }
     .dropzone.dragover {
-      border-color: var(--accent);
-      background: #f3f8f5;
+      border-color: #12b8b3;
+      background: #effcfb;
+      box-shadow: 0 0 0 3px rgba(18, 184, 179, 0.12);
     }
     .dropzone strong {
       display: block;
       margin-bottom: 4px;
       font-size: 14px;
+    }
+    .dropzone-drag-message {
+      display: none;
+      margin-top: 6px;
+      color: #0d938f;
+      font-size: 13px;
+      font-weight: 800;
+    }
+    .dropzone.dragover .dropzone-drag-message {
+      display: block;
     }
     .file-picker-row,
     .upload-controls,
@@ -517,10 +791,40 @@
       transition: width 220ms ease;
     }
     @media (max-width: 1100px) {
+      .ocr-hero-layout {
+        grid-template-columns: minmax(0, 1fr) minmax(240px, 0.86fr);
+      }
+      .ocr-hero-steps {
+        grid-column: 1 / -1;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
       .layout { grid-template-columns: 1fr; }
     }
     @media (max-width: 760px) {
       .wrap { padding: 10px 10px 24px; }
+      .ocr-hero-shell {
+        padding: 16px;
+      }
+      .ocr-hero-layout {
+        grid-template-columns: 1fr;
+      }
+      .ocr-hero-title {
+        font-size: 23px;
+      }
+      .ocr-hero-cta {
+        width: 100%;
+      }
+      .ocr-hero-phone {
+        width: min(236px, 82vw);
+      }
+      .ocr-hero-steps,
+      .ocr-hero-trust {
+        grid-template-columns: 1fr;
+      }
+      .ocr-hero-trust-item {
+        justify-content: flex-start;
+        padding: 0 14px;
+      }
       .progress-strip { grid-template-columns: 1fr; }
       .debug-grid,
       .detail-grid {
@@ -533,6 +837,21 @@
       .summary-table colgroup,
       .data-table colgroup {
         display: none;
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .ocr-hero-title,
+      .ocr-hero-title span,
+      .ocr-hero-cta,
+      .ocr-hero-guide,
+      .ocr-hero-step-card,
+      .ocr-hero-step-badge,
+      .ocr-hero-step-card strong {
+        transition: none;
+      }
+      .ocr-hero-scan-line {
+        animation: none;
+        top: 52%;
       }
     }
   </style>
@@ -555,17 +874,17 @@
   </div>
   <header class="app-header">
     <div class="header-inner">
-      <h1>성분콕</h1>
+      <h1 class="brand-title"><a class="brand-link" href="/home"><img class="brand-logo" src="/static/assets/logo.png" alt="성분콕"></a></h1>
       <p>건강기능식품 추천 서비스. OCR 결과를 검토하고 원료를 수정한 뒤 기존 제품 DB 기준 추천 결과를 비교하는 조회 화면입니다.</p>
     </div>
   </header>
 
   <div class="wrap">
-    <div class="caution-banner">
+    <div class="caution-banner" data-tour="ocr-intro">
       이미지는 원재료명 또는 성분표 위주로 업로드해야 합니다. 광고 문구가 많은 이미지에서는 OCR 파싱 품질이 낮아질 수 있습니다.
     </div>
 
-    <nav class="progress-strip" aria-label="분석 단계">
+    <nav class="progress-strip" aria-label="분석 단계" data-tour="ocr-stepper">
       <div class="progress-step is-active"><span class="step-index">1</span><span>이미지 업로드</span></div>
       <div class="progress-step"><span class="step-index">2</span><span>OCR 확인</span></div>
       <div class="progress-step"><span class="step-index">3</span><span>원료 수정</span></div>
@@ -574,7 +893,60 @@
 
     <section class="layout">
       <div class="stack">
-        <section class="card">
+        <section class="card" data-tour="ocr-upload-card">
+          <section class="ocr-hero-shell" aria-label="OCR 업로드 안내" data-tour="ocr-photo-guide">
+            <div class="ocr-hero-layout">
+              <div class="ocr-hero-copy">
+                <p class="ocr-hero-kicker">OCR LABEL SCAN</p>
+                <h2 class="ocr-hero-title">제품 라벨을 촬영해 <span>업로드</span>하세요</h2>
+                <p class="ocr-hero-subtitle">라벨 또는 성분표를 선명하게 찍어주세요. 글자가 또렷할수록 원료 추출과 추천 결과가 안정적입니다.</p>
+                <button class="ocr-hero-cta" id="ocrHeroUploadButton" type="button">라벨 이미지 업로드하기</button>
+                <div class="ocr-hero-guide">
+                  <strong>OCR로 성분을 분석해드려요</strong>
+                  <span>라벨이 선명할수록 결과가 좋아져요. 성분표가 잘리지 않도록 정면에서 촬영해주세요.</span>
+                </div>
+              </div>
+
+              <div class="ocr-hero-phone-wrap" aria-hidden="true">
+                <div class="ocr-hero-phone">
+                  <div class="ocr-hero-label-card">
+                    <p class="ocr-hero-label-title">영양·기능정보</p>
+                    <div class="ocr-hero-label-row"><span>비타민D</span><span>10 μg</span></div>
+                    <div class="ocr-hero-label-row"><span>비타민B6</span><span>1.5 mg</span></div>
+                    <div class="ocr-hero-label-row"><span>마그네슘</span><span>100 mg</span></div>
+                    <div class="ocr-hero-label-row"><span>아연</span><span>8.5 mg</span></div>
+                    <div class="ocr-hero-label-row"><span>셀레늄</span><span>55 μg</span></div>
+                  </div>
+                  <div class="ocr-hero-scan-line"></div>
+                  <div class="ocr-hero-corner tl"></div>
+                  <div class="ocr-hero-corner tr"></div>
+                  <div class="ocr-hero-corner bl"></div>
+                  <div class="ocr-hero-corner br"></div>
+                </div>
+              </div>
+
+              <div class="ocr-hero-steps" aria-label="OCR 진행 단계">
+                <div class="ocr-hero-step-card">
+                  <span class="ocr-hero-step-badge">1</span>
+                  <div><strong>이미지 업로드</strong><span>라벨 또는 성분표 사진을 선택합니다.</span></div>
+                </div>
+                <div class="ocr-hero-step-card">
+                  <span class="ocr-hero-step-badge">2</span>
+                  <div><strong>OCR 인식</strong><span>이미지 속 원료 텍스트를 읽습니다.</span></div>
+                </div>
+                <div class="ocr-hero-step-card">
+                  <span class="ocr-hero-step-badge">3</span>
+                  <div><strong>성분 분석</strong><span>공공데이터 기준으로 유사 제품을 찾습니다.</span></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="ocr-hero-trust" aria-label="업로드 신뢰 포인트">
+              <div class="ocr-hero-trust-item"><span class="ocr-hero-trust-icon">✓</span><span>정확하고 안전한 분석</span></div>
+              <div class="ocr-hero-trust-item"><span class="ocr-hero-trust-icon">▣</span><span>개인정보 보호</span></div>
+              <div class="ocr-hero-trust-item"><span class="ocr-hero-trust-icon">↗</span><span>빠르고 간편한 업로드</span></div>
+            </div>
+          </section>
           <div class="section-caption">
             <div>
               <h2>이미지 업로드</h2>
@@ -587,9 +959,10 @@
               <label for="fileInput" class="ghost-button">파일 선택</label>
               <span class="hint-text" id="fileMeta">선택된 파일이 없습니다.</span>
             </div>
-            <label class="dropzone" id="dropzone" for="fileInput">
+            <label class="dropzone" id="dropzone" for="fileInput" data-tour="ocr-dropzone">
               <strong>이미지 파일을 드래그하거나 붙여넣기(Ctrl+V) 하세요.</strong>
               <span class="subtext">원재료명 영역이 선명한 이미지를 권장합니다.</span>
+              <span class="dropzone-drag-message">이미지를 여기에 놓아주세요</span>
             </label>
             <input id="fileInput" type="file" accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp">
             <div class="api-base-row">
@@ -598,7 +971,7 @@
             </div>
             <div class="helper-note">이미지 업로드 후 OCR 분석이 실행됩니다. 결과가 부정확하면 아래 원료 수정 영역에서 직접 정정한 뒤 재추천할 수 있습니다.</div>
             <div class="upload-controls">
-              <button id="analyzeButton" disabled>분석 실행</button>
+              <button id="analyzeButton" data-tour="ocr-analyze-button" disabled>분석 실행</button>
               <button class="ghost-button" id="resetButton" type="button">초기화</button>
             </div>
             <div class="preview-wrap" id="previewWrap" hidden>
@@ -609,7 +982,7 @@
           </div>
         </section>
 
-        <section class="card">
+        <section class="card" data-tour="ocr-result-card">
           <div class="section-caption">
             <div>
               <h2>OCR 결과 확인</h2>
@@ -620,7 +993,7 @@
           <div id="resultPanel" class="empty-panel">이미지를 분석하면 OCR 결과와 추정 프로필이 여기에 표시됩니다.</div>
         </section>
 
-        <section class="card">
+        <section class="card" data-tour="ocr-ingredient-card">
           <div class="section-caption">
             <div>
               <h2>원료 수정</h2>
@@ -638,7 +1011,7 @@
       </div>
 
       <div class="stack">
-        <section class="card">
+        <section class="card" data-tour="ocr-recommendation-card">
           <div class="section-caption">
             <div>
               <h2>추천 결과 TOP10</h2>
@@ -654,6 +1027,7 @@
       </div>
     </section>
   </div>
+  <button class="tour-help-button" type="button" data-tour-launch="ocr">이용 방법</button>
 
   <script>
     const defaultApiBase = "{{ api_base_url or '' }}";
@@ -677,6 +1051,7 @@
     };
 
     const fileInput = document.getElementById("fileInput");
+    const ocrHeroUploadButton = document.getElementById("ocrHeroUploadButton");
     const dropzone = document.getElementById("dropzone");
     const previewWrap = document.getElementById("previewWrap");
     const previewImage = document.getElementById("previewImage");
@@ -1835,8 +2210,62 @@
       }
     });
     analyzeButton.addEventListener("click", () => recommendByImage(false));
+    if (ocrHeroUploadButton) {
+      ocrHeroUploadButton.addEventListener("click", () => fileInput.click());
+    }
     llmRerankButton.addEventListener("click", rerankCurrentRecommendations);
     resetButton.addEventListener("click", resetAll);
   </script>
+  <script>
+    window.SeongbunTourConfig = {
+      name: "ocr",
+      storageKey: "seongbunkok_ocr_tour_done",
+      autoStart: true,
+      autoDelayMs: 900,
+      steps: [
+        {
+          target: "[data-tour='ocr-intro']",
+          title: "OCR 이미지 분석 화면입니다",
+          text: "제품 라벨이나 성분표 이미지를 올리면 원료명을 읽고 유사 제품을 추천합니다."
+        },
+        {
+          target: "[data-tour='ocr-stepper']",
+          title: "분석은 네 단계로 진행됩니다",
+          text: "이미지 업로드, OCR 확인, 원료 수정, 추천 결과 순서로 현재 위치를 확인할 수 있습니다."
+        },
+        {
+          target: "[data-tour='ocr-photo-guide']",
+          title: "좋은 사진일수록 결과가 좋아집니다",
+          text: "글자가 선명하고 성분표가 잘리지 않은 사진을 사용하면 OCR 인식률이 높아집니다."
+        },
+        {
+          target: "[data-tour='ocr-dropzone']",
+          title: "이미지를 여기에 올려주세요",
+          text: "파일을 선택하거나 드래그 앤 드롭, 붙여넣기(Ctrl+V)로 이미지를 넣을 수 있습니다."
+        },
+        {
+          target: "[data-tour='ocr-analyze-button']",
+          title: "파일 선택 후 분석을 실행합니다",
+          text: "이미지를 선택하면 분석 실행 버튼이 활성화되고 OCR 분석이 시작됩니다."
+        },
+        {
+          target: "[data-tour='ocr-result-card']",
+          title: "OCR 결과를 먼저 확인하세요",
+          text: "이미지에서 읽은 텍스트, 추정 제품 정보, 추출 원료 후보가 이 영역에 표시됩니다."
+        },
+        {
+          target: "[data-tour='ocr-ingredient-card']",
+          title: "원료는 직접 수정할 수 있습니다",
+          text: "잘못 인식된 원료는 고치고, 빠진 원료는 추가한 뒤 수정한 원료 기준으로 다시 추천받을 수 있습니다."
+        },
+        {
+          target: "[data-tour='ocr-recommendation-card']",
+          title: "추천 결과를 해석합니다",
+          text: "유사도 점수, 공통 원료, 차이 원료, 추천 이유를 함께 확인하면 결과를 더 쉽게 이해할 수 있습니다."
+        }
+      ]
+    };
+  </script>
+  <script src="/static/js/onboarding.js?v=20260605" defer></script>
 </body>
 </html>
