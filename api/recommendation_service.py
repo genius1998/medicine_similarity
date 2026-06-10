@@ -1185,15 +1185,20 @@ class RecommendationService:
             ml_results = predict_quality_batch(ml_input_rows)
             for item, ml in zip(rows, ml_results):
                 item.update(ml)
-            # Filter mode: remove weak recommendations
+            # Filter mode: remove weak recommendations, keep filtered list for transparency
+            filtered = [
+                item for item, ml in zip(rows, ml_results)
+                if should_filter_recommendation(ml)
+            ]
             rows = [
                 item for item, ml in zip(rows, ml_results)
                 if not should_filter_recommendation(ml)
             ]
+            return rows, filtered
         except Exception:
             pass  # ML errors never affect production results
 
-        return rows
+        return rows, []
 
     def _candidate_summary_for_llm(self, recommendation: dict) -> dict:
         target_report_no = str(recommendation.get("target_report_no", "") or "")
@@ -1306,7 +1311,7 @@ class RecommendationService:
                     self._convert_cache_row(row, idx, base_profile)
                     for idx, row in enumerate(cached_rows, start=1)
                 ]
-                recommendations = self._display_eligible_recommendations(raw_recommendations, top_k)
+                recommendations, filtered_recommendations = self._display_eligible_recommendations(raw_recommendations, top_k)
                 if llm_rerank:
                     try:
                         recommendations, llm_rerank_applied, _ = self._maybe_rerank_with_llm(
@@ -1325,6 +1330,7 @@ class RecommendationService:
                         "primary_ingredients": list(base_profile.get("primary_ingredients", [])),
                     },
                     "recommendations": recommendations,
+                    "filtered_recommendations": filtered_recommendations,
                     "cache_used": True,
                     "similarity_algorithm": similarity_algorithm,
                     "llm_rerank_applied": llm_rerank_applied,
@@ -1353,7 +1359,7 @@ class RecommendationService:
                 self._convert_cache_row(row, idx, base_profile)
                 for idx, row in enumerate(rows, start=1)
             ]
-            recommendations = self._display_eligible_recommendations(raw_recommendations, top_k)
+            recommendations, filtered_recommendations = self._display_eligible_recommendations(raw_recommendations, top_k)
             if llm_rerank:
                 try:
                     recommendations, llm_rerank_applied, _ = self._maybe_rerank_with_llm(
@@ -1372,6 +1378,7 @@ class RecommendationService:
                     "primary_ingredients": list(base_profile.get("primary_ingredients", [])),
                 },
                 "recommendations": recommendations,
+                "filtered_recommendations": filtered_recommendations,
                 "cache_used": False,
                 "similarity_algorithm": similarity_algorithm,
                 "llm_rerank_applied": llm_rerank_applied,

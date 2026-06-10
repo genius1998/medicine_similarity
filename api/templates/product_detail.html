@@ -499,8 +499,17 @@
       }
     }
 
+    function mlBadgeHtml(item) {
+      const prob = item.ml_weak_probability;
+      if (prob == null) return '';
+      const pct = (prob * 100).toFixed(1);
+      const color = prob >= 0.834 ? '#d9534f' : prob >= 0.5 ? '#f0ad4e' : '#5cb85c';
+      return `<span style="display:inline-block;padding:1px 6px;border-radius:10px;background:${color};color:#fff;font-size:11px;font-weight:600;margin-left:4px;" title="ML 약한추천 확률">ML ${pct}%</span>`;
+    }
+
     function renderDetail(detail, profile, similar) {
       const recommendations = (similar && similar.recommendations) ? similar.recommendations : [];
+      const filteredRecs = (similar && similar.filtered_recommendations) ? similar.filtered_recommendations : [];
       const llmRerankApplied = !!(similar && similar.llm_rerank_applied);
       const llmRerankError = (similar && similar.llm_rerank_error) ? String(similar.llm_rerank_error) : "";
       const helperNote = llmRerankApplied
@@ -549,11 +558,11 @@
       if (!recommendations.length) {
         html.push('<div class="empty-panel">현재 이 제품에는 유사 제품 추천 결과가 없습니다.</div>');
       } else {
-        html.push('<div class="table-wrap"><table class="data-table"><thead><tr><th>순위</th><th>제품명</th><th>report_no</th><th>카테고리</th><th>유사도</th><th>등급</th><th>일치 원료</th><th>상세</th></tr></thead><tbody>');
+        html.push('<div class="table-wrap"><table class="data-table"><thead><tr><th>순위</th><th>제품명</th><th>report_no</th><th>카테고리</th><th>유사도</th><th>ML 약한추천확률</th><th>등급</th><th>일치 원료</th><th>상세</th></tr></thead><tbody>');
         recommendations.forEach((item) => {
           const detailId = `rec-detail-${makeDomId(item.target_report_no || item.rank)}`;
-          html.push(`<tr><td>${escapeHtml(item.rank || "-")}</td><td><strong>${escapeHtml(item.target_product_name || "-")}</strong></td><td>${escapeHtml(item.target_report_no || "-")}</td><td>${escapeHtml(item.target_product_main_category || "-")}</td><td>${formatScore(item.similarity_score)}</td><td><span class="sub-badge ${badgeClass(item.substitutability)}">${escapeHtml(item.substitutability || "-")}</span></td><td>${renderChips((item.shared_ingredients || []).slice(0, 4))}</td><td><a href="#${detailId}">보기</a></td></tr>`);
-          html.push('<tr><td colspan="8" style="padding:0; border-bottom:1px solid #d9d9d9;">');
+          html.push(`<tr><td>${escapeHtml(item.rank || "-")}</td><td><strong>${escapeHtml(item.target_product_name || "-")}</strong></td><td>${escapeHtml(item.target_report_no || "-")}</td><td>${escapeHtml(item.target_product_main_category || "-")}</td><td>${formatScore(item.similarity_score)}</td><td>${mlBadgeHtml(item)}</td><td><span class="sub-badge ${badgeClass(item.substitutability)}">${escapeHtml(item.substitutability || "-")}</span></td><td>${renderChips((item.shared_ingredients || []).slice(0, 4))}</td><td><a href="#${detailId}">보기</a></td></tr>`);
+          html.push('<tr><td colspan="9" style="padding:0; border-bottom:1px solid #d9d9d9;">');
           html.push(`<details class="row-detail" id="${detailId}" ${Number(item.rank) === 1 ? "open" : ""}>`);
           html.push(`<summary>${escapeHtml(item.target_product_name || "-")} 상세 정보</summary>`);
           html.push('<div class="detail-grid">');
@@ -563,10 +572,23 @@
           html.push(`<div class="detail-block"><div class="label">추가 원료</div><div class="value chip-row">${renderChips(item.target_other_ingredients || [])}</div></div>`);
           html.push(`<div class="detail-block"><div class="label">추천 이유</div><div class="value">${escapeHtml(item.reason || "-")}</div></div>`);
           html.push(`<div class="detail-block"><div class="label">기존 유사도 점수 참고</div><div class="value">${formatScore(item.similarity_score)}</div></div>`);
+          html.push(`<div class="detail-block"><div class="label">ML 약한추천 확률</div><div class="value">${item.ml_weak_probability != null ? (item.ml_weak_probability * 100).toFixed(2) + '%' : '-'} ${mlBadgeHtml(item)}</div></div>`);
+          html.push(`<div class="detail-block"><div class="label">ML 품질 점수</div><div class="value">${item.ml_quality_score != null ? (item.ml_quality_score * 100).toFixed(1) + '점' : '-'}</div></div>`);
           html.push(`<div class="detail-block"><div class="label">주의 문구</div><div class="value">${escapeHtml(item.caution || "-")}</div></div>`);
           html.push('</div></details></td></tr>');
         });
         html.push('</tbody></table></div>');
+
+        // 필터링된 추천 섹션
+        if (filteredRecs.length > 0) {
+          html.push('<details style="margin-top:16px;border:1px solid #f0c0c0;border-radius:6px;padding:8px 12px;background:#fff8f8;">');
+          html.push(`<summary style="cursor:pointer;font-weight:600;color:#c0392b;">🚫 ML 필터로 제거된 추천 ${filteredRecs.length}건 (임계값 83.4% 초과)</summary>`);
+          html.push('<div class="table-wrap" style="margin-top:8px;"><table class="data-table"><thead><tr><th>원래순위</th><th>제품명</th><th>report_no</th><th>카테고리</th><th>유사도</th><th>ML 약한추천확률</th></tr></thead><tbody>');
+          filteredRecs.forEach((item) => {
+            html.push(`<tr style="opacity:0.7;"><td>${escapeHtml(item.rank || "-")}</td><td><strong>${escapeHtml(item.target_product_name || "-")}</strong></td><td>${escapeHtml(item.target_report_no || "-")}</td><td>${escapeHtml(item.target_product_main_category || "-")}</td><td>${formatScore(item.similarity_score)}</td><td>${mlBadgeHtml(item)}</td></tr>`);
+          });
+          html.push('</tbody></table></div></details>');
+        }
       }
 
       html.push('</section>');
