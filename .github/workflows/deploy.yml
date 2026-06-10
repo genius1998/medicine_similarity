@@ -74,7 +74,18 @@ jobs:
             # 5. 서비스 재시작
             echo "=== restart medicine-api ==="
             sudo systemctl restart medicine-api
-            sleep 2
-            sudo systemctl status medicine-api --no-pager
+            sleep 3
+
+            echo "=== service status ==="
+            sudo systemctl status medicine-api --no-pager || true
+
+            echo "=== 최근 로그 (에러 원인 확인) ==="
+            sudo journalctl -u medicine-api -n 50 --no-pager || true
+
+            # 서비스가 실제로 running 상태인지 확인
+            if ! systemctl is-active --quiet medicine-api; then
+              echo "ERROR: medicine-api service failed to start. See logs above."
+              exit 1
+            fi
 
             echo "=== deploy complete ==="
