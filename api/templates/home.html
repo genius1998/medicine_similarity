@@ -1045,15 +1045,12 @@
         <div class="header-desc">건강기능식품 추천 서비스</div>
       </div>
       <div class="nav-actions">
-        {% if current_user %}
-        <span class="hint-text">{{ current_user.email }}{% if current_user.role == 'admin' %} / 관리자{% endif %}</span>
-        {% if current_user.role == 'admin' %}<a class="button-secondary" href="/admin">관리자 화면</a>{% endif %}
+        {% if current_user and current_user.role == 'admin' %}
+        <span class="hint-text">{{ current_user.email }} / 관리자</span>
+        <a class="button-secondary" href="/admin">관리자 화면</a>
         <form method="post" action="/logout" style="margin:0;">
           <button class="button-secondary" type="submit">로그아웃</button>
         </form>
-        {% else %}
-        <a class="button-secondary" href="/login">로그인</a>
-        <a class="button" href="/signup">회원가입</a>
         {% endif %}
       </div>
     </div>
@@ -1315,23 +1312,21 @@
           <ul>
             <li>OCR 기능 화면: 이미지 업로드 → OCR 결과 확인 → 원료 수정 → 추천 결과 검토</li>
             <li>기존 제품 목록 화면: 품목 검색 → 제품 상세 조회 → 유사 제품 추천 검토</li>
-            <li>로그인 후 OCR 기능 화면, 제품 목록 화면, 관리자 화면 접근 권한이 구분됩니다.</li>
           </ul>
         </section>
 
+        {% if current_user and current_user.role == 'admin' %}
         <section class="section-box">
           <div class="section-caption">
             <div>
-              <h2>계정 화면</h2>
-              <div class="hint-text">서비스 접근용 기본 화면</div>
+              <h2>관리자 화면</h2>
             </div>
           </div>
           <div class="button-row">
-            <a class="button-secondary" href="/login">로그인 화면</a>
-            <a class="button" href="/signup">회원가입 화면</a>
-            {% if current_user and current_user.role == 'admin' %}<a class="button-secondary" href="/admin">관리자 화면</a>{% endif %}
+            <a class="button-secondary" href="/admin">관리자 화면</a>
           </div>
         </section>
+        {% endif %}
       </div>
     </section>
   </div>

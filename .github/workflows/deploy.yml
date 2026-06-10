@@ -1,0 +1,55 @@
+name: Deploy to EC2
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -e
+
+            # 프로젝트 디렉토리로 이동 (일반적인 경로 두 가지 시도)
+            if [ -d "/home/ubuntu/medicine_similarity_repo" ]; then
+              cd /home/ubuntu/medicine_similarity_repo
+            elif [ -d "/home/ubuntu/medicine_similarity" ]; then
+              cd /home/ubuntu/medicine_similarity
+            else
+              echo "ERROR: project directory not found" && exit 1
+            fi
+
+            echo "=== git pull ==="
+            git pull origin main
+
+            echo "=== install dependencies (if changed) ==="
+            if [ -f ".venv/bin/activate" ]; then
+              source .venv/bin/activate
+              pip install -q -r requirements_api.txt
+            fi
+
+            echo "=== restart service ==="
+            # systemd 서비스가 있으면 사용, 없으면 프로세스 직접 재시작
+            if systemctl list-units --type=service | grep -qE "medicine|uvicorn|api"; then
+              SERVICE=$(systemctl list-units --type=service | grep -oE "[a-z_-]*(medicine|uvicorn|api)[a-z_-]*\.service" | head -1)
+              echo "Restarting systemd service: $SERVICE"
+              sudo systemctl restart "$SERVICE"
+            else
+              echo "No systemd service found. Restarting uvicorn process directly..."
+              pkill -f "uvicorn api.main:app" || true
+              sleep 1
+              source .venv/bin/activate
+              nohup uvicorn api.main:app --host 0.0.0.0 --port 8000 > logs/uvicorn.log 2>&1 &
+              echo "uvicorn restarted (PID: $!)"
+            fi
+
+            echo "=== deploy complete ==="

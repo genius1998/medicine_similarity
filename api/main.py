@@ -312,25 +312,16 @@ def logout_submit(request: Request):
 
 @app.get("/products", response_class=HTMLResponse)
 def products_page(request: Request) -> HTMLResponse:
-    user = require_page_user(request)
-    if not user:
-        return login_redirect()
     return templates.TemplateResponse(request, "products.html", template_context(request))
 
 
 @app.get("/products/{report_no}", response_class=HTMLResponse)
 def product_detail_page(request: Request, report_no: str) -> HTMLResponse:
-    user = require_page_user(request)
-    if not user:
-        return login_redirect()
     return templates.TemplateResponse(request, "product_detail.html", template_context(request, report_no=report_no))
 
 
 @app.get("/recommend/image", response_class=HTMLResponse)
 def image_recommend_page(request: Request) -> HTMLResponse:
-    user = require_page_user(request)
-    if not user:
-        return login_redirect()
     return templates.TemplateResponse(
         request,
         "image_recommend.html",
@@ -351,17 +342,11 @@ def ocr_recommend_page(request: Request) -> HTMLResponse:
 
 @app.get("/tools/ingredient-rag", response_class=HTMLResponse)
 def ingredient_rag_tool_page(request: Request) -> HTMLResponse:
-    user = require_page_user(request)
-    if not user:
-        return login_redirect()
     return templates.TemplateResponse(request, "ingredient_rag_tool.html", template_context(request))
 
 
 @app.get("/tools/ocr-review", response_class=HTMLResponse)
 def ocr_review_tool_page(request: Request) -> HTMLResponse:
-    user = require_page_user(request)
-    if not user:
-        return login_redirect()
     return templates.TemplateResponse(request, "ocr_review_tool.html", template_context(request))
 
 
@@ -551,13 +536,11 @@ def list_catalog_products(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
 ) -> dict:
-    require_api_user(request)
     return service.list_catalog_products(q, page, page_size)
 
 
 @app.get("/api/catalog/products/{report_no}")
 def get_catalog_product_detail(request: Request, report_no: str) -> dict:
-    require_api_user(request)
     detail = service.get_catalog_product_detail(report_no)
     if not detail:
         raise HTTPException(status_code=404, detail=f"report_no not found: {report_no}")
@@ -587,7 +570,6 @@ def list_ingredients(
 
 @app.get("/api/products/search", response_model=ProductSearchResponse)
 def search_products(request: Request, q: str = Query(..., min_length=1), limit: int = Query(20, ge=1, le=100)) -> ProductSearchResponse:
-    require_api_user(request)
     results = service.search_products(q, limit)
     items = [
         ProductSearchItem(
@@ -607,7 +589,6 @@ def search_products(request: Request, q: str = Query(..., min_length=1), limit: 
 
 @app.get("/api/products/{report_no}/profile", response_model=ProductProfileResponse)
 def get_product_profile(request: Request, report_no: str) -> ProductProfileResponse:
-    require_api_user(request)
     profile = service.get_profile_by_report_no(report_no)
     if not profile:
         raise HTTPException(status_code=404, detail=f"report_no not found: {report_no}")
@@ -665,7 +646,7 @@ def get_similar_products(
     llm_rerank: bool = Query(False),
     similarity_algorithm: str = Query("v2"),
 ) -> RecommendationResponse:
-    user = require_api_user(request)
+    user = get_current_user(request)
     try:
         payload = service.get_similar_products(report_no, top_k, candidate_limit, force_refresh, llm_rerank, similarity_algorithm)
     except KeyError as exc:
@@ -675,7 +656,7 @@ def get_similar_products(
     ops_service.log_event(
         event_type="product_similarity_lookup",
         level="info",
-        user_id=user.user_id,
+        user_id=user.user_id if user else None,
         request_path=f"/api/products/{report_no}/similar",
         request_method="GET",
         status_code=200,
@@ -702,7 +683,7 @@ def get_similar_products(
 
 @app.post("/api/recommend/by-ingredients", response_model=UploadRecommendationResponse)
 def recommend_by_ingredients(request: Request, payload_in: IngredientRecommendationRequest) -> UploadRecommendationResponse:
-    user = require_api_user(request)
+    user = get_current_user(request)
     ingredients = coerce_ingredient_request_payload(payload_in.ingredients, payload_in.raw_ingredients)
     payload = upload_service.recommend_from_ingredients(
         ingredients,
@@ -713,7 +694,7 @@ def recommend_by_ingredients(request: Request, payload_in: IngredientRecommendat
         request_id=payload_in.request_id,
     )
     ops_service.save_ocr_review(
-        user_id=user.user_id,
+        user_id=user.user_id if user else None,
         source_type="ingredients",
         response_payload=payload,
         edited_ingredients=ingredients,
@@ -723,7 +704,7 @@ def recommend_by_ingredients(request: Request, payload_in: IngredientRecommendat
     ops_service.log_event(
         event_type="ocr_recommend",
         level="info",
-        user_id=user.user_id,
+        user_id=user.user_id if user else None,
         request_path="/api/recommend/by-ingredients",
         request_method="POST",
         message="edited ingredient rerank",
@@ -734,7 +715,7 @@ def recommend_by_ingredients(request: Request, payload_in: IngredientRecommendat
 
 @app.post("/api/recommend/by-ocr-text", response_model=UploadRecommendationResponse)
 def recommend_by_ocr_text(request: Request, payload_in: OCRTextRecommendationRequest) -> UploadRecommendationResponse:
-    user = require_api_user(request)
+    user = get_current_user(request)
     payload = upload_service.recommend_from_ocr_text(
         payload_in.ocr_text,
         payload_in.top_k,
@@ -742,11 +723,11 @@ def recommend_by_ocr_text(request: Request, payload_in: OCRTextRecommendationReq
         llm_rerank=payload_in.llm_rerank,
         request_id=payload_in.request_id,
     )
-    ops_service.save_ocr_review(user_id=user.user_id, source_type="ocr_text", response_payload=payload)
+    ops_service.save_ocr_review(user_id=user.user_id if user else None, source_type="ocr_text", response_payload=payload)
     ops_service.log_event(
         event_type="ocr_recommend",
         level="info",
-        user_id=user.user_id,
+        user_id=user.user_id if user else None,
         request_path="/api/recommend/by-ocr-text",
         request_method="POST",
         message="ocr text recommend",
@@ -764,7 +745,7 @@ async def recommend_by_image(
     llm_rerank: bool = Form(False),
     request_id: str = Form(""),
 ) -> UploadRecommendationResponse:
-    user = require_api_user(request)
+    user = get_current_user(request)
     filename = str(file.filename or "upload.jpg")
     suffix = filename[filename.rfind(".") :].lower() if "." in filename else ""
     if suffix not in settings.upload_allowed_extensions:
@@ -784,11 +765,11 @@ async def recommend_by_image(
             llm_rerank=llm_rerank,
             request_id=request_id,
         )
-        ops_service.save_ocr_review(user_id=user.user_id, source_type="image", response_payload=payload)
+        ops_service.save_ocr_review(user_id=user.user_id if user else None, source_type="image", response_payload=payload)
         ops_service.log_event(
             event_type="ocr_recommend",
             level="info",
-            user_id=user.user_id,
+            user_id=user.user_id if user else None,
             request_path="/api/recommend/by-image",
             request_method="POST",
             message=f"image recommend:{filename}",
@@ -802,7 +783,6 @@ async def recommend_by_image(
 
 @app.get("/api/recommend/progress/{request_id}")
 def recommend_progress(request: Request, request_id: str) -> dict:
-    require_api_user(request)
     return get_request_progress(request_id)
 
 
@@ -811,5 +791,4 @@ def ingredient_rag_debug_api(
     request: Request,
     ingredient: str = Query(..., min_length=1),
 ) -> dict:
-    require_api_user(request)
     return upload_service.debug_ingredient_match(ingredient)
