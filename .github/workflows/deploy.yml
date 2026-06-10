@@ -19,14 +19,20 @@ jobs:
           script: |
             set -e
 
-            # 프로젝트 디렉토리로 이동
-            if [ -d "/home/ubuntu/medicine_similarity_repo" ]; then
-              cd /home/ubuntu/medicine_similarity_repo
-            elif [ -d "/home/ubuntu/medicine_similarity" ]; then
-              cd /home/ubuntu/medicine_similarity
-            else
+            # 프로젝트 디렉토리 자동 탐색 (git remote가 medicine_similarity인 폴더)
+            PROJECT_DIR=$(find /home/ubuntu /srv /opt /var/www 2>/dev/null -maxdepth 4 -name ".git" -type d \
+              | xargs -I{} dirname {} \
+              | xargs -I{} sh -c 'git -C {} remote get-url origin 2>/dev/null | grep -q "medicine_similarity" && echo {}' \
+              | head -1)
+
+            if [ -z "$PROJECT_DIR" ]; then
+              echo "=== 탐색된 디렉토리 목록 (디버그) ==="
+              ls /home/ubuntu/
               echo "ERROR: project directory not found" && exit 1
             fi
+
+            echo "=== 프로젝트 경로: $PROJECT_DIR ==="
+            cd "$PROJECT_DIR"
 
             echo "=== git pull ==="
             git pull origin main
