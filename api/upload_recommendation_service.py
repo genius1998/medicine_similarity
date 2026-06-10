@@ -3569,11 +3569,17 @@ class UploadRecommendationService:
             ml_results = predict_quality_batch(ml_input_rows)
             for item, ml in zip(rows, ml_results):
                 item.update(ml)
-            # Filter mode: remove weak recommendations
+            # Filter mode: remove weak recommendations, keep filtered list for transparency
+            filtered_rows = [
+                item for item, ml in zip(rows, ml_results)
+                if should_filter_recommendation(ml)
+            ]
             rows = [
                 item for item, ml in zip(rows, ml_results)
                 if not should_filter_recommendation(ml)
             ]
+            # store filtered list in temp_profile for caller to pick up
+            temp_profile["_filtered_recommendations"] = filtered_rows
         except Exception:
             pass  # ML errors never affect production results
 
@@ -3803,6 +3809,7 @@ class UploadRecommendationService:
                 "confidence": corrected["parsed_result"].get("profile_confidence", corrected["estimated_profile"].get("confidence")),
             },
             "recommendations": display_recommendations,
+            "filtered_recommendations": list(corrected["estimated_profile"].get("_filtered_recommendations", []) or []),
             "official_recommendations": official_recommendations,
             "uploaded_self_matches": uploaded_self_matches,
             "uploaded_similar_cases": uploaded_similar_cases,

@@ -1820,6 +1820,14 @@
       dirtyChip.hidden = !state.dirty;
     }
 
+    function mlBadgeHtml(item) {
+      const prob = item.ml_weak_probability;
+      if (prob == null) return '';
+      const pct = (prob * 100).toFixed(1);
+      const color = prob >= 0.834 ? '#d9534f' : prob >= 0.5 ? '#f0ad4e' : '#5cb85c';
+      return `<span style="display:inline-block;padding:1px 6px;border-radius:10px;background:${color};color:#fff;font-size:11px;font-weight:600;margin-left:4px;" title="ML 약한추천 확률">ML ${pct}%</span>`;
+    }
+
     function buildRecommendationSection(recommendations, sectionTitle, sectionNote, options = {}) {
       if (!recommendations.length) {
         return `
@@ -1832,7 +1840,7 @@
 
       const html = ['<div class="recommendation-section">'];
       html.push(`<div class="section-caption"><div><h3>${escapeHtml(sectionTitle)}</h3><div class="hint-text">총 ${recommendations.length}건</div></div></div>`);
-      html.push('<div class="table-wrap"><table class="data-table"><thead><tr><th>순위</th><th>제품명</th><th>report_no</th><th>카테고리</th><th>유사도</th><th>등급</th><th>일치 원료</th><th>상세</th></tr></thead><tbody>');
+      html.push('<div class="table-wrap"><table class="data-table"><thead><tr><th>순위</th><th>제품명</th><th>report_no</th><th>카테고리</th><th>유사도</th><th>ML 약한추천확률</th><th>등급</th><th>일치 원료</th><th>상세</th></tr></thead><tbody>');
       recommendations.forEach((item) => {
         const productName = item.target_product_name || item.product_name || item.name || "-";
         const reportNo = item.target_report_no || item.report_no || "-";
@@ -1868,6 +1876,7 @@
             <td>${escapeHtml(reportNo)}</td>
             <td>${escapeHtml(categoryValue || "-")}</td>
             <td>${formatScore(similarityScore)}</td>
+            <td>${mlBadgeHtml(item)}</td>
             <td><span class="sub-badge ${badgeClass(substitutability)}">${escapeHtml(gradeValue)}</span></td>
             <td>${sharedIngredients.length ? renderChips(sharedIngredients.slice(0, 4), "small") : '<span class="chip gray small">없음</span>'}</td>
             <td><a href="#${detailId}">보기</a></td>
@@ -1875,7 +1884,7 @@
         `);
         html.push(`
           <tr>
-            <td colspan="8" style="padding:0; border-bottom:1px solid #d9d9d9;">
+            <td colspan="9" style="padding:0; border-bottom:1px solid #d9d9d9;">
               <details class="row-detail" id="${detailId}" ${Number(rank) === 1 ? "open" : ""}>
                 <summary>${escapeHtml(productName)} 상세 정보</summary>
                 <div class="detail-grid">
@@ -1903,6 +1912,15 @@
                     <div class="label">주의 문구</div>
                     <div class="value">${escapeHtml(item.caution || cautionText)}</div>
                   </div>
+                  ${item.ml_weak_probability != null ? `
+                  <div class="detail-block">
+                    <div class="label">ML 약한추천 확률</div>
+                    <div class="value">${(item.ml_weak_probability * 100).toFixed(2)}% ${mlBadgeHtml(item)}</div>
+                  </div>
+                  <div class="detail-block">
+                    <div class="label">ML 품질 점수</div>
+                    <div class="value">${item.ml_quality_score != null ? (item.ml_quality_score * 100).toFixed(1) + '점' : '-'}</div>
+                  </div>` : ''}
                   ${uploadedLabels.length || item.uploaded_status ? `
                     <div class="detail-block">
                       <div class="label">업로드 참조 정보</div>
@@ -1966,6 +1984,20 @@
       html.push(buildRecommendationSection(officialRecommendations, "공식 카탈로그 추천", "공식 카탈로그 추천 결과가 없습니다."));
       if (uploadedSimilarCases.length) {
         html.push(buildRecommendationSection(uploadedSimilarCases, "업로드 기반 유사 사례", "업로드 유사 사례가 없습니다."));
+      }
+      // ML 필터된 추천 섹션
+      const filteredRecs = safeArray(response && response.filtered_recommendations);
+      if (filteredRecs.length) {
+        html.push(`<details style="margin-top:16px;border:1px solid #f0c0c0;border-radius:6px;padding:8px 12px;background:#fff8f8;">`);
+        html.push(`<summary style="cursor:pointer;font-weight:600;color:#c0392b;">🚫 ML 필터로 제거된 추천 ${filteredRecs.length}건 (임계값 83.4% 초과)</summary>`);
+        html.push('<div class="table-wrap" style="margin-top:8px;"><table class="data-table"><thead><tr><th>원래순위</th><th>제품명</th><th>report_no</th><th>카테고리</th><th>유사도</th><th>ML 약한추천확률</th></tr></thead><tbody>');
+        filteredRecs.forEach((item) => {
+          const productName = item.target_product_name || item.product_name || "-";
+          const reportNo = item.target_report_no || item.report_no || "-";
+          const category = item.target_product_main_category || item.product_main_category || "-";
+          html.push(`<tr style="opacity:0.7;"><td>${escapeHtml(item.rank || "-")}</td><td><strong>${escapeHtml(productName)}</strong></td><td>${escapeHtml(reportNo)}</td><td>${escapeHtml(category)}</td><td>${formatScore(item.similarity_score)}</td><td>${mlBadgeHtml(item)}</td></tr>`);
+        });
+        html.push('</tbody></table></div></details>');
       }
       html.push(`<div class="caution-banner">${escapeHtml(cautionText)}</div>`);
       html.push("</div>");

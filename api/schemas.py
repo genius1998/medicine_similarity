@@ -207,6 +207,7 @@ class UploadRecommendationResponse(BaseModel):
     ingredient_db_match_statuses: List[Dict[str, Any]] = Field(default_factory=list)
     estimated_profile: EstimatedProfilePayload
     recommendations: List[RecommendationItem] = Field(default_factory=list)
+    filtered_recommendations: List[RecommendationItem] = Field(default_factory=list)
     official_recommendations: List[RecommendationItem] = Field(default_factory=list)
     uploaded_self_matches: List[RecommendationItem] = Field(default_factory=list)
     uploaded_similar_cases: List[RecommendationItem] = Field(default_factory=list)
