@@ -239,10 +239,11 @@ def test_recommendation_service_filters_display_ineligible_rows():
         {"rank": 2, "target_report_no": "HIGH", "recommendation_display_eligible": True},
     ]
 
-    filtered = service._display_eligible_recommendations(rows, top_k=10)
+    filtered, ml_filtered = service._display_eligible_recommendations(rows, top_k=10)
 
     assert [item["target_report_no"] for item in filtered] == ["HIGH"]
     assert filtered[0]["rank"] == 1
+    assert ml_filtered == []
 
 
 def test_upload_recommendation_temp_vector_uses_semantic_v2():

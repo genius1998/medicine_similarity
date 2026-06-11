@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import re
 import sqlite3
 import sys
@@ -402,14 +403,14 @@ def parse_args() -> argparse.Namespace:
 
 def first_existing_path(candidates: list[Path]) -> Path:
     for path in candidates:
-        if path and path.exists():
+        if path and path.is_file():
             return path
     raise FileNotFoundError(f"경로를 찾을 수 없습니다: {[str(path) for path in candidates]}")
 
 
 def first_existing_optional_path(candidates: list[Path]):
     for path in candidates:
-        if path and path.exists():
+        if path and path.is_file():
             return path
     return None
 
@@ -425,9 +426,8 @@ def resolve_runtime_paths() -> dict[str, Path]:
     config = load_config()
     output_dir = resolve_output_dir(config)
     vector_candidates = [
+        Path(os.environ.get("PRODUCT_VECTOR_CSV", "")),
         output_dir / "c003_product_functional_vectors_final_rebuilt.csv",
-        Path(r"D:\ec2_cache_snapshot\c003_product_functional_vectors_final_rebuilt.csv"),
-        Path(r"C:\Users\com\Downloads\c003_product_vector_output_final_rebuilt\c003_product_functional_vectors_final_rebuilt.csv"),
     ]
     product_profile_candidates = [
         output_dir / "product_function_profile.csv",
@@ -437,7 +437,15 @@ def resolve_runtime_paths() -> dict[str, Path]:
     configured_sqlite = str(get_config_value(config, "sqlite_path", "") or "").strip()
     if configured_sqlite:
         sqlite_candidates.append(Path(configured_sqlite))
-    sqlite_candidates.append(Path(r"D:\ec2_cache_snapshot\ingredient_match_cache_rebuilt_item_class_i0050_final.sqlite"))
+    env_sqlite = str(os.environ.get("INGREDIENT_MATCH_SQLITE", "")).strip()
+    if env_sqlite:
+        sqlite_candidates.append(Path(env_sqlite))
+    sqlite_candidates.extend(
+        [
+            output_dir / "ingredient_match_v2_promoted" / "runtime_promoted.sqlite",
+            output_dir / "ingredient_match_cache_v2_promoted.sqlite",
+        ]
+    )
     ingredient_profile_candidates = [
         output_dir / "ingredient_category_profile.csv",
         ROOT_DIR / "output" / "ingredient_category_profile.csv",

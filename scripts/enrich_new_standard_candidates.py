@@ -18,9 +18,14 @@ from typing import Any
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_INPUT_CSV = ROOT_DIR / "output" / "ingredient_match_v2" / "new_ingredient_additions_candidates.csv"
 DEFAULT_CATEGORY_MAP = ROOT_DIR / "output" / "cache_db_excel_export" / "temp_csv" / "functional_category_map.csv"
-DEFAULT_METADATA = Path(r"D:\db\deploy_ec2\data\functional_ingredient_metadata_item_class_final_boosted.pkl")
+DEFAULT_METADATA = Path(
+    os.environ.get(
+        "FUNCTIONAL_INGREDIENT_METADATA",
+        ROOT_DIR / "output" / "ingredient_match_v2_promoted" / "functional_ingredient_metadata_v2_promoted.pkl",
+    )
+)
 DEFAULT_OUTPUT_DIR = ROOT_DIR / "output" / "ingredient_match_v2" / "new_standard_enrichment"
-DEFAULT_HEALTH_BATCH_DIR = Path(r"D:\health_batch_project")
+DEFAULT_HEALTH_BATCH_DIR = Path(os.environ.get("HEALTH_BATCH_DIR", ROOT_DIR / "output" / "batch_jobs"))
 DEFAULT_MODEL_NAME = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 
 ALLOWED_REVIEW_STATUS = {"add_ready", "review_required", "reject_non_functional"}

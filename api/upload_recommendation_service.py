@@ -245,10 +245,14 @@ class UploadRecommendationService:
     def _load_runtime_rag_documents(self) -> List[dict]:
         if self._runtime_rag_documents is not None:
             return self._runtime_rag_documents
-        rag_path = Path(r"D:\db\deploy_ec2\data\functional_ingredient_rag_documents_merged_item_class_boosted.csv")
-        synonym_path = Path(r"D:\db\deploy_ec2\data\functional_ingredient_synonym_dictionary_merged_item_class_boosted.csv")
+        settings = get_settings()
+        rag_path = settings.ingredient_embedding_documents_path
+        synonym_path = settings.ingredient_embedding_synonym_path
+        if str(synonym_path).strip() in {"", "."}:
+            inferred = rag_path.with_name("functional_ingredient_synonym_dictionary_merged_item_class_boosted.csv")
+            synonym_path = inferred if inferred.exists() else Path()
         records: List[dict] = []
-        if rag_path.exists():
+        if rag_path.is_file():
             rag_df = pd.read_csv(rag_path, encoding="utf-8-sig", low_memory=False).fillna("")
             for row in rag_df.to_dict(orient="records"):
                 records.append(
@@ -263,7 +267,7 @@ class UploadRecommendationService:
                         "specific_penalty": float(row.get("specific_penalty", 0.0) or 0.0),
                     }
                 )
-        if synonym_path.exists():
+        if synonym_path.is_file():
             synonym_df = pd.read_csv(synonym_path, encoding="utf-8-sig", low_memory=False).fillna("")
             grouped = synonym_df.groupby("standard_name", sort=False)
             for standard_name, group in grouped:
@@ -3580,8 +3584,8 @@ class UploadRecommendationService:
             ]
             # store filtered list in temp_profile for caller to pick up
             temp_profile["_filtered_recommendations"] = filtered_rows
-        except Exception:
-            pass  # ML errors never affect production results
+        except Exception as exc:
+            logger.debug("ML quality scoring skipped for upload recommendations: %s", exc)
 
         update_request_progress(
             request_id,

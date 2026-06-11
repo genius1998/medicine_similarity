@@ -8,18 +8,18 @@
   },
   "auth": {
     "default_admin_email": "admin@example.com",
-    "default_admin_password": "CHANGE_ME_STRONG_PASSWORD",
+    "default_admin_password": "",
     "session_cookie_name": "sb_session",
     "session_hours": 12,
     "cookie_secure": false
   },
   "google_ocr": {
     "enabled": true,
-    "credentials_path": "D:\\health_project\\google_ocr_key"
+    "credentials_path": "google_ocr_key"
   },
   "local_llm": {
     "enabled": true,
-    "base_url": "http://169.213.5.157:3000/api/chat",
+    "base_url": "http://127.0.0.1:3000/api/chat",
     "timeout_sec": 120,
     "max_retries": 2
   },
@@ -38,8 +38,9 @@
   "ingredient_embedding": {
     "enabled": true,
     "model_name": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
-    "metadata_path": "D:\\db\\deploy_ec2\\data\\functional_ingredient_metadata_item_class_final_boosted.pkl",
-    "documents_path": "D:\\db\\deploy_ec2\\data\\functional_ingredient_rag_documents_merged_item_class_boosted.csv",
+    "metadata_path": "output/ingredient_match_v2_promoted/functional_ingredient_metadata_v2_promoted.pkl",
+    "documents_path": "output/ingredient_match_v2_promoted/new_standard_candidate_rag_documents_promoted.csv",
+    "synonym_path": "",
     "cache_path": "tmp/ingredient_embedding_cache"
   },
   "upload": {

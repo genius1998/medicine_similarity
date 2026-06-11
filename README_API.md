@@ -31,14 +31,14 @@ uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
 
 - Google Vision credentials path는 `config` 또는 환경변수로 지정한다.
 - 개발 환경 기본 경로 예:
-  - `D:\health_project\google_ocr_key`
+  - `google_ocr_key`
 - key 파일은 Git에 포함하면 안 된다.
 - key 경로를 코드에 하드코딩하지 말고 설정값으로 주입해야 한다.
 
 ## 로컬 LLM 설정
 
 - 기본 endpoint:
-  - `http://169.213.5.157:3000/api/chat`
+  - `http://127.0.0.1:3000/api/chat`
 - 설정 파일 또는 환경변수로 변경 가능해야 한다.
 - OCR 텍스트에서 원재료 영역 파싱, 정규화, warning 보정에 사용한다.
 

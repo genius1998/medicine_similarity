@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -18,7 +19,7 @@ from api.ingredient_parse_service import parse_ingredients_from_ocr_text  # noqa
 from api.ocr_service import extract_text_from_image  # noqa: E402
 
 
-DEFAULT_INPUT_DIR = Path(r"D:\health_project\input_images")
+DEFAULT_INPUT_DIR = Path(os.environ.get("OCR_INPUT_DIR", ROOT_DIR / "input_images"))
 DEFAULT_OUTPUT_PATH = ROOT_DIR / "output" / "ocr_parsed_ingredients_export.xlsx"
 SUPPORTED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 

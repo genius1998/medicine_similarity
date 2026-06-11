@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 import warnings
@@ -286,15 +287,22 @@ def deploy_to_server(threshold: float) -> None:
     print("GitHub push 완료")
 
     print("\n=== EC2 서버 배포 ===")
-    pem = "D:/pemkey/health.pem"
-    host = "ubuntu@ec2-32-236-113-89.ap-southeast-2.compute.amazonaws.com"
+    pem = os.environ.get("EC2_SSH_KEY", "")
+    host_name = os.environ.get("EC2_HOST", "")
+    host_user = os.environ.get("EC2_USER", "ubuntu")
+    app_dir = os.environ.get("EC2_APP_DIR", "/opt/medicine_similarity")
+    service_name = os.environ.get("EC2_SERVICE", "seongbunkok.service")
+    if not pem or not host_name:
+        print("EC2_SSH_KEY/EC2_HOST 환경변수가 없어 서버 배포를 건너뜁니다.")
+        return
+    host = f"{host_user}@{host_name}"
     ssh_cmd = (
-        "cd /opt/medicine_similarity && "
+        f"cd {app_dir} && "
         "git pull origin main && "
         f"RECOMMENDATION_QUALITY_ML_PHASE=filter && "
-        "sudo systemctl restart seongbunkok.service && "
+        f"sudo systemctl restart {service_name} && "
         "sleep 3 && "
-        "sudo systemctl status seongbunkok.service --no-pager | head -8"
+        f"sudo systemctl status {service_name} --no-pager | head -8"
     )
     result = subprocess.run(
         ["ssh", "-i", pem, "-o", "StrictHostKeyChecking=no", host, ssh_cmd],

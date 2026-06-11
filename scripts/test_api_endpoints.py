@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from datetime import datetime
@@ -13,7 +14,7 @@ import requests
 ROOT_DIR = Path(__file__).resolve().parents[1]
 OUTPUT_DIR = ROOT_DIR / "output"
 DEFAULT_BASE_URL = "http://127.0.0.1:8000"
-IMAGE_PATH = Path(r"D:\health_project\input_images\product_001.png")
+IMAGE_PATH = Path(os.environ.get("TEST_IMAGE_PATH", ROOT_DIR / "input_images" / "product_001.png"))
 OCR_WARNING_CODES = {
     "ocr_confidence_unavailable",
     "low_ocr_confidence",

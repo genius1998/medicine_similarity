@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 from collections import Counter
 from pathlib import Path
@@ -56,7 +57,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Convert batch API product category results into product profile override CSV."
     )
-    parser.add_argument("--input-csv", default=r"D:\data\final_all_result.csv")
+    parser.add_argument("--input-csv", default=os.environ.get("FINAL_ALL_RESULT_CSV", "output/final_all_result.csv"))
     parser.add_argument("--output-csv", default="output/final_all_result_category_overrides.csv")
     parser.add_argument("--min-confidence", type=float, default=0.0)
     return parser.parse_args()

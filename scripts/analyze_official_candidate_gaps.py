@@ -177,6 +177,13 @@ def _classify_gap(official_in_candidate_pool: int, brute_force_top: List[dict], 
     return "official_catalog_coverage_gap", "coverage_gap"
 
 
+def _resolve_case_image_path(value: object) -> Path:
+    path = Path(str(value or ""))
+    if path.is_absolute():
+        return path
+    return REPO_ROOT / path
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Analyze cases where official recommendation candidates are missing.")
     parser.add_argument("--dataset", default=str(DEFAULT_DATASET), help="Path to evaluation dataset JSON.")
@@ -199,7 +206,7 @@ def main() -> None:
     for result_item in gap_cases:
         case_id = str(result_item.get("case_id", "") or "")
         case = dataset_by_case.get(case_id, {})
-        image_path = Path(str(case.get("image_path", "") or ""))
+        image_path = _resolve_case_image_path(case.get("image_path", ""))
         input_mode = str(case.get("input_mode", "image") or "image")
         payload = _recommendation_mode_payload(service, image_path, input_mode, args.top_k, args.candidate_limit)
 

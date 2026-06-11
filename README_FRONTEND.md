@@ -22,7 +22,7 @@
 백엔드 서버를 먼저 실행한다.
 
 ```bash
-cd D:\medicine_similarity_repo
+cd <repo-root>
 uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
@@ -54,7 +54,7 @@ uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
 
 ## 테스트 이미지 예시
 
-- `D:\health_project\input_images\product_001.png`
+- `input_images/product_001.png`
 
 ## 브라우저/HTML 검증 결과
 

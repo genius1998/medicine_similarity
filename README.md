@@ -11,7 +11,7 @@
   <p>
     <img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white"/>
     <img src="https://img.shields.io/badge/FastAPI-0.100+-009688?style=flat-square&logo=fastapi&logoColor=white"/>
-    <img src="https://img.shields.io/badge/OpenAI-GPT--4o--mini-412991?style=flat-square&logo=openai&logoColor=white"/>
+    <img src="https://img.shields.io/badge/OpenAI-GPT--5--nano-412991?style=flat-square&logo=openai&logoColor=white"/>
     <img src="https://img.shields.io/badge/Google%20OCR-Vision%20API-4285F4?style=flat-square&logo=googlecloud&logoColor=white"/>
     <img src="https://img.shields.io/badge/SQLite-WAL-003B57?style=flat-square&logo=sqlite&logoColor=white"/>
   </p>
@@ -78,11 +78,11 @@
 
 ### 🤖 ML 추천 품질 예측 (XGBoost)
 
-- GPT-4o-mini Batch API로 80,395건 레이블링한 학습 데이터로 XGBoost 모델 학습
+- OpenAI Batch API로 80,395건 레이블링한 학습 데이터로 XGBoost 모델 학습
 - **입력 피처**: `similarity_score`, 원료 중복 패턴(shared_count, core_overlap), 카테고리 일치, rank 등 36개
 - **출력**: `ml_quality_score` (0-1), `ml_weak_probability`, `ml_label` (good/uncertain/weak)
-- **현재 단계 — Shadow Mode**: 추천 결과에 ML 점수가 포함되지만 순서·필터에 영향 없음 (로깅용)
-- **다음 단계**: `RECOMMENDATION_QUALITY_ML_PHASE=filter` 환경변수로 약한 추천 자동 차단 가능
+- **현재 단계 — Filter Mode**: `ml_weak_probability`가 임계값 이상인 약한 추천을 결과에서 제외하고, `filtered_recommendations`에 분리 기록
+- **운영 전환**: `RECOMMENDATION_QUALITY_ML_PHASE=shadow` 환경변수로 점수 로깅만 수행하는 Shadow Mode로 되돌릴 수 있음
 - Train ROC-AUC: **0.983**, Average Precision: **0.829**
 
 ```bash
@@ -103,11 +103,11 @@ python scripts/train_recommendation_quality_model.py --model xgboost --eval
 |------|------|
 | **API 서버** | FastAPI, Uvicorn |
 | **OCR** | Google Cloud Vision API |
-| **LLM** | OpenAI GPT-4o-mini (Batch API 활용) |
-| **임베딩** | OpenAI Embeddings (RAG 검색용) |
+| **LLM** | OpenAI Responses/Batch API, 선택적 로컬 LLM |
+| **임베딩** | SentenceTransformers multilingual embedding (RAG 검색용) |
 | **데이터베이스** | SQLite (WAL 모드), Pandas |
 | **유사도 엔진** | 커스텀 Semantic Weighted Jaccard v2.13 |
-| **추천 품질 모델** | XGBoost (Shadow Mode) — 8만 건 배치 판정 데이터로 학습 |
+| **추천 품질 모델** | XGBoost Filter Mode — 8만 건 배치 판정 데이터로 학습 |
 | **인프라** | AWS EC2, Python 3.10+ |
 
 ---
@@ -194,12 +194,13 @@ uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
 
 | 메서드 | 경로 | 설명 |
 |--------|------|------|
-| `POST` | `/api/upload-recommend` | 이미지 업로드 → OCR → 추천 |
-| `POST` | `/api/ingredient-recommend` | 원료 리스트 직접 입력 → 추천 |
-| `POST` | `/api/ocr-text-recommend` | OCR 텍스트 → 추천 |
+| `POST` | `/api/recommend/by-image` | 이미지 업로드 → OCR → 추천 |
+| `POST` | `/api/recommend/by-ingredients` | 원료 리스트 직접 입력 → 추천 |
+| `POST` | `/api/recommend/by-ocr-text` | OCR 텍스트 → 추천 |
 | `GET`  | `/api/products/search` | 제품명 검색 |
 | `GET`  | `/api/products/{id}/profile` | 제품 상세 프로필 |
-| `GET`  | `/api/request-progress/{id}` | 분석 진행상태 폴링 |
+| `GET`  | `/api/products/{id}/similar` | 기존 DB 제품 기준 유사 제품 추천 |
+| `GET`  | `/api/recommend/progress/{id}` | 분석 진행상태 폴링 |
 
 ---
 
@@ -217,7 +218,7 @@ uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
     │
     ▼ (캐시 미스 또는 non-functional)
 ② RAG + GPT 매칭
-    │  상위 K 후보 임베딩 검색 → GPT-4o-mini로 relation_type 판정
+    │  상위 K 후보 임베딩 검색 → OpenAI/로컬 LLM으로 relation_type 판정
     │  same_ingredient / nutrient_form / ingredient_group / marker_compound → 수락
     │
     ▼
@@ -239,11 +240,11 @@ uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
 
 ## 품질 검증
 
-OpenAI GPT-4o-mini Batch API로 추천 품질을 정기 평가합니다:
+OpenAI Batch API로 추천 품질을 정기 평가합니다:
 
 - **Judge 레이블**: `reasonable` / `acceptable_adjacent` / `weak` / `bad`
 - **품질 게이트**: `high_score_weak_or_bad_rate < 2%`
-- **최신 결과** (80,388 행 누적): hs_weak = **1.31%** ✅
+- **최신 결과** (76,356개 label, 15,255개 제품): high-score weak/bad = **1.31%** ✅
 
 ```bash
 # 품질 평가 실행
@@ -256,10 +257,10 @@ python scripts/recommendation_quality_judge_batch.py  # 배치 제출
 ## 테스트
 
 ```bash
-pytest tests/ -q
+python -m pytest tests -q
 ```
 
-119개 테스트 전부 통과. 주요 커버리지:
+119개 테스트가 통과하도록 관리합니다. 주요 커버리지:
 
 - `test_upload_ingredient_matching.py` — 원료 매칭 캐시·RAG 통합 테스트
 - `test_similarity_weighting.py` — 유사도 알고리즘 가중치 단위 테스트

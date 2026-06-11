@@ -12,9 +12,9 @@ The model lives at output/ml_models/recommendation_quality_model.pkl.
 If the file is missing the module degrades gracefully — all calls return
 a sentinel dict so the caller can safely ignore ML signals.
 
-Phase: Shadow Mode (default)
-  - Score is computed and logged but does NOT filter or reorder results.
-  - Set RECOMMENDATION_QUALITY_ML_PHASE = "filter" or "stacking" to escalate.
+Phase: Filter Mode (default)
+  - Score is computed and weak recommendations can be suppressed.
+  - Set RECOMMENDATION_QUALITY_ML_PHASE = "shadow" to log scores without filtering.
 """
 from __future__ import annotations
 

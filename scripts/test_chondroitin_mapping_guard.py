@@ -13,7 +13,7 @@ from api.upload_recommendation_service import UploadRecommendationService
 from scripts.enhance_similarity_with_explanation import classify_substitutability, generate_recommendation_reason
 
 
-IMAGE_PATH = Path(os.environ.get("TEST_PRODUCT_013_IMAGE", r"D:\health_project\input_images\product_013.jpg"))
+IMAGE_PATH = Path(os.environ.get("TEST_PRODUCT_013_IMAGE", ROOT_DIR / "input_images" / "product_013.jpg"))
 CHONDROITIN = "콘드로이친황산염"
 UC_II = "닭가슴연골분말(UC-II)"
 NAG = "NAG(엔에이지, N-아세틸글루코사민, N-Acetylglucosamine)"

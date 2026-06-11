@@ -40,9 +40,6 @@ def _candidate_env_paths(settings: ApiSettings) -> Iterable[Path]:
     if configured and configured != ".":
         yield settings.ingredient_match_llm_env_path
     yield settings.root_dir / ".env"
-    windows_batch_env = Path(r"D:\health_batch_project\.env")
-    if windows_batch_env.exists():
-        yield windows_batch_env
 
 
 def _load_api_key(settings: ApiSettings) -> str:

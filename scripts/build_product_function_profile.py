@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sqlite3
 import sys
@@ -128,9 +129,8 @@ def resolve_runtime_paths() -> dict[str, Path]:
     config = load_config()
     output_dir = resolve_output_dir(config)
     vector_candidates = [
+        Path(os.environ.get("PRODUCT_VECTOR_CSV", "")),
         output_dir / "c003_product_functional_vectors_final_rebuilt.csv",
-        Path(r"D:\ec2_cache_snapshot\c003_product_functional_vectors_final_rebuilt.csv"),
-        Path(r"C:\Users\com\Downloads\c003_product_vector_output_final_rebuilt\c003_product_functional_vectors_final_rebuilt.csv"),
     ]
     category_map_candidates = [
         output_dir / "functional_category_map.csv",
@@ -140,7 +140,10 @@ def resolve_runtime_paths() -> dict[str, Path]:
     configured_sqlite = str(get_config_value(config, "sqlite_path", "") or "").strip()
     if configured_sqlite:
         sqlite_candidates.append(Path(configured_sqlite))
-    sqlite_candidates.append(Path(r"D:\ec2_cache_snapshot\ingredient_match_cache_rebuilt_item_class_i0050_final.sqlite"))
+    env_sqlite = str(os.environ.get("INGREDIENT_MATCH_SQLITE", "")).strip()
+    if env_sqlite:
+        sqlite_candidates.append(Path(env_sqlite))
+    sqlite_candidates.append(output_dir / "ingredient_match_v2_promoted" / "runtime_promoted.sqlite")
     return {
         "output_dir": output_dir,
         "vector_csv_path": first_existing_path(vector_candidates),

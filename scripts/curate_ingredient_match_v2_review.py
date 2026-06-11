@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import pickle
 import re
 import shutil
@@ -17,7 +18,12 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_BASE_CATEGORY_MAP = ROOT_DIR / "output" / "cache_db_excel_export" / "temp_csv" / "functional_category_map.csv"
 DEFAULT_OUTPUT_DIR = ROOT_DIR / "output" / "ingredient_match_v2"
 DEFAULT_ENRICHMENT_DIR = DEFAULT_OUTPUT_DIR / "new_standard_enrichment"
-DEFAULT_RUNTIME_SOURCE_SQLITE = Path(r"D:\ec2_cache_snapshot\ingredient_match_cache_rebuilt_item_class_i0050_final.sqlite")
+DEFAULT_RUNTIME_SOURCE_SQLITE = Path(
+    os.environ.get(
+        "INGREDIENT_MATCH_SQLITE",
+        ROOT_DIR / "output" / "ingredient_match_v2_curated" / "runtime_curated.sqlite",
+    )
+)
 
 CACHE_TABLE_COLUMNS = [
     "ingredient_id",

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import pickle
 import re
 import shutil
@@ -17,12 +18,19 @@ import pandas as pd
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_BASE_CATEGORY_MAP = ROOT_DIR / "output" / "cache_db_excel_export" / "temp_csv" / "functional_category_map.csv"
-DEFAULT_BASE_METADATA = Path(r"D:\db\deploy_ec2\data\functional_ingredient_metadata_item_class_final_boosted.pkl")
+DEFAULT_BASE_METADATA = Path(
+    os.environ.get(
+        "FUNCTIONAL_INGREDIENT_METADATA",
+        ROOT_DIR / "output" / "ingredient_match_v2_promoted" / "functional_ingredient_metadata_v2_promoted.pkl",
+    )
+)
 DEFAULT_CACHE_DIR = ROOT_DIR / "output" / "ingredient_match_v2_curated"
 DEFAULT_ENRICHMENT_DIR = ROOT_DIR / "output" / "ingredient_match_v2_promoted_enrichment"
 DEFAULT_OUTPUT_DIR = ROOT_DIR / "output" / "ingredient_match_v2_promoted"
 DEFAULT_RUNTIME_SOURCE_SQLITE = ROOT_DIR / "output" / "ingredient_match_v2_curated" / "runtime_curated.sqlite"
-DEFAULT_VECTOR_SOURCE_CSV = Path(r"D:\ec2_cache_snapshot\c003_product_functional_vectors_final_rebuilt.csv")
+DEFAULT_VECTOR_SOURCE_CSV = Path(
+    os.environ.get("PRODUCT_VECTOR_CSV", ROOT_DIR / "output" / "c003_product_functional_vectors_final_rebuilt.csv")
+)
 DEFAULT_MENTIONS_CSV = ROOT_DIR / "output" / "ingredient_normalization" / "all_product_ingredient_mentions.csv"
 DEFAULT_CATALOG_CSV = ROOT_DIR / "output" / "cache_db_excel_export" / "temp_csv" / "catalog_product_master.csv"
 

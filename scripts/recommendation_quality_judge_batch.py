@@ -45,7 +45,7 @@ from scripts.enhance_similarity_with_explanation import (  # noqa: E402
 
 
 DEFAULT_OUTPUT_DIR = ROOT_DIR / "output" / "recommendation_quality_judge"
-DEFAULT_HEALTH_BATCH_DIR = Path(r"D:\health_batch_project")
+DEFAULT_HEALTH_BATCH_DIR = Path(os.environ.get("HEALTH_BATCH_DIR", ROOT_DIR / "output" / "batch_jobs"))
 DEFAULT_BATCH_JSONL_NAME = "gemini_recommendation_judge_batch.jsonl"
 DEFAULT_RESULT_JSONL_NAME = "gemini_recommendation_judge_result.jsonl"
 DEFAULT_GEMINI_JOB_FILE_NAME = "gemini_recommendation_judge.job.txt"
@@ -3757,7 +3757,7 @@ def build_parser() -> argparse.ArgumentParser:
     next_sample_parser.add_argument("--progress-every", type=int, default=10)
     next_sample_parser.set_defaults(func=plan_next_sample)
 
-    submit_parser = subparsers.add_parser("submit", help="Submit the prepared JSONL through D:\\health_batch_project helpers.")
+    submit_parser = subparsers.add_parser("submit", help="Submit the prepared JSONL through the configured batch helper directory.")
     submit_parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     submit_parser.add_argument("--health-batch-dir", default=str(DEFAULT_HEALTH_BATCH_DIR))
     submit_parser.add_argument("--jsonl", default="", help="Prepared Gemini Batch JSONL. Defaults to the output-dir batch file.")

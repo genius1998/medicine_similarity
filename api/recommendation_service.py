@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import sqlite3
 import time
 from pathlib import Path
+from threading import RLock
 from typing import Dict, List, Optional
 
 import pandas as pd
@@ -94,6 +96,9 @@ UPLOADED_PRODUCT_ADDITIONAL_COLUMNS = {
 }
 
 
+logger = logging.getLogger(__name__)
+
+
 class RecommendationService:
     def __init__(self) -> None:
         self._loaded = False
@@ -109,6 +114,7 @@ class RecommendationService:
         self.ingredient_category_profiles: Dict[str, dict] = {}
         self.catalog_count: int = 0
         self.uploaded_catalog_count: int = 0
+        self._index_lock = RLock()
 
     def ensure_loaded(self) -> None:
         if self._loaded:
@@ -903,33 +909,34 @@ class RecommendationService:
             conn.commit()
 
         if has_vector_payload and has_normalized_ingredients:
-            self._register_uploaded_profile_in_memory(
-                {
-                    "report_no": report_no,
-                    "product_id": product_id,
-                    "product_name": cleaned_name,
-                    "upload_signature": stored_profile["upload_signature"],
-                    "image_hash": stored_profile["image_hash"],
-                    "ocr_text_hash": stored_profile["ocr_text_hash"],
-                    "parsed_signature": stored_profile["parsed_signature"],
-                    "profile_signature": stored_profile["profile_signature"],
-                    "status": stored_profile["status"],
-                    "quality_grade": stored_profile["quality_grade"],
-                    "is_candidate_enabled": 1 if stored_profile["is_candidate_enabled"] else 0,
-                    "product_main_category": stored_profile["product_main_category"],
-                    "product_sub_categories_json": json.dumps(stored_profile["product_sub_categories"], ensure_ascii=False),
-                    "primary_ingredients_json": json.dumps(stored_profile["primary_ingredients"], ensure_ascii=False),
-                    "secondary_ingredients_json": json.dumps(stored_profile["secondary_ingredients"], ensure_ascii=False),
-                    "support_ingredients_json": json.dumps(stored_profile["support_ingredients"], ensure_ascii=False),
-                    "category_scores_json": json.dumps(stored_profile["category_scores"], ensure_ascii=False),
-                    "ingredient_scores_json": json.dumps(stored_profile["ingredient_scores"], ensure_ascii=False),
-                    "role_by_ingredient_json": json.dumps(stored_profile["role_by_ingredient"], ensure_ascii=False),
-                    "category_by_ingredient_json": json.dumps(stored_profile["category_by_ingredient"], ensure_ascii=False),
-                    "vector_json": json.dumps(vector or {}, ensure_ascii=False),
-                    "confidence": stored_profile["confidence"],
-                    "notes": stored_profile["notes"],
-                }
-            )
+            with self._index_lock:
+                self._register_uploaded_profile_in_memory(
+                    {
+                        "report_no": report_no,
+                        "product_id": product_id,
+                        "product_name": cleaned_name,
+                        "upload_signature": stored_profile["upload_signature"],
+                        "image_hash": stored_profile["image_hash"],
+                        "ocr_text_hash": stored_profile["ocr_text_hash"],
+                        "parsed_signature": stored_profile["parsed_signature"],
+                        "profile_signature": stored_profile["profile_signature"],
+                        "status": stored_profile["status"],
+                        "quality_grade": stored_profile["quality_grade"],
+                        "is_candidate_enabled": 1 if stored_profile["is_candidate_enabled"] else 0,
+                        "product_main_category": stored_profile["product_main_category"],
+                        "product_sub_categories_json": json.dumps(stored_profile["product_sub_categories"], ensure_ascii=False),
+                        "primary_ingredients_json": json.dumps(stored_profile["primary_ingredients"], ensure_ascii=False),
+                        "secondary_ingredients_json": json.dumps(stored_profile["secondary_ingredients"], ensure_ascii=False),
+                        "support_ingredients_json": json.dumps(stored_profile["support_ingredients"], ensure_ascii=False),
+                        "category_scores_json": json.dumps(stored_profile["category_scores"], ensure_ascii=False),
+                        "ingredient_scores_json": json.dumps(stored_profile["ingredient_scores"], ensure_ascii=False),
+                        "role_by_ingredient_json": json.dumps(stored_profile["role_by_ingredient"], ensure_ascii=False),
+                        "category_by_ingredient_json": json.dumps(stored_profile["category_by_ingredient"], ensure_ascii=False),
+                        "vector_json": json.dumps(vector or {}, ensure_ascii=False),
+                        "confidence": stored_profile["confidence"],
+                        "notes": stored_profile["notes"],
+                    }
+                )
         self.uploaded_catalog_count = self._count_uploaded_products()
         return {
             "report_no": report_no,
@@ -1157,7 +1164,7 @@ class RecommendationService:
             **quality_metadata,
         }
 
-    def _display_eligible_recommendations(self, recommendations: List[dict], top_k: int) -> List[dict]:
+    def _display_eligible_recommendations(self, recommendations: List[dict], top_k: int) -> tuple[List[dict], List[dict]]:
         rows = [
             dict(item)
             for item in recommendations
@@ -1195,8 +1202,8 @@ class RecommendationService:
                 if not should_filter_recommendation(ml)
             ]
             return rows, filtered
-        except Exception:
-            pass  # ML errors never affect production results
+        except Exception as exc:
+            logger.debug("ML quality scoring skipped: %s", exc)
 
         return rows, []
 
@@ -1385,20 +1392,3 @@ class RecommendationService:
                 "llm_rerank_error": llm_rerank_error,
                 "execution_seconds": execution_seconds,
             }
-
-    def recommend_by_ingredients(self, raw_ingredients: str, top_k: int, candidate_limit: int) -> dict:
-        self.ensure_loaded()
-        input_ingredients = [part.strip() for part in str(raw_ingredients or "").split(",") if part.strip()]
-        normalized_inputs = {item.lower().replace(" ", ""): item for item in input_ingredients}
-        detected = []
-        for ingredient in self.ingredient_frequency:
-            token = ingredient.lower().replace(" ", "")
-            if token in normalized_inputs or any(token in key or key in token for key in normalized_inputs):
-                detected.append(ingredient)
-        return {
-            "input_ingredients": input_ingredients,
-            "detected_functional_ingredients": detected[:50],
-            "estimated_main_category": None,
-            "recommendations": [],
-            "not_implemented": True,
-        }

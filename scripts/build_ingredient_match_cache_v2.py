@@ -5,6 +5,7 @@ import csv
 import hashlib
 import json
 import math
+import os
 import pickle
 import re
 import sqlite3
@@ -18,7 +19,12 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_UNIQUE_CSV = ROOT_DIR / "output" / "ingredient_normalization" / "unique_normalized_ingredients.csv"
 DEFAULT_CATEGORY_MAP = ROOT_DIR / "output" / "cache_db_excel_export" / "temp_csv" / "functional_category_map.csv"
 DEFAULT_OLD_CACHE = ROOT_DIR / "output" / "cache_db_excel_export" / "temp_csv" / "ingredient_match_cache.csv"
-DEFAULT_METADATA = Path(r"D:\db\deploy_ec2\data\functional_ingredient_metadata_item_class_final_boosted.pkl")
+DEFAULT_METADATA = Path(
+    os.environ.get(
+        "FUNCTIONAL_INGREDIENT_METADATA",
+        ROOT_DIR / "output" / "ingredient_match_v2_promoted" / "functional_ingredient_metadata_v2_promoted.pkl",
+    )
+)
 DEFAULT_OUTPUT_DIR = ROOT_DIR / "output" / "ingredient_match_v2"
 DEFAULT_EMBEDDING_CACHE_DIR = ROOT_DIR / "tmp" / "ingredient_embedding_cache"
 DEFAULT_MODEL_NAME = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"

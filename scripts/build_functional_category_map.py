@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
 import sys
@@ -57,9 +58,8 @@ def resolve_runtime_paths() -> dict[str, Path]:
     config = load_config()
     output_dir = resolve_output_dir(config)
     vector_csv_candidates = [
+        Path(os.environ.get("PRODUCT_VECTOR_CSV", "")),
         output_dir / "c003_product_functional_vectors_final_rebuilt.csv",
-        Path(r"D:\ec2_cache_snapshot\c003_product_functional_vectors_final_rebuilt.csv"),
-        Path(r"C:\Users\com\Downloads\c003_product_vector_output_final_rebuilt\c003_product_functional_vectors_final_rebuilt.csv"),
     ]
     rag_csv_candidates = [
         output_dir / "functional_ingredient_rag_documents_merged_item_class_boosted.csv",
@@ -70,8 +70,9 @@ def resolve_runtime_paths() -> dict[str, Path]:
         ROOT_DIR / "deploy_ec2" / "data" / "functional_ingredient_synonym_dictionary_merged_item_class_boosted.csv",
     ]
     sqlite_candidates = [
+        Path(os.environ.get("INGREDIENT_MATCH_SQLITE", "")),
         Path(str(get_config_value(config, "sqlite_path", ""))),
-        Path(r"D:\ec2_cache_snapshot\ingredient_match_cache_rebuilt_item_class_i0050_final.sqlite"),
+        output_dir / "ingredient_match_v2_promoted" / "runtime_promoted.sqlite",
     ]
     sqlite_path = first_existing_path([path for path in sqlite_candidates if str(path)])
     return {

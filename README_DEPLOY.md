@@ -10,7 +10,7 @@
 ## 2. Install
 
 ```powershell
-cd D:\medicine_similarity_repo
+cd <repo-root>
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements_api.txt
@@ -45,7 +45,7 @@ On first startup, if there are no users in `app_user`, the app creates one admin
 
 This happens only once when the user table is empty.
 
-Do not leave the example password in production.
+`config.example.json` leaves `auth.default_admin_password` empty. Set a strong value through `config.json` or `APP_DEFAULT_ADMIN_PASSWORD` before the first production startup.
 
 ## 5. Run
 
@@ -111,3 +111,12 @@ These are created automatically at startup.
 5. Open `/products`
 6. Open `/recommend/image`
 7. Upload a sample OCR image and verify review history appears in `/admin`
+
+## 11. GitHub Actions Deployment Variables
+
+The deployment workflow expects infrastructure details outside the repository.
+
+- GitHub secrets: `EC2_HOST`, `EC2_USER`, `EC2_SSH_KEY`
+- GitHub variables: `EC2_APP_DIR` (default `/opt/medicine_similarity`), `EC2_SERVICE` (default `medicine-api`)
+
+For local `deploy.bat`, set the same values as environment variables before running it.

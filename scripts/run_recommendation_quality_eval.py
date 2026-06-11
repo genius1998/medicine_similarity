@@ -129,6 +129,13 @@ def _first_official_rank(recommendations: List[dict]) -> int:
     return 0
 
 
+def _resolve_case_image_path(value: object) -> Path:
+    path = Path(str(value or ""))
+    if path.is_absolute():
+        return path
+    return REPO_ROOT / path
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run mini recommendation quality evaluation.")
     parser.add_argument("--dataset", default=str(DEFAULT_DATASET), help="Path to evaluation dataset JSON.")
@@ -176,7 +183,7 @@ def main() -> None:
     function_first_keyword_miss_but_function_hit_count = 0
 
     for case in cases:
-        image_path = Path(str(case.get("image_path", "") or ""))
+        image_path = _resolve_case_image_path(case.get("image_path", ""))
         input_mode = str(case.get("input_mode", "image") or "image").strip() or "image"
         evaluation_track = str(case.get("evaluation_track", "keyword_sensitive") or "keyword_sensitive").strip() or "keyword_sensitive"
         input_mode_counts[input_mode] = input_mode_counts.get(input_mode, 0) + 1

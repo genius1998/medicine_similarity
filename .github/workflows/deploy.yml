@@ -6,21 +6,49 @@ on:
       - main
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run data-independent tests
+        run: |
+          python -m pytest \
+            tests/test_ingredient_match_llm_client.py \
+            tests/test_recommendation_quality_judge_batch.py \
+            tests/test_similarity_weighting.py \
+            -q
+
   deploy:
+    needs: test
     runs-on: ubuntu-latest
 
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: 32.236.113.89
-          username: ubuntu
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER || 'ubuntu' }}
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             set -e
+            APP_DIR="${{ vars.EC2_APP_DIR || '/opt/medicine_similarity' }}"
+            SERVICE_NAME="${{ vars.EC2_SERVICE || 'medicine-api' }}"
 
             # 1. 프로젝트 디렉토리
-            cd /opt/medicine_similarity
+            cd "$APP_DIR"
 
             # 2. git pull
             echo "=== git pull ==="
@@ -33,13 +61,13 @@ jobs:
 
             # 4. 서비스 재시작
             echo "=== restart service ==="
-            sudo systemctl restart medicine-api
+            sudo systemctl restart "$SERVICE_NAME"
             sleep 3
 
             # 5. 정상 기동 확인
-            if systemctl is-active --quiet medicine-api; then
+            if systemctl is-active --quiet "$SERVICE_NAME"; then
               echo "=== deploy complete ==="
             else
-              sudo journalctl -u medicine-api -n 30 --no-pager
+              sudo journalctl -u "$SERVICE_NAME" -n 30 --no-pager
               exit 1
             fi

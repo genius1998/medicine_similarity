@@ -17,7 +17,7 @@ if str(ROOT_DIR) not in sys.path:
 from api.main import app  # noqa: E402
 
 
-INPUT_DIR = Path(r"D:\health_project\input_images")
+INPUT_DIR = Path(os.environ.get("OCR_INPUT_DIR", ROOT_DIR / "input_images"))
 TARGET_IMAGE_NAMES = [
     "product_001.png",
     "product_002.jpg",

@@ -1,0 +1,26 @@
+.brand-title {
+  margin: 0;
+  line-height: 1;
+}
+
+.brand-link {
+  display: inline-flex;
+  align-items: center;
+  color: inherit;
+  text-decoration: none;
+}
+
+.brand-logo {
+  display: block;
+  width: auto;
+  max-width: min(220px, 52vw);
+  height: 42px;
+  object-fit: contain;
+}
+
+@media (max-width: 640px) {
+  .brand-logo {
+    height: 36px;
+    max-width: 62vw;
+  }
+}

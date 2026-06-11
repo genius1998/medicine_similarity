@@ -16,7 +16,7 @@ from api.recommendation_service import RecommendationService, UPLOADED_PRODUCT_T
 from api.upload_recommendation_service import UploadRecommendationService
 
 
-IMAGE_PATH = Path(os.environ.get("TEST_PRODUCT_013_IMAGE", r"D:\health_project\input_images\product_013.jpg"))
+IMAGE_PATH = Path(os.environ.get("TEST_PRODUCT_013_IMAGE", ROOT_DIR / "input_images" / "product_013.jpg"))
 EXPECTED_RAW_INGREDIENTS = [
     "콘드로이친 황산염(아르헨티나산)",
     "탄산칼슘",

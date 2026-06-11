@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import os
 import traceback
 from collections import Counter
 from contextlib import contextmanager
@@ -24,8 +25,8 @@ from api.upload_recommendation_service import (
 )
 
 
-REPO_ROOT = Path(__file__).resolve().parent
-INPUT_DIR = Path(r"D:\health_project\input_images")
+REPO_ROOT = Path(__file__).resolve().parents[1]
+INPUT_DIR = Path(os.environ.get("OCR_INPUT_DIR", REPO_ROOT / "input_images"))
 OUTPUT_DIR = REPO_ROOT / "output" / "real_image_upload_test_v2"
 SUMMARY_CSV = OUTPUT_DIR / "real_image_upload_test_summary_v2.csv"
 DETAILS_JSON = OUTPUT_DIR / "real_image_upload_test_details_v2.json"

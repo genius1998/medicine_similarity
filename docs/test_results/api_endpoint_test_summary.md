@@ -52,7 +52,7 @@
 
 ## 8. 이미지 업로드 추천 결과 요약
 
-- 테스트 이미지: `D:\health_project\input_images\product_001.png`
+- 테스트 이미지: `input_images/product_001.png`
 - `ocr.raw_text` 존재
 - `parsed` 존재
 - `estimated_profile.product_main_category=면역`

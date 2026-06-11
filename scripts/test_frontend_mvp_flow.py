@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any, Dict, List
@@ -175,7 +176,7 @@ def run_ingredient_rerun(base_url: str, ingredients: List[str]) -> Dict[str, Any
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
-    parser.add_argument("--image-path", default=r"D:\health_project\input_images\product_001.png")
+    parser.add_argument("--image-path", default=os.environ.get("TEST_IMAGE_PATH", ROOT_DIR / "input_images" / "product_001.png"))
     args = parser.parse_args()
 
     results: List[Dict[str, Any]] = []

@@ -2,7 +2,7 @@
 
 ## Current Decision
 
-Keep `semantic_weighted_jaccard_v2_9` with the narrow `oral_single_core_broad_target_score_cap` and `lipid_lecithin_single_core_broad_target_score_cap`.
+Keep the current `semantic_weighted_jaccard_v2_13` runtime algorithm. The quality-gate evidence below was accumulated through the v2.9 validation lineage, including the narrow `oral_single_core_broad_target_score_cap` and `lipid_lecithin_single_core_broad_target_score_cap`; those caps were carried forward into the current v2.13 runtime version.
 
 The latest OpenAI `gpt-5-nano` judge validation passes the quality gate:
 
@@ -271,7 +271,7 @@ Before submitting another OpenAI Batch job, check whether any active jobs are al
 
 ```powershell
 python scripts\recommendation_quality_judge_batch.py openai-list `
-  --env-path D:\health_batch_project\.env `
+  --env-path .env `
   --active-only `
   --limit 20
 ```
@@ -292,7 +292,7 @@ When using `openai-submit` directly, pass `--require-no-active` and the current 
 ```powershell
 python scripts\recommendation_quality_judge_batch.py openai-submit `
   --output-dir output\recommendation_quality_judge_v2_9_openai_targeted_next_seedYYYYMMDD `
-  --env-path D:\health_batch_project\.env `
+  --env-path .env `
   --validation-status-json output\recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted_holdout2026060718_patternfollowup_p300_lecithin_cap\validation_status.json `
   --require-no-active
 ```
@@ -304,7 +304,7 @@ After submitting a job, wait for completion and download outputs with:
 ```powershell
 python scripts\recommendation_quality_judge_batch.py openai-check `
   --output-dir output\recommendation_quality_judge_v2_9_openai_targeted_next_seedYYYYMMDD `
-  --env-path D:\health_batch_project\.env `
+  --env-path .env `
   --watch `
   --poll-seconds 60 `
   --timeout-seconds 7200 `
@@ -325,7 +325,7 @@ For a prepared output directory, the submit/watch/download/finalize sequence can
 ```powershell
 python scripts\recommendation_quality_judge_batch.py openai-run `
   --output-dir output\recommendation_quality_judge_v2_9_openai_targeted_next_seedYYYYMMDD `
-  --env-path D:\health_batch_project\.env `
+  --env-path .env `
   --validation-status-json output\recommendation_quality_judge_v2_9_openai_validation_current_plus_targeted_holdout2026060718_patternfollowup_p300_lecithin_cap\validation_status.json `
   --require-no-active `
   --poll-seconds 60 `

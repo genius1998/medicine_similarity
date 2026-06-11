@@ -46,6 +46,7 @@ class ApiSettings:
     ingredient_embedding_model_name: str
     ingredient_embedding_metadata_path: Path
     ingredient_embedding_documents_path: Path
+    ingredient_embedding_synonym_path: Path
     ingredient_embedding_cache_path: Path
 
 
@@ -55,6 +56,16 @@ def _nested_value(config: dict, section: str, key: str, default):
         return default
     value = section_value.get(key, default)
     return default if value in ("", None) else value
+
+
+def _resolve_path(value: object, root_dir: Path) -> Path:
+    raw = str(value or "").strip()
+    if not raw:
+        return Path()
+    path = Path(raw)
+    if path.is_absolute():
+        return path
+    return root_dir / path
 
 
 def get_settings() -> ApiSettings:
@@ -67,12 +78,13 @@ def get_settings() -> ApiSettings:
     default_max_df_for_seed = int(get_config_value(config, "api_default_max_df_for_seed", 3000))
 
     google_ocr_enabled = bool(_nested_value(config, "google_ocr", "enabled", True))
-    google_ocr_credentials_path = Path(
-        str(_nested_value(config, "google_ocr", "credentials_path", r"D:\health_project\google_ocr_key"))
+    google_ocr_credentials_path = _resolve_path(
+        _nested_value(config, "google_ocr", "credentials_path", "google_ocr_key"),
+        root_dir,
     )
 
     local_llm_enabled = bool(_nested_value(config, "local_llm", "enabled", True))
-    local_llm_base_url = str(_nested_value(config, "local_llm", "base_url", "http://169.213.5.157:3000/api/chat"))
+    local_llm_base_url = str(_nested_value(config, "local_llm", "base_url", "http://127.0.0.1:3000/api/chat"))
     local_llm_timeout_sec = int(_nested_value(config, "local_llm", "timeout_sec", 120))
     local_llm_max_retries = int(_nested_value(config, "local_llm", "max_retries", 2))
     ingredient_match_llm_provider = str(
@@ -134,24 +146,40 @@ def get_settings() -> ApiSettings:
             _nested_value(config, "ingredient_embedding", "model_name", "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"),
         )
     )
-    ingredient_embedding_metadata_path = Path(
-        str(
-            os.getenv(
-                "INGREDIENT_EMBEDDING_METADATA_PATH",
-                _nested_value(config, "ingredient_embedding", "metadata_path", r"D:\db\deploy_ec2\data\functional_ingredient_metadata_item_class_final_boosted.pkl"),
-            )
-        )
+    ingredient_embedding_metadata_path = _resolve_path(
+        os.getenv(
+            "INGREDIENT_EMBEDDING_METADATA_PATH",
+            _nested_value(
+                config,
+                "ingredient_embedding",
+                "metadata_path",
+                "output/ingredient_match_v2_promoted/functional_ingredient_metadata_v2_promoted.pkl",
+            ),
+        ),
+        root_dir,
     )
-    ingredient_embedding_documents_path = Path(
-        str(
-            os.getenv(
-                "INGREDIENT_EMBEDDING_DOCUMENTS_PATH",
-                _nested_value(config, "ingredient_embedding", "documents_path", r"D:\db\deploy_ec2\data\functional_ingredient_rag_documents_merged_item_class_boosted.csv"),
-            )
-        )
+    ingredient_embedding_documents_path = _resolve_path(
+        os.getenv(
+            "INGREDIENT_EMBEDDING_DOCUMENTS_PATH",
+            _nested_value(
+                config,
+                "ingredient_embedding",
+                "documents_path",
+                "output/ingredient_match_v2_promoted/new_standard_candidate_rag_documents_promoted.csv",
+            ),
+        ),
+        root_dir,
     )
-    ingredient_embedding_cache_path = root_dir / str(
-        _nested_value(config, "ingredient_embedding", "cache_path", "tmp/ingredient_embedding_cache")
+    ingredient_embedding_synonym_path = _resolve_path(
+        os.getenv(
+            "INGREDIENT_EMBEDDING_SYNONYM_PATH",
+            _nested_value(config, "ingredient_embedding", "synonym_path", ""),
+        ),
+        root_dir,
+    )
+    ingredient_embedding_cache_path = _resolve_path(
+        _nested_value(config, "ingredient_embedding", "cache_path", "tmp/ingredient_embedding_cache"),
+        root_dir,
     )
 
     templates_dir = root_dir / "api" / "templates"
@@ -195,5 +223,6 @@ def get_settings() -> ApiSettings:
         ingredient_embedding_model_name=ingredient_embedding_model_name,
         ingredient_embedding_metadata_path=ingredient_embedding_metadata_path,
         ingredient_embedding_documents_path=ingredient_embedding_documents_path,
+        ingredient_embedding_synonym_path=ingredient_embedding_synonym_path,
         ingredient_embedding_cache_path=ingredient_embedding_cache_path,
     )
