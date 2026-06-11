@@ -1344,6 +1344,65 @@ def test_summarize_chunks_prefers_impact_scores_and_applies_retry(tmp_path):
     assert "extra label" not in merged_csv
 
 
+def test_summarize_chunks_deduplicates_overlapping_validation_rows(tmp_path):
+    output_dir = tmp_path / "merged"
+    first_part = tmp_path / "recommendation_quality_judge_v2_9_openai_chunk_000_001"
+    second_part = tmp_path / "recommendation_quality_judge_v2_9_openai_chunk_001_002"
+    first_part.mkdir()
+    second_part.mkdir()
+
+    snapshot = {
+        "key": "recjudge_000001",
+        "base_product": {"report_no": "B1"},
+        "recommendations": [{"rank": 1}],
+    }
+    for part in (first_part, second_part):
+        (part / "recommendation_snapshot.jsonl").write_text(
+            json.dumps(snapshot) + "\n",
+            encoding="utf-8",
+        )
+
+    header = (
+        "key,base_report_no,base_product_name,base_main_category,rank,target_report_no,target_product_name,target_main_category,"
+        "similarity_score,function_similarity_score,core_match_score,shared_ingredients_json,shared_categories_json,"
+        "local_risk_flags_json,local_quality_bucket,judge_judgment,judge_confidence,judge_reason,judge_risk_flags_json,suggested_rule\n"
+    )
+    (first_part / "gemini_judge_results.csv").write_text(
+        header
+        + "recjudge_000001,B1,base,cat,1,T1,target,cat,0.9,0.5,0.0,[],[],[],likely_reasonable,weak,0.7,old label,[],\n",
+        encoding="utf-8-sig",
+    )
+    (second_part / "gemini_judge_results.csv").write_text(
+        header
+        + "recjudge_000001,B1,base,cat,1,T1,target,cat,0.9,0.5,0.0,[],[],[],likely_reasonable,reasonable,0.8,new label,[],\n",
+        encoding="utf-8-sig",
+    )
+
+    summarize_chunks(
+        SimpleNamespace(
+            output_dir=str(output_dir),
+            parts_glob=[str(tmp_path / "recommendation_quality_judge_v2_9_openai_chunk_*_*")],
+            retry_glob=[],
+            high_score_threshold=0.65,
+        )
+    )
+
+    summary = json.loads((output_dir / "openai_chunk_judge_summary.json").read_text(encoding="utf-8"))
+    merged_rows = judge_batch.read_csv_records(output_dir / "openai_chunk_judge_results.csv")
+    duplicate_rows = judge_batch.read_csv_records(output_dir / "openai_chunk_duplicate_labels.csv")
+
+    assert summary["coverage_ok"] is True
+    assert summary["expected_label_count"] == 2
+    assert summary["coverage_actual_label_count"] == 2
+    assert summary["actual_label_count"] == 1
+    assert summary["duplicate_label_count"] == 1
+    assert summary["deduplication_strategy"] == "last"
+    assert summary["judgment_counts"] == {"reasonable": 1}
+    assert merged_rows[0]["judge_reason"] == "new label"
+    assert duplicate_rows[0]["dropped_judgment"] == "weak"
+    assert duplicate_rows[0]["kept_judgment"] == "reasonable"
+
+
 def test_pattern_features_and_impact_rows_capture_cross_role_primary_overlap():
     base = {
         "report_no": "B1",
@@ -1391,6 +1450,13 @@ def test_pattern_features_and_impact_rows_capture_cross_role_primary_overlap():
 
     assert weak_features["no_primary_primary_overlap_cross_role"] == 1
     assert weak_features["primary_primary_overlap_count"] == 0
+    assert weak_features["base_primary_in_target_secondary_count"] == 1
+    assert weak_features["target_primary_in_base_secondary_count"] == 1
+    assert weak_features["primary_cross_role_overlap_count"] == 2
+    assert weak_features["primary_cross_role_overlap_ratio"] == 1.0
+    assert weak_features["primary_role_mismatch_ratio"] == 1.0
+    assert weak_features["primary_overlap_gap"] == 1.0
+    assert weak_features["core_missing_flag"] in {0, 1}
     assert weak_features["shared_count"] == 2
     assert impact_by_name["no_primary_primary_overlap_cross_role_shared_le2"]["matched_count"] == 2
     assert impact_by_name["no_primary_primary_overlap_cross_role_shared_le2"]["weak_or_bad_count"] == 1

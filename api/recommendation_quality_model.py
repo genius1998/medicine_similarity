@@ -1,5 +1,5 @@
 """
-Recommendation quality prediction model — inference wrapper.
+Recommendation quality prediction model - inference wrapper.
 
 Loads the pre-trained XGBoost / LightGBM model and exposes a simple
 ``predict_quality`` function that returns a dict with:
@@ -9,7 +9,7 @@ Loads the pre-trained XGBoost / LightGBM model and exposes a simple
     ml_label           : str    'good' | 'weak' | 'uncertain'
 
 The model lives at output/ml_models/recommendation_quality_model.pkl.
-If the file is missing the module degrades gracefully — all calls return
+If the file is missing the module degrades gracefully - all calls return
 a sentinel dict so the caller can safely ignore ML signals.
 
 Phase: Filter Mode (default)
@@ -44,8 +44,10 @@ RECOMMENDATION_QUALITY_ML_PHASE: str = os.environ.get(
 ).lower()
 
 # Probability threshold above which a recommendation is flagged as weak.
+DEFAULT_WEAK_PROBABILITY_THRESHOLD: float = 0.834
+_ENV_WEAK_PROBABILITY_THRESHOLD = os.environ.get("RECOMMENDATION_QUALITY_WEAK_THRESHOLD")
 WEAK_PROBABILITY_THRESHOLD: float = float(
-    os.environ.get("RECOMMENDATION_QUALITY_WEAK_THRESHOLD", "0.834")
+    _ENV_WEAK_PROBABILITY_THRESHOLD or DEFAULT_WEAK_PROBABILITY_THRESHOLD
 )
 
 # ---------------------------------------------------------------------------
@@ -65,7 +67,7 @@ def _load_model() -> Optional[dict]:
 
     if not _MODEL_PATH.exists():
         logger.warning(
-            "Quality model not found at %s — ML scoring disabled. "
+            "Quality model not found at %s - ML scoring disabled. "
             "Run: python scripts/train_recommendation_quality_model.py",
             _MODEL_PATH,
         )
@@ -97,6 +99,11 @@ _TOP_ADJUSTMENT_TYPES = [
     "function_sim_boost",
     "cross_category_penalty",
     "low_overlap_penalty",
+    "sparse_exact_score_cap",
+    "semantic_core_coverage_multiplier",
+    "oral_single_core_broad_target_score_cap",
+    "lipid_lecithin_single_core_broad_target_score_cap",
+    "no_core_weak_shared_with_extra_score_cap",
 ]
 
 
@@ -110,6 +117,15 @@ def _parse_json_list(val: Any) -> list:
         return result if isinstance(result, list) else []
     except Exception:
         return []
+
+
+def _threshold_for_artifact(artifact: dict) -> float:
+    if _ENV_WEAK_PROBABILITY_THRESHOLD is not None:
+        return WEAK_PROBABILITY_THRESHOLD
+    try:
+        return float(artifact.get("filter_threshold", DEFAULT_WEAK_PROBABILITY_THRESHOLD))
+    except (TypeError, ValueError):
+        return DEFAULT_WEAK_PROBABILITY_THRESHOLD
 
 
 def _build_feature_vector(row: dict, artifact: dict) -> np.ndarray:
@@ -157,12 +173,45 @@ def _build_feature_vector(row: dict, artifact: dict) -> np.ndarray:
 
     base_pc = max(feat["base_primary_count"], 1.0)
     tgt_pc = max(feat["target_primary_count"], 1.0)
+    avg_primary_count = (base_pc + tgt_pc) / 2
     feat["primary_overlap_ratio"] = feat["primary_primary_overlap_count"] / (
-        (base_pc + tgt_pc) / 2
+        avg_primary_count
     )
 
     shared_total = max(feat["shared_count"], 1.0)
     feat["core_to_shared_ratio"] = feat["shared_core_count"] / shared_total
+
+    cross_role_overlap = (
+        feat["base_primary_in_target_secondary_count"]
+        + feat["target_primary_in_base_secondary_count"]
+    )
+    total_primary_count = max(base_pc + tgt_pc, 1.0)
+    feat["primary_cross_role_overlap_count"] = cross_role_overlap
+    feat["primary_cross_role_overlap_ratio"] = cross_role_overlap / total_primary_count
+    feat["primary_role_mismatch_ratio"] = cross_role_overlap / shared_total
+    feat["primary_overlap_gap"] = max(0.0, min(1.0, 1.0 - feat["primary_overlap_ratio"]))
+    feat["primary_count_delta_abs"] = abs(feat["base_primary_count"] - feat["target_primary_count"])
+
+    semantic_unshared_total = feat["base_only_semantic_count"] + feat["target_only_semantic_count"]
+    semantic_total = max(semantic_unshared_total + feat["shared_count"], 1.0)
+    feat["semantic_unshared_total"] = semantic_unshared_total
+    feat["semantic_unshared_ratio"] = semantic_unshared_total / semantic_total
+    feat["semantic_unshared_gap_abs"] = abs(
+        feat["base_only_semantic_count"] - feat["target_only_semantic_count"]
+    )
+
+    core_missing = float(feat["shared_core_count"] <= 0 and feat["shared_count"] > 0)
+    low_function = float(func_sim < 0.40)
+    no_primary_overlap_cross_role = min(max(feat["no_primary_primary_overlap_cross_role"], 0.0), 1.0)
+    feat["core_missing_flag"] = core_missing
+    feat["high_score_no_core"] = feat["score_above_07"] * core_missing
+    feat["high_score_low_function"] = feat["score_above_07"] * low_function
+    feat["high_score_cross_role_no_primary"] = feat["score_above_07"] * no_primary_overlap_cross_role
+    feat["same_primary_no_core"] = feat["same_primary_set"] * core_missing
+    feat["same_primary_low_function"] = feat["same_primary_set"] * low_function
+    feat["function_core_gap_abs"] = abs(func_sim - core_match)
+    feat["sim_function_gap_positive"] = max(0.0, sim - func_sim)
+    feat["sim_core_gap_positive"] = max(0.0, sim - core_match)
 
     # --- JSON: shared_categories ---
     shared_cats = _parse_json_list(row.get("shared_categories_json"))
@@ -170,8 +219,9 @@ def _build_feature_vector(row: dict, artifact: dict) -> np.ndarray:
 
     # --- JSON: score_adjustment_types ---
     adj_types = _parse_json_list(row.get("score_adjustment_types_json"))
+    top_adjustment_types = artifact.get("top_adjustment_types") or _TOP_ADJUSTMENT_TYPES
     feat["adjustment_count"] = float(len(adj_types))
-    for adj in _TOP_ADJUSTMENT_TYPES:
+    for adj in top_adjustment_types:
         feat[f"adj_{adj}"] = float(adj in adj_types)
 
     # --- Same-category flag ---
@@ -219,10 +269,11 @@ def predict_quality(row: dict) -> dict:
         X = _build_feature_vector(row, artifact)
         model = artifact["model"]
         proba = float(model.predict_proba(X.reshape(1, -1))[0, 1])
+        threshold = _threshold_for_artifact(artifact)
 
-        if proba >= WEAK_PROBABILITY_THRESHOLD:
+        if proba >= threshold:
             label = "weak"
-        elif proba >= WEAK_PROBABILITY_THRESHOLD * 0.6:
+        elif proba >= threshold * 0.6:
             label = "uncertain"
         else:
             label = "good"
@@ -251,13 +302,14 @@ def predict_quality_batch(rows: List[dict]) -> List[dict]:
         model = artifact["model"]
         X = np.stack([_build_feature_vector(row, artifact) for row in rows])
         probas = model.predict_proba(X)[:, 1]
+        threshold = _threshold_for_artifact(artifact)
 
         results = []
         for proba in probas:
             proba = float(proba)
-            if proba >= WEAK_PROBABILITY_THRESHOLD:
+            if proba >= threshold:
                 label = "weak"
-            elif proba >= WEAK_PROBABILITY_THRESHOLD * 0.6:
+            elif proba >= threshold * 0.6:
                 label = "uncertain"
             else:
                 label = "good"
@@ -288,4 +340,6 @@ def should_filter_recommendation(ml_result: dict) -> bool:
     if proba is None:
         return False
 
-    return float(proba) >= WEAK_PROBABILITY_THRESHOLD
+    artifact = _load_model()
+    threshold = _threshold_for_artifact(artifact) if artifact is not None else WEAK_PROBABILITY_THRESHOLD
+    return float(proba) >= threshold

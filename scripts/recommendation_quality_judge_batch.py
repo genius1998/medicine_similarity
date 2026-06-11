@@ -1695,6 +1695,63 @@ def ordered_fields(rows: list[dict[str, Any]], preferred: list[str]) -> list[str
     return preferred + sorted(present - set(preferred))
 
 
+DEDUPLICATION_KEY_FIELDS = ["base_report_no", "target_report_no", "rank"]
+
+
+def recommendation_label_key(row: dict[str, Any], fallback: str = "") -> tuple[str, str, str] | tuple[str, str]:
+    key = tuple(str(row.get(field, "") or "").strip() for field in DEDUPLICATION_KEY_FIELDS)
+    if all(key):
+        return key
+    return ("__missing_dedup_key__", fallback)
+
+
+def deduplicate_label_rows(
+    rows: list[dict[str, Any]],
+    *,
+    strategy: str = "last",
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    if strategy not in {"first", "last"}:
+        raise ValueError(f"unsupported deduplication strategy: {strategy}")
+
+    deduped: list[dict[str, Any]] = []
+    key_to_index: dict[tuple[str, ...], int] = {}
+    duplicates: list[dict[str, Any]] = []
+    for row_index, row in enumerate(rows):
+        key = recommendation_label_key(row, fallback=str(row_index))
+        if str(key[0]) == "__missing_dedup_key__":
+            key_to_index[key] = len(deduped)
+            deduped.append(row)
+            continue
+
+        existing_index = key_to_index.get(key)
+        if existing_index is None:
+            key_to_index[key] = len(deduped)
+            deduped.append(row)
+            continue
+
+        existing = deduped[existing_index]
+        kept = row if strategy == "last" else existing
+        dropped = existing if strategy == "last" else row
+        duplicates.append(
+            {
+                "base_report_no": key[0],
+                "target_report_no": key[1],
+                "rank": key[2],
+                "kept_chunk": kept.get("chunk", ""),
+                "dropped_chunk": dropped.get("chunk", ""),
+                "kept_judgment": kept.get("judge_judgment", ""),
+                "dropped_judgment": dropped.get("judge_judgment", ""),
+                "kept_similarity_score": kept.get("similarity_score", ""),
+                "dropped_similarity_score": dropped.get("similarity_score", ""),
+                "deduplication_strategy": strategy,
+            }
+        )
+        if strategy == "last":
+            deduped[existing_index] = row
+
+    return deduped, duplicates
+
+
 def summarize_chunks(args: argparse.Namespace) -> None:
     output_dir = resolve_path(args.output_dir)
     part_dirs = [path for path in glob_directories(args.parts_glob) if "_retry_" not in path.name]
@@ -1756,6 +1813,14 @@ def summarize_chunks(args: argparse.Namespace) -> None:
             }
         )
 
+    raw_rows = list(rows)
+    raw_actual_label_count = len(raw_rows)
+    deduplicate = bool(getattr(args, "deduplicate", True))
+    deduplication_strategy = str(getattr(args, "deduplication_strategy", "last") or "last")
+    duplicate_rows: list[dict[str, Any]] = []
+    if deduplicate:
+        rows, duplicate_rows = deduplicate_label_rows(rows, strategy=deduplication_strategy)
+
     judgment_counts = Counter(str(row.get("judge_judgment", "") or "") for row in rows if str(row.get("judge_judgment", "") or ""))
     category_counts = Counter(
         (str(row.get("base_main_category", "") or ""), str(row.get("judge_judgment", "") or ""))
@@ -1771,7 +1836,7 @@ def summarize_chunks(args: argparse.Namespace) -> None:
 
     actual_by_chunk_base = Counter(
         (str(row.get("chunk", "") or ""), str(row.get("base_report_no", "") or ""))
-        for row in rows
+        for row in raw_rows
         if str(row.get("base_report_no", "") or "")
     )
     coverage_mismatches = [
@@ -1792,10 +1857,27 @@ def summarize_chunks(args: argparse.Namespace) -> None:
     results_csv = output_dir / "openai_chunk_judge_results.csv"
     high_score_csv = output_dir / "openai_chunk_high_score_weak_or_bad.csv"
     coverage_csv = output_dir / "openai_chunk_label_coverage_mismatches.csv"
+    duplicates_csv = output_dir / "openai_chunk_duplicate_labels.csv"
     result_fields = ordered_fields(rows, OPENAI_CHUNK_RESULT_FIELDS)
     write_csv(results_csv, result_fields, rows)
     write_csv(high_score_csv, result_fields, high_score_weak_or_bad)
     write_csv(coverage_csv, ["chunk", "base_report_no", "expected", "actual"], coverage_mismatches)
+    write_csv(
+        duplicates_csv,
+        [
+            "base_report_no",
+            "target_report_no",
+            "rank",
+            "kept_chunk",
+            "dropped_chunk",
+            "kept_judgment",
+            "dropped_judgment",
+            "kept_similarity_score",
+            "dropped_similarity_score",
+            "deduplication_strategy",
+        ],
+        duplicate_rows,
+    )
 
     weak_or_bad_count = judgment_counts.get("weak", 0) + judgment_counts.get("bad", 0)
     summary = {
@@ -1808,11 +1890,18 @@ def summarize_chunks(args: argparse.Namespace) -> None:
         "request_count": request_count,
         "expected_label_count": expected_label_count,
         "actual_label_count": actual_label_count,
-        "coverage_ok": expected_label_count == actual_label_count and not coverage_mismatches,
+        "raw_actual_label_count": raw_actual_label_count,
+        "coverage_actual_label_count": raw_actual_label_count,
+        "coverage_ok": expected_label_count == raw_actual_label_count and not coverage_mismatches,
+        "deduplication_enabled": deduplicate,
+        "deduplication_strategy": deduplication_strategy,
+        "deduplication_key_fields": DEDUPLICATION_KEY_FIELDS,
+        "duplicate_label_count": len(duplicate_rows),
         "missing_label_count": int(missing_label_count),
         "extra_label_count": int(extra_label_count),
         "coverage_mismatch_count": len(coverage_mismatches),
         "coverage_mismatches": coverage_mismatches[:50],
+        "duplicate_labels": duplicate_rows[:50],
         "judgment_counts": dict(judgment_counts),
         "weak_or_bad_rate": round(float(weak_or_bad_count / actual_label_count), 4) if actual_label_count else 0.0,
         "high_score_threshold": high_threshold,
@@ -1827,6 +1916,7 @@ def summarize_chunks(args: argparse.Namespace) -> None:
             "results_csv": str(results_csv),
             "high_score_weak_or_bad_csv": str(high_score_csv),
             "coverage_mismatches_csv": str(coverage_csv),
+            "duplicate_labels_csv": str(duplicates_csv),
         },
     }
     summary_path = output_dir / "openai_chunk_judge_summary.json"
@@ -1859,6 +1949,14 @@ PATTERN_FEATURE_FIELDS = [
     "no_primary_primary_overlap_cross_role",
     "base_only_semantic_count",
     "target_only_semantic_count",
+    "primary_cross_role_overlap_count",
+    "primary_cross_role_overlap_ratio",
+    "primary_role_mismatch_ratio",
+    "primary_overlap_gap",
+    "semantic_unshared_total",
+    "semantic_unshared_ratio",
+    "semantic_unshared_gap_abs",
+    "core_missing_flag",
     "shared_labels_json",
     "shared_core_keys_json",
     "score_adjustment_types_json",
@@ -1898,6 +1996,19 @@ def pattern_features_for_row(
     primary_primary_overlap = sorted(base_primary & target_primary)
     base_primary_in_target_secondary = sorted(base_primary & target_secondary)
     target_primary_in_base_secondary = sorted(target_primary & base_secondary)
+    shared_count = len(shared_labels)
+    shared_core_count = len(shared_core_keys)
+    base_primary_count = len(base_primary)
+    target_primary_count = len(target_primary)
+    primary_overlap_count = len(primary_primary_overlap)
+    cross_role_overlap_count = len(base_primary_in_target_secondary) + len(target_primary_in_base_secondary)
+    avg_primary_count = max((max(base_primary_count, 1) + max(target_primary_count, 1)) / 2, 1)
+    total_primary_count = max(max(base_primary_count, 1) + max(target_primary_count, 1), 1)
+    primary_overlap_ratio = primary_overlap_count / avg_primary_count
+    base_only_semantic_count = max(0, int(detail.get("base_semantic_ingredient_count", 0) or 0) - shared_count)
+    target_only_semantic_count = max(0, int(detail.get("target_semantic_ingredient_count", 0) or 0) - shared_count)
+    semantic_unshared_total = base_only_semantic_count + target_only_semantic_count
+    semantic_total = max(semantic_unshared_total + shared_count, 1)
     function_similarity = score_as_float(row.get("function_similarity_score"))
     if function_similarity <= 0.0:
         function_similarity = calculate_function_similarity(base_profile, target_profile)
@@ -1916,12 +2027,12 @@ def pattern_features_for_row(
         "current_similarity_score": round(float(current_score), 6),
         "source_similarity_score": row.get("similarity_score", ""),
         "function_similarity_score": round(float(function_similarity), 6),
-        "shared_count": len(shared_labels),
-        "shared_core_count": len(shared_core_keys),
+        "shared_count": shared_count,
+        "shared_core_count": shared_core_count,
         "same_primary_set": int(bool(base_primary and target_primary and base_primary == target_primary)),
-        "primary_primary_overlap_count": len(primary_primary_overlap),
-        "base_primary_count": len(base_primary),
-        "target_primary_count": len(target_primary),
+        "primary_primary_overlap_count": primary_overlap_count,
+        "base_primary_count": base_primary_count,
+        "target_primary_count": target_primary_count,
         "base_primary_in_target_secondary_count": len(base_primary_in_target_secondary),
         "target_primary_in_base_secondary_count": len(target_primary_in_base_secondary),
         "no_primary_primary_overlap_cross_role": int(
@@ -1932,8 +2043,16 @@ def pattern_features_for_row(
                 and (base_primary_in_target_secondary or target_primary_in_base_secondary)
             )
         ),
-        "base_only_semantic_count": max(0, int(detail.get("base_semantic_ingredient_count", 0) or 0) - len(shared_labels)),
-        "target_only_semantic_count": max(0, int(detail.get("target_semantic_ingredient_count", 0) or 0) - len(shared_labels)),
+        "base_only_semantic_count": base_only_semantic_count,
+        "target_only_semantic_count": target_only_semantic_count,
+        "primary_cross_role_overlap_count": cross_role_overlap_count,
+        "primary_cross_role_overlap_ratio": round(float(cross_role_overlap_count / total_primary_count), 6),
+        "primary_role_mismatch_ratio": round(float(cross_role_overlap_count / max(shared_count, 1)), 6),
+        "primary_overlap_gap": round(float(max(0.0, min(1.0, 1.0 - primary_overlap_ratio))), 6),
+        "semantic_unshared_total": semantic_unshared_total,
+        "semantic_unshared_ratio": round(float(semantic_unshared_total / semantic_total), 6),
+        "semantic_unshared_gap_abs": abs(base_only_semantic_count - target_only_semantic_count),
+        "core_missing_flag": int(shared_core_count <= 0 and shared_count > 0),
         "shared_labels_json": json_list(shared_labels),
         "shared_core_keys_json": json_list(shared_core_keys),
         "score_adjustment_types_json": json_list(adjustment_types),
@@ -2280,6 +2399,8 @@ def validate_results(args: argparse.Namespace) -> None:
         retry_glob=args.retry_glob,
         output_dir=str(output_dir),
         high_score_threshold=float(args.high_score_threshold),
+        deduplicate=not bool(getattr(args, "no_deduplicate", False)),
+        deduplication_strategy=str(getattr(args, "deduplication_strategy", "last") or "last"),
     )
     summarize_chunks(summarize_args)
 
@@ -2438,7 +2559,9 @@ def build_validation_report(
     weak_or_bad_count = int(judgment_counts.get("weak", 0)) + int(judgment_counts.get("bad", 0))
     label_count = int(merged_summary.get("actual_label_count") or merged_summary.get("row_count") or 0)
     expected_label_count = int(merged_summary.get("expected_label_count") or label_count)
-    coverage_ok = bool(merged_summary.get("coverage_ok", expected_label_count == label_count))
+    coverage_actual_label_count = int(merged_summary.get("coverage_actual_label_count") or merged_summary.get("raw_actual_label_count") or label_count)
+    coverage_ok = bool(merged_summary.get("coverage_ok", expected_label_count == coverage_actual_label_count))
+    duplicate_label_count = int(merged_summary.get("duplicate_label_count", 0) or 0)
     high_score_weak_count = int(
         quality_gate_result.get("high_score_weak_or_bad_count")
         or merged_summary.get("current_high_score_weak_or_bad_count")
@@ -2486,8 +2609,10 @@ def build_validation_report(
         "",
         "| Metric | Value |",
         "| --- | ---: |",
-        f"| Label coverage | {label_count} / {expected_label_count} |",
+        f"| Label coverage | {coverage_actual_label_count} / {expected_label_count} |",
         f"| Coverage OK | {str(coverage_ok).lower()} |",
+        f"| Gate label count | {label_count} |",
+        f"| Duplicate label count | {duplicate_label_count} |",
         f"| Product count | {int(merged_summary.get('product_count', 0) or 0)} |",
         f"| Request count | {int(merged_summary.get('request_count', 0) or 0)} |",
         f"| Weak/bad count | {weak_or_bad_count} |",
@@ -3610,6 +3735,17 @@ def build_parser() -> argparse.ArgumentParser:
     summarize_parser.add_argument("--retry-glob", action="append", default=[])
     summarize_parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     summarize_parser.add_argument("--high-score-threshold", type=float, default=0.65)
+    summarize_parser.add_argument(
+        "--no-deduplicate",
+        action="store_true",
+        help="Keep duplicate recommendation labels when multiple chunks contain the same base/target/rank.",
+    )
+    summarize_parser.add_argument(
+        "--deduplication-strategy",
+        choices=["first", "last"],
+        default="last",
+        help="Which duplicate label to keep when deduplication is enabled.",
+    )
     summarize_parser.set_defaults(func=summarize_chunks)
 
     analyze_patterns_parser = subparsers.add_parser(
@@ -3662,6 +3798,17 @@ def build_parser() -> argparse.ArgumentParser:
     validate_parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     validate_parser.add_argument("--ingredient-category-profile", default="")
     validate_parser.add_argument("--high-score-threshold", type=float, default=0.65)
+    validate_parser.add_argument(
+        "--no-deduplicate",
+        action="store_true",
+        help="Keep duplicate recommendation labels when merging overlapping validation chunks.",
+    )
+    validate_parser.add_argument(
+        "--deduplication-strategy",
+        choices=["first", "last"],
+        default="last",
+        help="Which duplicate label to keep when deduplication is enabled.",
+    )
     validate_parser.add_argument("--max-weak-or-bad-rate", type=float, default=QUALITY_GATE_MAX_WEAK_OR_BAD_RATE)
     validate_parser.add_argument(
         "--max-high-score-weak-or-bad-rate",
